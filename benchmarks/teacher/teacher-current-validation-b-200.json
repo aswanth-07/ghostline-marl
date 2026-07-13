@@ -1,0 +1,218 @@
+{
+  "environment_fingerprint": "16037fabd6e89009f5170b56bfce476050f72afb2fe013f15dae9040e47d6778",
+  "seed_namespace": "validation",
+  "validation_offset": 4000,
+  "status": "superseded_pre_shared_perception_range_decode",
+  "config": {
+    "objective_weight": 15.0,
+    "clearance_weight": 2.0,
+    "escape_weight": 1.2,
+    "sight_weight": 1.2,
+    "inertia_weight": 0.8,
+    "tier6_inertia_scale": 3.5,
+    "dash_energy_threshold": 0.1,
+    "pulse_trace_threshold": 0.75
+  },
+  "episodes_per_tier": 200,
+  "tiers": {
+    "1": {
+      "successes": 200,
+      "success_rate": 1.0,
+      "fail_reasons": {
+        "none": 200
+      },
+      "median_duration_seconds": 12.916666666666666,
+      "mean_damage": 0.0,
+      "mean_detections": 0.0,
+      "mean_pulse_uses": 0.0,
+      "failure_samples": []
+    },
+    "2": {
+      "successes": 200,
+      "success_rate": 1.0,
+      "fail_reasons": {
+        "none": 200
+      },
+      "median_duration_seconds": 12.308333333333334,
+      "mean_damage": 0.0,
+      "mean_detections": 0.355,
+      "mean_pulse_uses": 0.65,
+      "failure_samples": []
+    },
+    "3": {
+      "successes": 199,
+      "success_rate": 0.995,
+      "fail_reasons": {
+        "none": 199,
+        "integrity_lost": 1
+      },
+      "median_duration_seconds": 29.483333333333334,
+      "mean_damage": 0.12,
+      "mean_detections": 6.74,
+      "mean_pulse_uses": 1.95,
+      "failure_samples": [
+        {
+          "seed": 1020147,
+          "reason": "integrity_lost",
+          "data": 4,
+          "quota": 5,
+          "duration_seconds": 40.5,
+          "damage": 3,
+          "detections": 11,
+          "max_trace": 100.0
+        }
+      ]
+    },
+    "4": {
+      "successes": 199,
+      "success_rate": 0.995,
+      "fail_reasons": {
+        "none": 199,
+        "contract_expired": 1
+      },
+      "median_duration_seconds": 26.108333333333334,
+      "mean_damage": 0.115,
+      "mean_detections": 4.565,
+      "mean_pulse_uses": 2.845,
+      "failure_samples": [
+        {
+          "seed": 1028119,
+          "reason": "contract_expired",
+          "data": 4,
+          "quota": 6,
+          "duration_seconds": 180.0,
+          "damage": 0,
+          "detections": 4,
+          "max_trace": 44.108
+        }
+      ]
+    },
+    "5": {
+      "successes": 200,
+      "success_rate": 1.0,
+      "fail_reasons": {
+        "none": 200
+      },
+      "median_duration_seconds": 28.833333333333336,
+      "mean_damage": 0.255,
+      "mean_detections": 4.65,
+      "mean_pulse_uses": 3.705,
+      "failure_samples": []
+    },
+    "6": {
+      "successes": 177,
+      "success_rate": 0.885,
+      "fail_reasons": {
+        "none": 177,
+        "contract_expired": 10,
+        "integrity_lost": 13
+      },
+      "median_duration_seconds": 60.391666666666666,
+      "mean_damage": 0.595,
+      "mean_detections": 16.36,
+      "mean_pulse_uses": 2.99,
+      "failure_samples": [
+        {
+          "seed": 1044004,
+          "reason": "contract_expired",
+          "data": 6,
+          "quota": 8,
+          "duration_seconds": 225.0,
+          "damage": 0,
+          "detections": 17,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1044018,
+          "reason": "integrity_lost",
+          "data": 7,
+          "quota": 8,
+          "duration_seconds": 77.867,
+          "damage": 3,
+          "detections": 12,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1044021,
+          "reason": "integrity_lost",
+          "data": 7,
+          "quota": 8,
+          "duration_seconds": 45.833,
+          "damage": 3,
+          "detections": 15,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1044029,
+          "reason": "integrity_lost",
+          "data": 7,
+          "quota": 8,
+          "duration_seconds": 125.4,
+          "damage": 3,
+          "detections": 40,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1044032,
+          "reason": "integrity_lost",
+          "data": 7,
+          "quota": 8,
+          "duration_seconds": 102.05,
+          "damage": 3,
+          "detections": 26,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1044035,
+          "reason": "integrity_lost",
+          "data": 2,
+          "quota": 8,
+          "duration_seconds": 80.867,
+          "damage": 3,
+          "detections": 29,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1044042,
+          "reason": "contract_expired",
+          "data": 2,
+          "quota": 8,
+          "duration_seconds": 225.0,
+          "damage": 0,
+          "detections": 8,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1044044,
+          "reason": "contract_expired",
+          "data": 7,
+          "quota": 8,
+          "duration_seconds": 225.0,
+          "damage": 0,
+          "detections": 20,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1044053,
+          "reason": "contract_expired",
+          "data": 6,
+          "quota": 8,
+          "duration_seconds": 225.0,
+          "damage": 0,
+          "detections": 26,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1044092,
+          "reason": "integrity_lost",
+          "data": 7,
+          "quota": 8,
+          "duration_seconds": 194.983,
+          "damage": 3,
+          "detections": 43,
+          "max_trace": 100.0
+        }
+      ]
+    }
+  }
+}

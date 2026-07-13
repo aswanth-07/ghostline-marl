@@ -1,0 +1,101 @@
+{
+  "schema_version": 2,
+  "project": "Ghostline",
+  "runtime_distribution": {
+    "license": "MIT",
+    "files": [
+      "assets/visual/ghostline-environment-atlas-v1.png",
+      "assets/visual/ghostline-character-security-atlas-v1.png",
+      "assets/visual/ghostline-diagonal-locomotion-v2.png"
+    ],
+    "excluded_provenance_patterns": [
+      "*-source.*",
+      "*-source-*",
+      "*-web.*",
+      "assets/screenshots/*",
+      "assets/visual/ghostline-key-art-menu.png"
+    ]
+  },
+  "visual_assets": {
+    "status": "AI-assisted original drafts with manual cleanup",
+    "license": "MIT; project-owned AI-assisted original assets with process disclosed in wiki/assets.md",
+    "generated_key_art": {
+      "files": [
+        "assets/visual/ghostline-key-art-source.png",
+        "assets/visual/ghostline-key-art-menu.png",
+        "assets/visual/ghostline-key-art-web.webp"
+      ],
+      "generator": "OpenAI built-in image generation",
+      "date": "2026-07-13",
+      "human_cleanup": "16:9 crop, palette adjustment, optimized desktop PNG and web WebP derivatives",
+      "runtime_status": "Retired after hands-on review because the pseudo-isometric image did not match the shipping 2D playfield; retained for provenance only and excluded from wheel, Windows, and web payloads",
+      "external_copyrighted_inputs": false
+    },
+    "generated_environment_atlas": {
+      "files": [
+        "assets/visual/ghostline-environment-atlas-source-v1.png",
+        "assets/visual/ghostline-environment-atlas-v1.png"
+      ],
+      "generator": "OpenAI built-in image generation",
+      "date": "2026-07-13",
+      "reference_files": [
+        "assets/visual/ghostline-key-art-menu.png",
+        "artifacts/visual-qa/final/03-gameplay.png"
+      ],
+      "generation_prompt": "Create one original clean 16:9 production concept sheet for a modular near-future stealth-facility tileset: separated 32 px-grid top-down three-quarter floor, wall, corner, door, window, trim, office, lounge, laboratory, server, security, vault, and utility assets; dark navy and steel with restrained cyan, amber, and red accents; consistent perspective and practical silhouettes; perfectly flat solid #ff00ff chroma-key background with no shadows, gradients, texture, glow, text, logos, watermark, characters, weapons, overlaps, cropping, or copyrighted franchise references.",
+      "human_cleanup": "Chroma-key removal, alpha-edge validation, 1672x941 release atlas, explicit crop metadata, nearest-neighbor runtime scaling, bottom-pivot QA, and procedural fallback verification",
+      "runtime_file": "assets/visual/ghostline-environment-atlas-v1.png",
+      "source_draft_packaged": false,
+      "external_copyrighted_inputs": false
+    },
+    "generated_character_security_atlas": {
+      "files": [
+        "assets/visual/ghostline-character-security-atlas-source-v1.png",
+        "assets/visual/ghostline-character-security-atlas-v1.png"
+      ],
+      "generator": "OpenAI built-in image generation",
+      "date": "2026-07-13",
+      "reference_files": [
+        "assets/visual/ghostline-key-art-menu.png",
+        "assets/visual/ghostline-environment-atlas-v1.png",
+        "artifacts/visual-qa/atlas-final/05-security.png"
+      ],
+      "generation_prompt": "Create one original clean 16:9 Ghostline character and electronic-security pixel-sprite sheet on a perfectly flat #ff00ff chroma-key background: separated top-down three-quarter cyan runner direction and idle/run/dash/link/damage poses; red-accent unarmed human guard directions and patrol/suspicious/chase/tackle-strike poses; violet response-drone direction/charge/recoil variants; and active, suspicious, disabled, and damaged wall-camera variants. Use practical readable 24-32 px silhouettes, consistent scale, bottom pivots, navy/steel materials, no background shadows or gradients, no text, logos, watermark, weapons, blood, environment tiles, or copyrighted references.",
+      "human_cleanup": "Chroma-key removal with the installed imagegen helper, despill, alpha-edge validation, 1672x941 release atlas, explicit crop/direction metadata, mirrored direction completion, nearest-neighbour runtime scaling, bottom-pivot and state-readability QA, and procedural fallback verification",
+      "runtime_file": "assets/visual/ghostline-character-security-atlas-v1.png",
+      "source_draft_packaged": false,
+      "external_copyrighted_inputs": false
+    },
+    "generated_diagonal_locomotion_atlas": {
+      "files": [
+        "assets/visual/ghostline-diagonal-locomotion-source-v2.png",
+        "assets/visual/ghostline-diagonal-locomotion-v2.png"
+      ],
+      "generator": "OpenAI built-in image generation",
+      "date": "2026-07-13",
+      "reference_files": [
+        "assets/visual/ghostline-character-security-atlas-source-v1.png"
+      ],
+      "generation_prompt": "Create a regular 4x4 production pixel-art sprite sheet matching the Ghostline character atlas: four northeast runner frames, four southeast runner frames, four northeast guard frames, and four southeast guard frames; consistent pivots, scale, identity, alternating contact/passing/recoil/airborne poses, and a flat #ff00ff chroma-key background with no shadows, grid lines, text, weapons, logos, watermarks, or extra objects.",
+      "human_cleanup": "Chroma-key removal with the installed imagegen helper, despill, alpha-edge inspection, per-frame crop metadata, nearest-neighbour runtime scaling, mirrored northwest/southwest completion, deterministic frame timing, direction-preserving procedural fallback, and logical-canvas QA",
+      "runtime_file": "assets/visual/ghostline-diagonal-locomotion-v2.png",
+      "source_draft_packaged": false,
+      "external_copyrighted_inputs": false
+    },
+    "gameplay_screenshots": {
+      "files": [
+        "assets/screenshots/gameplay-stealth-v2.png",
+        "assets/screenshots/gameplay-stealth-v3.png",
+        "assets/screenshots/locomotion-v2.png"
+      ],
+      "source": "Deterministic Ghostline renderer and project-owned runtime assets",
+      "date": "2026-07-13",
+      "license": "MIT",
+      "external_copyrighted_inputs": false
+    }
+  },
+  "audio": {
+    "status": "Procedurally synthesized at runtime",
+    "external_files": []
+  }
+}

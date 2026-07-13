@@ -1,0 +1,98 @@
+name: Ghostline CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ghostline-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }}, Python 3.13)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install --constraint requirements.lock -e ".[dev]"
+      - run: python -m pip check
+      - run: python -m pytest -q
+      - run: python scripts/fuzz_ghostline_levels.py --seeds 1000
+      - run: ghostline package --human-only --dry-run
+
+  python-compatibility:
+    name: Base contract (Python ${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install --constraint requirements.lock -e .
+      - run: python -m pip check
+      - run: >-
+          python -c "import sys; import ghostline; from ghostline.simulation import GhostlineSimulation;
+          assert 'pygame' not in sys.modules and 'torch' not in sys.modules;
+          sim = GhostlineSimulation(seed=10101, tier=1); assert sim.seed == 10101"
+
+  distribution:
+    name: Wheel and clean-install contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install --constraint requirements.lock -e ".[dev]"
+      - run: python -m build
+      - run: python scripts/verify_source_archive.py
+      - run: python scripts/verify_clean_install.py
+      - run: python scripts/verify_clean_install.py dist/ghostline-*.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ghostline-python-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  web-build:
+    name: Human-only WebAssembly diagnostic
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install --constraint requirements.lock -e ".[web]"
+      - run: python scripts/build_web.py --human-only
+      - run: node --test web/tests/*.test.mjs
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ghostline-web-human-diagnostic
+          path: .web-build/ghostline/build/web
+          if-no-files-found: error

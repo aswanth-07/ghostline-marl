@@ -1,0 +1,167 @@
+name: Ghostline Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ghostline-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-gate:
+    name: Frozen simulation, neural evidence, and distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install --constraint requirements.lock -e ".[dev,build]"
+      - run: python -m pip check
+      - name: Run the complete test suite
+        run: python -m pytest -q
+      - name: Validate 10,000 procedural seeds
+        run: python scripts/fuzz_ghostline_levels.py --seeds 10000
+      - name: Smoke-test the benchmark harness
+        run: >-
+          python scripts/benchmark_ghostline.py --decisions 100 --tier 6 --workers 2
+          --output "$RUNNER_TEMP/ghostline-throughput-smoke.json"
+      - name: Verify frozen champion and portfolio evidence
+        run: python scripts/verify_release_evidence.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Ghostline-Portfolio-Evidence
+          path: |
+            models/ghostline-policy.pt
+            models/ghostline-policy.onnx
+            models/model-card.md
+            benchmarks/final-test-slices.json
+            benchmarks/neural/champion-final-7m-500.json
+            benchmarks/neural/champion-final-7m-500.csv
+            benchmarks/neural/champion-final-7m-500.episodes.csv
+            benchmarks/neural/champion-onnx-parity.json
+            benchmarks/system/headless-throughput.json
+            videos/ghostline-demo.mp4
+          if-no-files-found: error
+      - name: Build Python distributions
+        run: python -m build
+      - run: python scripts/verify_source_archive.py --release
+      - run: python scripts/verify_clean_install.py
+      - run: python scripts/verify_clean_install.py dist/ghostline-*.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ghostline-python-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  package:
+    name: Windows player with champion policy
+    needs: release-gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install --constraint requirements.lock -e ".[build]" pytest==9.1.1
+      - run: python -m pip check
+      - name: Verify the selected release policy and benchmark provenance
+        run: python scripts/verify_release_evidence.py
+      - name: Stage the tracked parity evidence beside the deployment graph
+        shell: pwsh
+        run: >-
+          Copy-Item -LiteralPath "benchmarks/neural/champion-onnx-parity.json"
+          -Destination "models/ghostline-policy.parity.json" -Force
+      - run: python -m pytest -q tests/test_release.py tests/test_release_evidence.py
+      - run: ghostline package --model models/ghostline-policy.onnx
+      - name: Smoke-test packaged simulation and ONNX policy
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath ".\dist\Ghostline.exe" -ArgumentList "--release-smoke-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Packaged player smoke test failed with exit code $($process.ExitCode)" }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Ghostline-Windows
+          path: |
+            dist/Ghostline.exe
+            dist/Ghostline.manifest.json
+            dist/LICENSE
+            dist/ASSET-LICENSES.json
+            dist/THIRD_PARTY_NOTICES.md
+            dist/Ghostline.policy-parity.json
+            dist/licenses/**
+          if-no-files-found: error
+
+  web:
+    name: Champion WebAssembly bundle
+    needs: release-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install --constraint requirements.lock -e ".[web]"
+      - run: python -m pip check
+      - name: Verify the selected release policy and benchmark provenance
+        run: python scripts/verify_release_evidence.py
+      - run: python scripts/build_web.py --model models/ghostline-policy.onnx
+      - run: node --test web/tests/*.test.mjs
+      - run: node web/tests/onnx-wasm-smoke.mjs .web-build/ghostline/build/web
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Ghostline-Web
+          path: .web-build/ghostline/build/web
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish immutable GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [release-gate, package, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: release-assets
+      - name: Assemble player and web archives
+        shell: bash
+        run: |
+          cd release-assets
+          zip -9 -r Ghostline-Windows-x64.zip Ghostline-Windows
+          zip -9 -r Ghostline-Web.zip Ghostline-Web
+      - name: Create the tag release and attach every distribution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            release-assets/ghostline-python-distributions/* \
+            release-assets/Ghostline-Windows-x64.zip \
+            release-assets/Ghostline-Web.zip \
+            release-assets/Ghostline-Portfolio-Evidence/models/ghostline-policy.pt \
+            release-assets/Ghostline-Portfolio-Evidence/models/ghostline-policy.onnx \
+            release-assets/Ghostline-Portfolio-Evidence/models/model-card.md \
+            release-assets/Ghostline-Portfolio-Evidence/benchmarks/final-test-slices.json \
+            release-assets/Ghostline-Portfolio-Evidence/benchmarks/neural/champion-final-7m-500.json \
+            release-assets/Ghostline-Portfolio-Evidence/benchmarks/neural/champion-final-7m-500.csv \
+            release-assets/Ghostline-Portfolio-Evidence/benchmarks/neural/champion-final-7m-500.episodes.csv \
+            release-assets/Ghostline-Portfolio-Evidence/benchmarks/neural/champion-onnx-parity.json \
+            release-assets/Ghostline-Portfolio-Evidence/benchmarks/system/headless-throughput.json \
+            release-assets/Ghostline-Portfolio-Evidence/videos/ghostline-demo.mp4 \
+            --verify-tag \
+            --generate-notes \
+            --title "Ghostline $GITHUB_REF_NAME"

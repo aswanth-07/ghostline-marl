@@ -1,0 +1,49 @@
+{
+  "environment_fingerprint": "17d8617fd92015dc5a00b5314558fc7c0ff957685b12966efa5253806463739b",
+  "manifest_contract": "ghostline-final-test-slices-v1",
+  "observation_contract": "GhostlineEnv-v2",
+  "policy": "A final-test slice is a one-way door. The evaluator locks it before the first episode and marks it consumed or aborted-retired after any attempted run. There is no force/reopen path.",
+  "slices": [
+    {
+      "note": "Historical tuning evidence from before the final mechanics and perception freeze.",
+      "seed_start": 2000000,
+      "status": "retired_historical_tuning"
+    },
+    {
+      "note": "Historical failed teacher audit from before the final mechanics and perception freeze.",
+      "seed_start": 3000000,
+      "status": "retired_historical_failed"
+    },
+    {
+      "note": "Historical failed teacher audit from before the final mechanics and perception freeze.",
+      "seed_start": 4000000,
+      "status": "retired_historical_failed"
+    },
+    {
+      "note": "Historical failed teacher audit from before the final mechanics and perception freeze.",
+      "seed_start": 5000000,
+      "status": "retired_historical_failed"
+    },
+    {
+      "note": "Passed the then-current teacher curve, then became historical when later mechanics and perception changes created a new environment fingerprint.",
+      "seed_start": 6000000,
+      "status": "retired_historical_prior_curve_pass"
+    },
+    {
+      "environment_fingerprint": "17d8617fd92015dc5a00b5314558fc7c0ff957685b12966efa5253806463739b",
+      "episodes_per_tier": 500,
+      "note": "Reserved for the selected frozen-distribution neural champion only. Do not run before checkpoint selection is complete.",
+      "policy_kind": "neural",
+      "seed_start": 7000000,
+      "status": "reserved_unopened",
+      "tiers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "policy": "ObservationTeacherPolicy",
+  "observation_contract": "GhostlineEnv-v2",
+  "episodes_per_tier": 500,
+  "acceptance": {
+    "tiers_1_to_5": 0.95,
+    "tier_6": 0.85
+  },
+  "audits": [
+    {
+      "slice": "3M",
+      "seed_start": 3000000,
+      "status": "retired_failed",
+      "success_rates_by_tier": [1.0, 1.0, 0.97, 0.948, 0.968, 0.808]
+    },
+    {
+      "slice": "4M",
+      "seed_start": 4000000,
+      "status": "retired_failed",
+      "success_rates_by_tier": [1.0, 1.0, 0.966, 0.952, 0.972, 0.838]
+    },
+    {
+      "slice": "5M",
+      "seed_start": 5000000,
+      "status": "retired_failed",
+      "success_rates_by_tier": [1.0, 1.0, 0.976, 0.936, 0.974, 0.856]
+    },
+    {
+      "slice": "6M",
+      "seed_start": 6000000,
+      "status": "retired_historical_prior_curve_pass",
+      "success_rates_by_tier": [1.0, 1.0, 0.958, 0.962, 0.972, 0.888],
+      "report": "teacher-release-gate-6m-500.json"
+    }
+  ],
+  "calibration": {
+    "tier_6_directional_inertia_scale": 3.5,
+    "selection_namespace": "validation_only",
+    "validation_slice_success_before": [0.875, 0.825],
+    "validation_slice_success_after": [0.89, 0.9]
+  },
+  "release_curve": {
+    "tier_4_guard_count": 3,
+    "reason": "Remove a non-monotonic integrity-loss spike while retaining cameras, networked doors, guarded terminals, and pulse counterplay."
+  },
+  "policy_for_exposed_slices": "Every inspected final-test slice is immutable. A failure may motivate a correction, but that slice cannot be reused to judge or select the correction; only a later untouched slice can do so."
+}

@@ -1,0 +1,228 @@
+{
+  "environment_fingerprint": "16037fabd6e89009f5170b56bfce476050f72afb2fe013f15dae9040e47d6778",
+  "seed_namespace": "validation",
+  "validation_offset": 2000,
+  "status": "superseded_pre_shared_perception_range_decode",
+  "config": {
+    "objective_weight": 15.0,
+    "clearance_weight": 2.0,
+    "escape_weight": 1.2,
+    "sight_weight": 1.2,
+    "inertia_weight": 0.8,
+    "tier6_inertia_scale": 3.5,
+    "dash_energy_threshold": 0.1,
+    "pulse_trace_threshold": 0.75
+  },
+  "episodes_per_tier": 200,
+  "tiers": {
+    "1": {
+      "successes": 200,
+      "success_rate": 1.0,
+      "fail_reasons": {
+        "none": 200
+      },
+      "median_duration_seconds": 12.825,
+      "mean_damage": 0.0,
+      "mean_detections": 0.0,
+      "mean_pulse_uses": 0.0,
+      "failure_samples": []
+    },
+    "2": {
+      "successes": 200,
+      "success_rate": 1.0,
+      "fail_reasons": {
+        "none": 200
+      },
+      "median_duration_seconds": 12.458333333333332,
+      "mean_damage": 0.0,
+      "mean_detections": 0.46,
+      "mean_pulse_uses": 0.705,
+      "failure_samples": []
+    },
+    "3": {
+      "successes": 200,
+      "success_rate": 1.0,
+      "fail_reasons": {
+        "none": 200
+      },
+      "median_duration_seconds": 29.799999999999997,
+      "mean_damage": 0.08,
+      "mean_detections": 6.135,
+      "mean_pulse_uses": 1.965,
+      "failure_samples": []
+    },
+    "4": {
+      "successes": 199,
+      "success_rate": 0.995,
+      "fail_reasons": {
+        "none": 199,
+        "contract_expired": 1
+      },
+      "median_duration_seconds": 27.733333333333334,
+      "mean_damage": 0.095,
+      "mean_detections": 4.37,
+      "mean_pulse_uses": 2.73,
+      "failure_samples": [
+        {
+          "seed": 1026146,
+          "reason": "contract_expired",
+          "data": 3,
+          "quota": 6,
+          "duration_seconds": 180.0,
+          "damage": 0,
+          "detections": 0,
+          "max_trace": 35.913
+        }
+      ]
+    },
+    "5": {
+      "successes": 198,
+      "success_rate": 0.99,
+      "fail_reasons": {
+        "none": 198,
+        "contract_expired": 2
+      },
+      "median_duration_seconds": 29.375,
+      "mean_damage": 0.285,
+      "mean_detections": 4.685,
+      "mean_pulse_uses": 3.67,
+      "failure_samples": [
+        {
+          "seed": 1034050,
+          "reason": "contract_expired",
+          "data": 3,
+          "quota": 7,
+          "duration_seconds": 205.0,
+          "damage": 0,
+          "detections": 0,
+          "max_trace": 32.485
+        },
+        {
+          "seed": 1034083,
+          "reason": "contract_expired",
+          "data": 0,
+          "quota": 7,
+          "duration_seconds": 205.0,
+          "damage": 0,
+          "detections": 0,
+          "max_trace": 0.0
+        }
+      ]
+    },
+    "6": {
+      "successes": 173,
+      "success_rate": 0.865,
+      "fail_reasons": {
+        "none": 173,
+        "contract_expired": 14,
+        "integrity_lost": 13
+      },
+      "median_duration_seconds": 65.575,
+      "mean_damage": 0.505,
+      "mean_detections": 19.035,
+      "mean_pulse_uses": 2.975,
+      "failure_samples": [
+        {
+          "seed": 1042001,
+          "reason": "contract_expired",
+          "data": 7,
+          "quota": 8,
+          "duration_seconds": 225.0,
+          "damage": 1,
+          "detections": 18,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1042010,
+          "reason": "integrity_lost",
+          "data": 7,
+          "quota": 8,
+          "duration_seconds": 83.017,
+          "damage": 3,
+          "detections": 14,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1042039,
+          "reason": "integrity_lost",
+          "data": 7,
+          "quota": 8,
+          "duration_seconds": 90.117,
+          "damage": 3,
+          "detections": 23,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1042044,
+          "reason": "contract_expired",
+          "data": 4,
+          "quota": 8,
+          "duration_seconds": 225.0,
+          "damage": 0,
+          "detections": 12,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1042050,
+          "reason": "contract_expired",
+          "data": 5,
+          "quota": 8,
+          "duration_seconds": 225.0,
+          "damage": 0,
+          "detections": 12,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1042053,
+          "reason": "integrity_lost",
+          "data": 6,
+          "quota": 8,
+          "duration_seconds": 108.367,
+          "damage": 3,
+          "detections": 45,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1042062,
+          "reason": "contract_expired",
+          "data": 7,
+          "quota": 8,
+          "duration_seconds": 225.0,
+          "damage": 0,
+          "detections": 36,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1042066,
+          "reason": "integrity_lost",
+          "data": 8,
+          "quota": 8,
+          "duration_seconds": 94.267,
+          "damage": 3,
+          "detections": 11,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1042070,
+          "reason": "integrity_lost",
+          "data": 3,
+          "quota": 8,
+          "duration_seconds": 66.517,
+          "damage": 3,
+          "detections": 36,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1042082,
+          "reason": "contract_expired",
+          "data": 7,
+          "quota": 8,
+          "duration_seconds": 225.0,
+          "damage": 0,
+          "detections": 59,
+          "max_trace": 100.0
+        }
+      ]
+    }
+  }
+}

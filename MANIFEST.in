@@ -1,0 +1,31 @@
+# The sdist is the reproducible Ghostline source archive.  Unlike the wheel
+# and player executable, it deliberately carries authored art provenance,
+# project documentation, release automation, web sources, and benchmark
+# evidence.  setup.py still copies only manifest-approved runtime assets into
+# the importable wheel.
+include AGENTS.md
+include LICENSE
+include THIRD_PARTY_NOTICES.md
+include README.md
+include requirements.lock
+include vercel.json
+include models/model-card.md
+recursive-include .github/workflows *.yml
+recursive-include assets *
+recursive-include benchmarks *.csv *.json *.md
+recursive-include scripts *.py
+recursive-include web *
+recursive-include wiki *.md
+
+# Include the runnable Ghostline suite, but not the three frozen legacy
+# prototype suites whose neon_arena package is intentionally absent below.
+recursive-include tests *.py
+exclude tests/test_cli.py
+exclude tests/test_env.py
+exclude tests/test_training.py
+
+# The legacy prototype remains Git-history evidence, not public Ghostline
+# distribution source.
+prune src/neon_arena
+
+global-exclude __pycache__ *.py[cod] .DS_Store Thumbs.db

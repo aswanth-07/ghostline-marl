@@ -1,0 +1,27 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.egg-info/
+models/*
+!models/.gitkeep
+!models/ghostline-policy.pt
+!models/ghostline-policy.onnx
+!models/model-card.md
+# Export scratch graphs and model-side parity copies remain local.  The
+# canonical parity evidence is tracked under benchmarks/neural/.
+runs/*
+!runs/.gitkeep
+videos/*
+!videos/.gitkeep
+!videos/ghostline-demo.mp4
+artifacts/
+build/
+dist/
+*.spec
+scratch/
+*_output.txt
+progression.json
+.venv-py*/
+.web-build/
+.vercel/

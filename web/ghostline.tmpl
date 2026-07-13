@@ -1,0 +1,228 @@
+<html lang="en"><script src="{{cookiecutter.cdn}}pythons.js" type="module" id="site" data-python="python{{cookiecutter.PYBUILD}}" data-LINES="{{cookiecutter.LINES}}" data-COLUMNS="{{cookiecutter.COLUMNS}}" data-os="vtx,snd,gui" async defer>#<!--
+
+import asyncio
+import json
+import platform
+import sys
+from pathlib import Path
+
+print("""
+Ghostline web runtime
+Pygbag {{cookiecutter.version}} // Python {{cookiecutter.PYBUILD}}
+Loading {{cookiecutter.archive}}.tar.gz
+""")
+
+
+async def custom_site():
+    import embed
+
+    while str(platform.window.eval("typeof globalThis.ghostlineShell")) == "undefined":
+        await asyncio.sleep(0.01)
+    platform.document.body.style.background = "#03060c"
+    platform.window.canvas.style.visibility = "visible"
+    platform.window.ghostlineShell.setBootState("booting", "Mounting the deterministic simulation…")
+
+    bundle = "{{cookiecutter.archive}}"
+    appdir = Path(f"/data/data/{bundle}")
+    appdir.mkdir(exist_ok=True)
+
+    if platform.window.location.host.find(".itch.zone") > 0:
+        import zipfile
+        async with platform.fopen("{{cookiecutter.archive}}.apk", "rb") as archive:
+            with zipfile.ZipFile(archive) as compressed:
+                compressed.extractall(appdir.as_posix())
+    else:
+        import tarfile
+        async with platform.fopen("{{cookiecutter.archive}}.tar.gz", "rb") as archive:
+            compressed = tarfile.open(fileobj=archive, mode="r:gz")
+            compressed.extractall(path=appdir.as_posix(), filter="tar")
+            compressed.close()
+
+    platform.run_main(PyConfig, loaderhome=appdir / "assets", loadermain=None)
+    while embed.counter() < 0:
+        await asyncio.sleep(0.1)
+
+    main = appdir / "assets" / "main.py"
+    autoplay = str(platform.window.location.search).find("autoplay=1") >= 0
+    if not platform.window.MM.UME and not autoplay:
+        __import__(__name__).__file__ = main
+        platform.window.ghostlineShell.setBootState("engage", "One click unlocks audio and keyboard control.")
+        while not platform.window.MM.UME:
+            await asyncio.sleep(0.1)
+
+    await TopLevel_async_handler.start_toplevel(platform.shell, console=window.python.config.debug)
+    __import__(__name__).__file__ = main
+
+    def package_progress(package):
+        platform.window.ghostlineShell.setBootState("booting", f"Installing browser package: {package}")
+
+    await shell.source(main, callback=package_progress)
+    platform.window.transfer.hidden = true
+    platform.window.infobox.style.display = "none"
+    platform.window.config.gui_divider = 1
+    platform.window.window_resize()
+    platform.window.ghostlineShell.setBootState("ready")
+    shell.interactive()
+
+
+asyncio.run(custom_site())
+
+# BEGIN BLOCK
+# --></script><head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#03060c">
+  <meta name="description" content="Play Ghostline, a procedural stealth-infiltration game, or watch a recurrent RL policy take control.">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>{{cookiecutter.title}}</title>
+  <link rel="icon" type="image/png" href="favicon.png" sizes="32x32">
+  <link rel="stylesheet" href="./ghostline.css">
+  <script type="application/javascript">
+    config = {
+      xtermjs: "{{cookiecutter.xtermjs}}",
+      _sdl2: "canvas",
+      user_canvas: 0,
+      user_canvas_managed: 0,
+      gui_divider: 1,
+      ume_block: new URLSearchParams(location.search).get("autoplay") === "1" ? 0 : {{cookiecutter.ume_block}},
+      can_close: {{cookiecutter.can_close}},
+      archive: "{{cookiecutter.archive}}",
+      gui_debug: 0,
+      cdn: "{{cookiecutter.cdn}}",
+      autorun: 0,
+      PYBUILD: "{{cookiecutter.PYBUILD}}",
+      fb_ar: 1.7777778,
+      fb_width: "{{cookiecutter.width}}",
+      fb_height: "{{cookiecutter.height}}"
+    };
+  </script>
+  <script src="./vendor/browserfs-1.4.3.min.js"></script>
+</head>
+<body data-control="human" data-boot="booting">
+  <header class="site-header">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div class="brand-copy"><strong>GHOSTLINE</strong><span>PROCEDURAL STEALTH // LIVE POLICY LAB</span></div>
+    </div>
+    <div class="header-status" aria-live="polite">
+      <span id="control-chip" class="chip">HUMAN CONTROL</span>
+      <span id="policy-chip" class="chip" data-state="idle">CHECKING AGENT</span>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <section class="game-column" aria-label="Ghostline game">
+      <div id="game-frame" class="game-frame frame-corners">
+        <canvas class="emscripten" id="canvas" width="1" height="1" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+        <canvas class="emscripten" id="canvas3d" width="{{cookiecutter.width}}" height="{{cookiecutter.height}}" tabindex="-1" oncontextmenu="event.preventDefault()" hidden></canvas>
+
+        <div id="launch-gate" class="launch-gate" role="dialog" aria-modal="true" aria-labelledby="launch-title">
+          <div class="launch-card">
+            <span class="launch-kicker">SECURE CHANNEL // WEBASSEMBLY</span>
+            <h1 id="launch-title">CONNECTING TO GHOSTLINE</h1>
+            <p id="launch-copy">Preparing the secure facility simulation…</p>
+            <div id="transfer">
+              <div id="status">Downloading browser runtime…</div>
+              <progress value="0" max="100" id="progress"></progress>
+            </div>
+            <button id="focus-game" class="primary" type="button" hidden>ENTER FACILITY</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="toolbar" aria-label="Game controls">
+        <button id="focus-control" type="button">FOCUS GAME</button>
+        <button id="fullscreen-control" type="button">FULLSCREEN</button>
+        <span class="spacer"></span>
+        <button id="human-control" class="primary" type="button" hidden>TAKE CONTROL</button>
+        <button id="agent-control" class="agent" type="button">AGENT TAKEOVER</button>
+      </div>
+      <p class="web-help"><kbd>WASD</kbd> move · <kbd>SHIFT</kbd> dash · <kbd>SPACE</kbd> pulse · <kbd>ESC</kbd> pause. Click FOCUS GAME if the portfolio page captures keyboard input.</p>
+    </section>
+
+    <aside class="side-panel" aria-label="Live Agent Lab controls">
+      <section class="panel">
+        <h2>CONTRACT LAUNCHER</h2>
+        <div class="contract-grid">
+          <label class="field">TIER
+            <select id="tier-select">
+              <option value="1">01 // ORIENTATION</option>
+              <option value="2">02 // SURVEILLANCE</option>
+              <option value="3">03 // PATROL</option>
+              <option value="4">04 // COUNTERMEASURE</option>
+              <option value="5">05 // LOCKDOWN</option>
+              <option value="6">06 // GHOSTLINE</option>
+            </select>
+          </label>
+          <label class="field">SEED
+            <input id="seed-input" inputmode="numeric" min="0" max="2147483647" placeholder="RANDOM" type="number">
+          </label>
+          <button id="play-selected" class="primary wide" type="button">PLAY SELECTED CONTRACT</button>
+        </div>
+      </section>
+
+      <section class="panel" aria-live="polite">
+        <h2>LIVE TELEMETRY</h2>
+        <div class="live-grid">
+          <div><small>TIER</small><strong id="live-tier">T1</strong></div>
+          <div><small>SEED</small><strong id="live-seed">—</strong></div>
+          <div><small>DATA</small><strong id="live-data">0/0</strong></div>
+          <div><small>TIME</small><strong id="live-time">0.0s</strong></div>
+          <div><small>TRACE</small><strong id="live-trace">0%</strong></div>
+          <div><small>DAMAGE</small><strong id="live-damage">0</strong></div>
+        </div>
+        <div class="runtime-line"><span>BACKEND</span><strong id="policy-backend">—</strong></div>
+        <div class="runtime-line"><span>POLICY LATENCY</span><strong id="policy-latency">—</strong></div>
+      </section>
+
+      <section class="panel">
+        <h2>MATCHED-RUN SNAPSHOT</h2>
+        <p id="match-status" class="match-status" data-state="empty">Complete human and agent runs on the same tier and seed.</p>
+        <div class="comparison">
+          <article class="metric-card"><h3>HUMAN</h3><div id="human-metrics" class="metric-values"></div></article>
+          <article class="metric-card"><h3>AGENT</h3><div id="agent-metrics" class="metric-values"></div></article>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="site-legal">
+    <span>GHOSTLINE 1.0 // STATIC PLAYER</span>
+    <a href="./LICENSE" target="_blank" rel="license noopener">MIT LICENSE</a>
+    <a href="./THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener">THIRD-PARTY NOTICES</a>
+  </footer>
+
+  <div id="notice" role="status" hidden></div>
+  <div id="infobox" hidden>Loading…</div>
+  <div id="html" hidden></div>
+  <div id="crt" hidden><div id="system" hidden></div><div id="box" hidden><div id="info"></div><iframe id="iframe" name="iframe" hidden></iframe></div></div>
+  <div id="dlg" hidden><input type="file" id="dlg_multifile" multiple></div>
+  <div id="pyconsole" hidden><div id="terminal" tabindex="-1"></div></div>
+
+  <script type="module" src="./ghostline-shell.mjs"></script>
+  <script type="application/javascript">
+    globalThis.__canvas_resized = () => {};
+
+    async function custom_onload(debug_hidden) {
+      pyconsole.hidden = true;
+      system.hidden = true;
+      info.hidden = true;
+      box.hidden = true;
+      transfer.hidden = false;
+      globalThis.ghostlineShell?.setBootState("booting", "Loading the WebAssembly runtime…");
+    }
+
+    function custom_prerun() {
+      globalThis.ghostlineShell?.setBootState("booting", "Preparing the Python filesystem…");
+    }
+
+    function custom_postrun() {}
+    function debug() { console.info("Ghostline production console is disabled."); }
+    function info_inline(data) { info.textContent = data; }
+    function info_online() {}
+    function frame_online() {}
+  </script>
+</body>
+</html>

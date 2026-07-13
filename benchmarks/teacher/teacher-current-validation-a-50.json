@@ -1,0 +1,134 @@
+{
+  "environment_fingerprint": "16037fabd6e89009f5170b56bfce476050f72afb2fe013f15dae9040e47d6778",
+  "seed_namespace": "validation",
+  "validation_offset": 100,
+  "status": "superseded_pre_shared_perception_range_decode",
+  "config": {
+    "objective_weight": 15.0,
+    "clearance_weight": 2.0,
+    "escape_weight": 1.2,
+    "sight_weight": 1.2,
+    "inertia_weight": 0.8,
+    "tier6_inertia_scale": 3.5,
+    "dash_energy_threshold": 0.1,
+    "pulse_trace_threshold": 0.75
+  },
+  "episodes_per_tier": 50,
+  "tiers": {
+    "1": {
+      "successes": 50,
+      "success_rate": 1.0,
+      "fail_reasons": {
+        "none": 50
+      },
+      "median_duration_seconds": 13.05,
+      "mean_damage": 0.0,
+      "mean_detections": 0.0,
+      "mean_pulse_uses": 0.0,
+      "failure_samples": []
+    },
+    "2": {
+      "successes": 50,
+      "success_rate": 1.0,
+      "fail_reasons": {
+        "none": 50
+      },
+      "median_duration_seconds": 12.0,
+      "mean_damage": 0.0,
+      "mean_detections": 0.34,
+      "mean_pulse_uses": 0.74,
+      "failure_samples": []
+    },
+    "3": {
+      "successes": 50,
+      "success_rate": 1.0,
+      "fail_reasons": {
+        "none": 50
+      },
+      "median_duration_seconds": 30.008333333333333,
+      "mean_damage": 0.14,
+      "mean_detections": 6.6,
+      "mean_pulse_uses": 1.92,
+      "failure_samples": []
+    },
+    "4": {
+      "successes": 50,
+      "success_rate": 1.0,
+      "fail_reasons": {
+        "none": 50
+      },
+      "median_duration_seconds": 26.358333333333334,
+      "mean_damage": 0.08,
+      "mean_detections": 4.22,
+      "mean_pulse_uses": 2.78,
+      "failure_samples": []
+    },
+    "5": {
+      "successes": 50,
+      "success_rate": 1.0,
+      "fail_reasons": {
+        "none": 50
+      },
+      "median_duration_seconds": 29.141666666666666,
+      "mean_damage": 0.18,
+      "mean_detections": 4.24,
+      "mean_pulse_uses": 3.72,
+      "failure_samples": []
+    },
+    "6": {
+      "successes": 46,
+      "success_rate": 0.92,
+      "fail_reasons": {
+        "none": 46,
+        "contract_expired": 3,
+        "integrity_lost": 1
+      },
+      "median_duration_seconds": 57.85,
+      "mean_damage": 0.34,
+      "mean_detections": 14.64,
+      "mean_pulse_uses": 2.96,
+      "failure_samples": [
+        {
+          "seed": 1040101,
+          "reason": "contract_expired",
+          "data": 4,
+          "quota": 8,
+          "duration_seconds": 225.0,
+          "damage": 2,
+          "detections": 48,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1040104,
+          "reason": "contract_expired",
+          "data": 7,
+          "quota": 8,
+          "duration_seconds": 225.0,
+          "damage": 1,
+          "detections": 53,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1040107,
+          "reason": "contract_expired",
+          "data": 3,
+          "quota": 8,
+          "duration_seconds": 225.0,
+          "damage": 0,
+          "detections": 8,
+          "max_trace": 100.0
+        },
+        {
+          "seed": 1040134,
+          "reason": "integrity_lost",
+          "data": 5,
+          "quota": 8,
+          "duration_seconds": 83.7,
+          "damage": 3,
+          "detections": 36,
+          "max_trace": 100.0
+        }
+      ]
+    }
+  }
+}
