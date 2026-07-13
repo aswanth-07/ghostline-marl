@@ -4,6 +4,28 @@ Ghostline is a procedural 2D stealth-infiltration game and reinforcement-learnin
 
 The keyboard game, Agent Lab, recurrent policy, evaluation tools, and replay recorder all use the same deterministic 60 Hz headless simulation.
 
+## Measured neural result
+
+The frozen GRU BC+DAgger policy passed its one-time evaluation over 3,000
+untouched 7M contracts. Results are tied to environment fingerprint
+`17d8617f...3739b`; the final-test ledger is permanently consumed.
+
+| Tier | Target | Success | Wilson 95% | Mean damage | Median time |
+|---|---:|---:|---:|---:|---:|
+| 1 - Orientation | 95% | 490/500 (98.0%) | 96.36-98.91% | 0.000 | 13.31 s |
+| 2 - Surveillance | 95% | 491/500 (98.2%) | 96.61-99.05% | 0.000 | 12.14 s |
+| 3 - Patrol | 95% | 496/500 (99.2%) | 97.96-99.69% | 0.236 | 25.61 s |
+| 4 - Countermeasure | 95% | 485/500 (97.0%) | 95.11-98.17% | 0.204 | 24.79 s |
+| 5 - Lockdown | 95% | 479/500 (95.8%) | 93.66-97.24% | 0.238 | 29.40 s |
+| 6 - Ghostline | 85% | 474/500 (94.8%) | 92.49-96.43% | 0.554 | 40.51 s |
+
+[Watch the 30-second tier-6 agent demo](videos/ghostline-demo.mp4). The full
+[JSON](benchmarks/neural/champion-final-7m-500.json),
+[aggregate CSV](benchmarks/neural/champion-final-7m-500.csv), and
+[episode CSV](benchmarks/neural/champion-final-7m-500.episodes.csv) include
+exact seeds, action hashes, reward accounting, failures, damage, detections,
+trace, time, path efficiency, optional data, and inference latency.
+
 ## Gameplay
 
 ![Ghostline gameplay with smooth occlusion-correct security cones, fully readable furniture, patrol grades, exposure status, terminal linking, and directional warnings](assets/screenshots/gameplay-stealth-v3.png)
@@ -19,6 +41,8 @@ The shipping view uses a 640×360 logical canvas with exact nearest-neighbour sc
 - A universal entity-aware recurrent actor-critic with masked `Discrete(36)` actions and a fair observation-only teacher for BC/DAgger supervision.
 - Deterministic replay, exact reward accounting, generation fuzzing, Wilson intervals, and ONNX parity testing.
 - A complete playable game with menus, briefings, progression, accessibility settings, procedural audio, Agent Lab, and a packaged Windows build.
+
+![Closed-loop success across behavior cloning, DAgger recovery, confirmation, and untouched final evaluation](assets/screenshots/neural-training-lineage.png)
 
 ```mermaid
 flowchart LR
@@ -88,7 +112,7 @@ ghostline train --hours 24 --experiment ghostline-universal
 ghostline evaluate --model models/ghostline-policy.pt --episodes 500 --seed-start 7000000 --slice-manifest benchmarks/final-test-slices.json --output benchmarks/neural/champion-final-7m-500.json
 ghostline export --model models/ghostline-policy.pt --output models/ghostline-policy.fp32.onnx --quantize --deployment-output models/ghostline-policy.onnx --parity-samples 1000
 Copy-Item models/ghostline-policy.fp32.parity.json benchmarks/neural/champion-onnx-parity.json
-python scripts/build_web.py --human-only  # diagnostic while the champion is pending
+python scripts/build_web.py --model models/ghostline-policy.onnx
 ```
 
 Export always preserves the canonical FP32 graph. With `--quantize`, it also writes a dynamic-INT8 candidate and independently replays both recurrent graphs against PyTorch. `--deployment-output` receives INT8 only after zero deterministic-action mismatches; otherwise it receives the verified FP32 fallback. The sibling `.parity.json` audit records byte sizes, SHA-256 hashes, recurrent width, observation contract, transition count, per-artifact parity, size reduction, and the selected deployment precision.
@@ -112,9 +136,14 @@ Before the final route/security/patrol freeze, the fair observation-only teacher
 
 The complete tracked evidence, including Wilson intervals, damage, detections, duration, and path efficiency, is retained in [`benchmarks/teacher/teacher-release-gate-6m-500.json`](benchmarks/teacher/teacher-release-gate-6m-500.json) with a [CSV export](benchmarks/teacher/teacher-release-gate-6m-500.csv). It is explicitly a historical baseline, not the final frozen-distribution claim.
 
-The final mechanics freeze subsequently added alternate-route guarantees, camera-safe terminal pockets, objective-aware sweeps, and cross-room patrol navigation. The current-fingerprint teacher then passed two disjoint 200-seed-per-tier validation gates at `100/100/100/100/100/95%` and `100/99.5/99.5/100/100/94%`. These qualify training data only; they are not final-test or neural results. The tracked 7M 500-seed gate remains deliberately unopened until checkpoint selection.
+The final mechanics freeze subsequently added alternate-route guarantees, camera-safe terminal pockets, objective-aware sweeps, and cross-room patrol navigation. The current-fingerprint teacher then passed two disjoint 200-seed-per-tier validation gates at `100/100/100/100/100/95%` and `100/99.5/99.5/100/100/94%`. These qualified the fresh training data only; the selected neural checkpoint was independently evaluated on the one-time 7M slice reported above.
 
-Neural acceptance remains at least 95% deterministic success on tiers 1-5 and 85% on tier 6 across 500 unseen seeds per tier. The neural champion is still pending, so Ghostline does not yet claim neural acceptance or performance beyond human players. See [the model card](models/model-card.md) for the explicit status.
+Neural acceptance requires at least 95% deterministic success on tiers 1-5 and
+85% on tier 6 across 500 unseen seeds per tier. The frozen policy passed at
+`98.0/98.2/99.2/97.0/95.8/94.8%`. The project makes no claim that this is
+better than a real player: that comparison remains blocked on a matched-seed
+human cohort of at least five unassisted participants. See
+[the model card](models/model-card.md) for scope and limitations.
 
 ## Verification
 

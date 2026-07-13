@@ -1,0 +1,28 @@
+{
+  "report_contract": "ghostline-ppo-pilot-failure-v1",
+  "status": "rejected_and_not_resumed",
+  "environment_fingerprint": "17d8617fd92015dc5a00b5314558fc7c0ff957685b12966efa5253806463739b",
+  "initial_checkpoint_sha256": "ad0b65d9c4f4859c8324a14f8461eeab8dae0f5f594103bfcbe39415912561e9",
+  "ppo_gate_checkpoint_sha256": "e0c3e8b1b3f7d0605dd2e987ed857e38c7e18e682876e6b1accb02ec4da263fa",
+  "gate_steps": 128000,
+  "last_saved_steps": 153600,
+  "validation_offset": 3800,
+  "episodes_per_tier": 50,
+  "ppo_success_rates": [0.84, 0.94, 0.98, 0.92, 0.90, 0.86],
+  "matched_rollback_success_rates": [0.96, 0.96, 0.90, 0.98, 0.92, 0.94],
+  "ppo_worst_tier_success": 0.84,
+  "matched_rollback_worst_tier_success": 0.90,
+  "deterministic_action_agreement_with_rollback": 0.85,
+  "teacher_trajectory_calibration": {
+    "transitions": 3255,
+    "rollback_teacher_action_accuracy": 0.875,
+    "ppo_teacher_action_accuracy": 0.799,
+    "mean_anchor_kl": 0.175,
+    "median_anchor_kl": 0.026,
+    "p90_anchor_kl": 0.526,
+    "p99_anchor_kl": 1.745
+  },
+  "rejection_reason": "Worst-tier success fell from 0.90 to 0.84 on the exact same validation window; tier 1 fell 12 percentage points and tier 6 fell 8 points. The immutable DAgger rollback remained champion.",
+  "matched_rollback_report": "dagger-r2-offset3800-50-matched-ppo.json",
+  "claim_scope": "Diagnostic ablation only. This short pilot is not presented as an equal-budget comparison."
+}

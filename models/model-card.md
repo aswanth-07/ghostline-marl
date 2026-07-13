@@ -2,7 +2,11 @@
 
 ## Status
 
-Pipeline implemented and smoke-tested. The fair-teacher gate has passed; neural champion training and final neural evaluation are still pending. No neural acceptance or superhuman claim is made.
+Release candidate selected and independently audited. The frozen neural policy
+passes the six-tier acceptance gate, matches its FP32 ONNX export on 1,000
+recurrent transitions, runs in the Windows and web builds, and is tied to the
+environment fingerprint below. No superhuman claim is made because the planned
+matched-seed human cohort has not yet been collected.
 
 ## Model
 
@@ -15,9 +19,9 @@ Pipeline implemented and smoke-tested. The fair-teacher gate has passed; neural 
 
 ## Data and fairness
 
-No human demonstrations, human trajectories, hidden generator state, privileged critic state, or unseen enemy state are used. The automated teacher receives the exact public v2 observation and action mask. Training seeds are below 1,000,000, validation uses 1,000,000-1,049,999, and final evaluation begins at 2,000,000. All attempted final-test slices are immutable: 2M-6M are historical pre-freeze evidence, while the tracked 7M slice remains reserved and unopened for the selected frozen-distribution neural champion.
+No human demonstrations, human trajectories, hidden generator state, privileged critic state, or unseen enemy state are used. The automated teacher receives the exact public v2 observation and action mask. Training seeds are below 1,000,000, validation uses 1,000,000-1,049,999, and final evaluation begins at 2,000,000. All attempted final-test slices are immutable: 2M-6M are historical pre-freeze evidence, and the tracked 7M slice was consumed exactly once by the selected frozen-distribution neural champion. Its report and artifact hashes are bound in [`benchmarks/final-test-slices.json`](../benchmarks/final-test-slices.json).
 
-The failed 2.98-million-decision pure-PPO attempt is retained as historical negative evidence only; it predates the final environment fingerprint and is not represented as an equal-budget current-distribution ablation. The hybrid pipeline is not presented as successful until final held-out evaluation passes.
+The failed 2.98-million-decision pure-PPO attempt is retained as historical negative evidence only; it predates the final environment fingerprint and is not represented as an equal-budget current-distribution ablation. A current-fingerprint conservative PPO pilot was also rejected: it scored `84/94/98/92/90/86%`, while the immutable DAgger rollback scored `96/96/90/98/92/94%` on the same seeds. The release therefore uses the better BC+DAgger checkpoint and does not mislabel it as PPO-trained.
 
 ## Current fair-teacher qualification
 
@@ -42,18 +46,42 @@ The immutable retired audits measured tiers 1-6 at `100.0/100.0/97.0/94.8/96.8/8
 
 Tier-6 directional inertia was selected only on two disjoint validation slices, never on a final-test slice. No code or setting changed while the 6M gate was open; later player-facing mechanics and perception changes deliberately retired that evidence and required fresh current-fingerprint teacher qualification.
 
-These results validate teacher trajectory quality; they are not neural-policy results. The selected neural checkpoint, 500-seed neural benchmark, Python/ONNX parity, and matched-seed human cohort remain pending.
+These results validate teacher trajectory quality; they are not neural-policy results. The selected neural checkpoint and its independent final benchmark are reported below. The matched-seed human cohort remains pending.
 
 ## Acceptance results
 
-| Tier | Target | Measured neural success | Wilson 95% interval |
-|---|---:|---:|---:|
-| 1 - Orientation | 95% | Pending | Pending |
-| 2 - Surveillance | 95% | Pending | Pending |
-| 3 - Patrol | 95% | Pending | Pending |
-| 4 - Countermeasure | 95% | Pending | Pending |
-| 5 - Lockdown | 95% | Pending | Pending |
-| 6 - Ghostline | 85% | Pending | Pending |
+The frozen checkpoint has SHA-256
+`458aa28d14b0829481a56c96dcc97a9ab9af2c463c15beef94d4c3e86ab59deb`
+and environment fingerprint
+`17d8617fd92015dc5a00b5314558fc7c0ff957685b12966efa5253806463739b`.
+The one-time 7M audit ran 500 deterministic, unseen seeds per tier:
+
+| Tier | Target | Measured neural success | Wilson 95% interval | Mean damage | Median time |
+|---|---:|---:|---:|---:|---:|
+| 1 - Orientation | 95% | 490/500 (98.0%) | 96.36%-98.91% | 0.000 | 13.31 s |
+| 2 - Surveillance | 95% | 491/500 (98.2%) | 96.61%-99.05% | 0.000 | 12.14 s |
+| 3 - Patrol | 95% | 496/500 (99.2%) | 97.96%-99.69% | 0.236 | 25.61 s |
+| 4 - Countermeasure | 95% | 485/500 (97.0%) | 95.11%-98.17% | 0.204 | 24.79 s |
+| 5 - Lockdown | 95% | 479/500 (95.8%) | 93.66%-97.24% | 0.238 | 29.40 s |
+| 6 - Ghostline | 85% | 474/500 (94.8%) | 92.49%-96.43% | 0.554 | 40.51 s |
+
+The complete [JSON report](../benchmarks/neural/champion-final-7m-500.json),
+[aggregate CSV](../benchmarks/neural/champion-final-7m-500.csv), and
+[episode CSV](../benchmarks/neural/champion-final-7m-500.episodes.csv) expose
+all failures and per-episode evidence. Tier 6 had 18 clock expiries and eight
+integrity failures; those 26 failures are retained rather than filtered.
+
+## Training lineage
+
+Training ran on an RTX 5080 Laptop GPU (16 GB) with a 24-logical-core host.
+The fresh base corpus contains 1,800 successful teacher episodes and 467,853
+transitions. Four policy-induced DAgger recovery rounds add 1,200 episodes and
+406,932 transitions, for 3,000 episodes and 874,785 transitions in the complete
+lineage. GRU-256 and GRU-384 candidates each received the same 10,000-update BC
+budget; GRU-384 won the closed-loop gate and then received four 3,000-update
+DAgger rounds. Two disjoint 200-seed-per-tier confirmation gates passed before
+the final slice was opened. Exact reports and lineage are indexed in
+[`benchmarks/neural/README.md`](../benchmarks/neural/README.md).
 
 ## Intended use and limitations
 
@@ -61,12 +89,10 @@ This is a portfolio/research policy for procedural, partially observed game RL. 
 
 ## Deployment precision gate
 
-The release exporter retains a canonical FP32 ONNX graph and may derive a
-dynamic-INT8 deployment candidate. Each graph is replayed independently for
-1,000 player-equivalent recurrent transitions against deterministic PyTorch
-actions. INT8 is selected only at zero action mismatches; any mismatch or
-quantizer/runtime error falls back to the already verified FP32 graph. The
-sibling parity report records artifact sizes, SHA-256 hashes, mismatch counts,
-the first mismatch index, recurrent width, observation contract, and selected
-deployment precision. Final champion sizes and parity hashes remain pending
-until the neural checkpoint passes the held-out acceptance gate.
+The canonical FP32 ONNX graph is 5,831,535 bytes with SHA-256
+`cd90659286310f75766fe8ab6dc1dd22f36cb40e0e72ca7c0b9ac9a00a694b14`.
+It matched PyTorch deterministic actions on all 1,000 player-equivalent
+recurrent transitions. Dynamic INT8 was 28.3% smaller but changed three actions
+(first mismatch at transition 575), so it was rejected and the verified FP32
+graph was selected for desktop and web deployment. The full audit is
+[`champion-onnx-parity.json`](../benchmarks/neural/champion-onnx-parity.json).
