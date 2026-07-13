@@ -8,6 +8,7 @@ const runHistory = { human: null, agent: null };
 let gameReady = false;
 let lastStatus = "active";
 let autoplayQueued = false;
+let agentActivationPending = false;
 let policyFailureQueued = false;
 let policyAvailability = null;
 
@@ -154,7 +155,19 @@ function maybeAutoplay() {
   if (query.get("autoplay") !== "1") return;
   autoplayQueued = true;
   setBootState("running");
-  setTimeout(() => queue("agent"), 1400);
+  setTimeout(() => { void requestAgentControl(); }, 1400);
+}
+
+async function requestAgentControl() {
+  if (agentActivationPending) return;
+  agentActivationPending = true;
+  try {
+    const loaded = await ghostlinePolicy.load();
+    if (loaded) queue("agent-ready");
+    else showNotice("The policy could not load. Continuing in human mode.", "error");
+  } finally {
+    agentActivationPending = false;
+  }
 }
 
 function maybePublishEmbedReady() {
@@ -192,7 +205,7 @@ globalThis.ghostlineShell = {
 };
 
 $("play-selected")?.addEventListener("click", () => queue("launch-human"));
-$("agent-control")?.addEventListener("click", () => queue("agent"));
+$("agent-control")?.addEventListener("click", () => { void requestAgentControl(); });
 $("human-control")?.addEventListener("click", () => queue("human"));
 $("fullscreen-control")?.addEventListener("click", toggleFullscreen);
 $("focus-control")?.addEventListener("click", () => $("canvas")?.focus());

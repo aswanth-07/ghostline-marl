@@ -63,6 +63,10 @@ If inference fails after takeover, the bridge immediately invalidates recurrent
 memory and its prior action, emits only neutral action zero, and asks the Python
 adapter to close the policy environment and restore human control. The active
 run becomes `hybrid`; a failed backend can never keep replaying stale movement.
+JavaScript owns the asynchronous ONNX session load and enqueues a plain
+`agent-ready` command only after initialization succeeds. Python performs the
+synchronous environment handoff from that command; it never awaits a JavaScript
+Promise across the Pygbag boundary.
 
 ## Build commands
 

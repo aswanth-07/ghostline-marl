@@ -499,6 +499,11 @@ def test_web_shell_and_policy_bridge_include_release_behaviors() -> None:
     assert "modelAvailable" in embed
     assert 'type: "run-complete"' in embed
     assert 'query.get("autoplay")' in shell
+    assert 'queue("agent-ready")' in shell
+    assert "await ghostlinePolicy.load()" in shell
+    assert 'kind == "agent-ready"' in (
+        ROOT / "web" / "runtime.py"
+    ).read_text(encoding="utf-8")
     manifest_listener = shell.split(
         'addEventListener("ghostline:policy-manifest"', 1
     )[1].split('addEventListener("ghostline:policy-state"', 1)[0]

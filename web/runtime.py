@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import platform
 from pathlib import Path
@@ -131,10 +130,6 @@ def observation_json(observation: Mapping[str, Any]) -> str:
     return json.dumps(payload, separators=(",", ":"), allow_nan=False)
 
 
-async def _await_js(value: Any) -> Any:
-    return await value if inspect.isawaitable(value) else value
-
-
 class BrowserOnnxPolicy:
     """Synchronous facade over the bridge's coalescing asynchronous inference queue."""
 
@@ -231,7 +226,7 @@ class GhostlineWebRuntime:
             self.run_mode = "human"
             self.app._start_mission(agent=False)
             self.host.ghostlineShell.setControlMode("human")
-        elif kind == "agent":
+        elif kind == "agent-ready":
             await self._enable_agent(tier=tier, seed=seed)
         elif kind == "human":
             active_mission = self.app.state in {"play", "pause", "lab_play"} and not self.app.sim.terminated and not self.app.sim.truncated
@@ -259,8 +254,7 @@ class GhostlineWebRuntime:
 
     async def _enable_agent(self, *, tier: int, seed: int | None) -> None:
         self.host.ghostlineShell.setPolicyState("loading", "Loading recurrent policy…")
-        loaded = bool(await _await_js(self.host.ghostlinePolicy.load()))
-        if not loaded:
+        if str(self.host.ghostlinePolicy.state) != "ready":
             self.host.ghostlineShell.setPolicyState("unavailable", "Agent unavailable — human play still works")
             self.host.ghostlineShell.showNotice("The policy could not load. Continuing in human mode.", "error")
             return
