@@ -49,7 +49,9 @@ Python game loop. It is emitted as soon as the policy manifest is known, before
 the self-hosted runtime reaches Chrome's required user-activation gate. The
 parent can therefore reveal Ghostline's own accurate download and audio-focus
 progress instead of obscuring it with a competing timeout. `gameReady` remains
-false until the deterministic game loop has actually started.
+false until the Python adapter has initialized the real canvas and deterministic
+game loop. The Pygbag template must never declare `ready` on its own; doing so
+would expose its still-1×1 bootstrap canvas as a blank playable surface.
 
 Losing tab or iframe focus pauses an active human mission and never steals focus
 back automatically; the player explicitly clicks the game before resuming. A

@@ -505,6 +505,10 @@ def test_web_shell_and_policy_bridge_include_release_behaviors() -> None:
     assert "maybePublishEmbedReady()" in manifest_listener
     assert "if (policyAvailability === null) return" in shell
     assert template.index("while not platform.window.MM.UME") < template.index("await shell.source(main")
+    assert 'ghostlineShell.setBootState("ready")' not in template
+    assert "self.host.ghostlineShell.markGameReady()" in (
+        ROOT / "web" / "runtime.py"
+    ).read_text(encoding="utf-8")
     assert 'executionProviders: ["webgpu", "wasm"]' in policy
     assert 'executionProviders: ["wasm"]' in policy
     assert "results.next_hidden" in policy
