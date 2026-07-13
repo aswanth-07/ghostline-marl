@@ -298,3 +298,20 @@ def test_headless_benchmark_report_exposes_raw_provenance() -> None:
     assert report["aggregate_simulation_ticks_per_second"] == 60_000.0
     assert report["meets_minimum"] is True
     assert report["worker_elapsed_seconds"] == [3.8, 3.9, 4.0, 4.1]
+
+
+def test_environment_fingerprint_is_checkout_line_ending_invariant(tmp_path: Path) -> None:
+    lf_package = tmp_path / "lf" / "ghostline"
+    crlf_package = tmp_path / "crlf" / "ghostline"
+    lf_package.mkdir(parents=True)
+    crlf_package.mkdir(parents=True)
+    for index, name in enumerate(ENVIRONMENT_FINGERPRINT_FILES):
+        lines = f"# source {index}\nVALUE = {index}\n".encode()
+        (lf_package / name).write_bytes(lines)
+        (crlf_package / name).write_bytes(lines.replace(b"\n", b"\r\n"))
+
+    assert environment_fingerprint(lf_package) == environment_fingerprint(crlf_package)
+
+    changed = crlf_package / ENVIRONMENT_FINGERPRINT_FILES[0]
+    changed.write_bytes(changed.read_bytes().replace(b"VALUE = 0", b"VALUE = 99"))
+    assert environment_fingerprint(lf_package) != environment_fingerprint(crlf_package)

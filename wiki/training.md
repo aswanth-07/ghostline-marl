@@ -20,6 +20,11 @@ retained as a negative result. See [`benchmarks/neural/README.md`](../benchmarks
 for the full training lineage, selection gates, final metrics, and deployment
 parity. No human-superiority claim is made without the planned human cohort.
 
+Environment fingerprints canonicalize CRLF and LF source line endings before
+hashing. This keeps the same semantic simulation/controller contract portable
+across Windows and Linux checkouts while every other source-byte change still
+invalidates datasets, checkpoints, exports, and release evidence.
+
 ## Model and observation contract
 
 - Pure PyTorch 2.13 learning stack: behavior cloning, DAgger collection, recurrent clipped PPO, GAE, RND, and checkpointing are implemented in-project without Sample Factory, Stable-Baselines3, TorchRL, or another RL-framework runtime.
