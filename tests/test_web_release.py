@@ -523,6 +523,20 @@ def test_web_shell_and_policy_bridge_include_release_behaviors() -> None:
     assert 'href="./THIRD_PARTY_NOTICES.md"' in template
 
 
+def test_browser_gymnasium_shim_supports_env_seeding_and_spaces() -> None:
+    shim = web_runtime._browser_gymnasium_shim()
+    env = shim.Env()
+    env.reset(seed=17)
+    assert int(env.np_random.integers(0, 1000)) == 740
+    discrete = shim.spaces.Discrete(36)
+    box = shim.spaces.Box(-1.0, 1.0, shape=(2, 3), dtype=np.float32)
+    dictionary = shim.spaces.Dict({"box": box})
+    assert discrete.n == 36
+    assert box.shape == (2, 3)
+    assert box.dtype == np.dtype(np.float32)
+    assert dictionary.spaces == {"box": box}
+
+
 def test_bundle_rejects_external_or_modified_pygbag_runtime(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

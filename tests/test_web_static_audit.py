@@ -88,9 +88,11 @@ def test_pygbag_pep723_dependencies_use_browser_repository_names() -> None:
     # Pygbag 0.9.3 resolves literal module/repository keys here; desktop-style
     # version constraints are not parsed and would produce invalid package URLs.
     assert '"numpy"' in dependency_block
-    assert '"gymnasium"' in dependency_block
+    assert '"gymnasium"' not in dependency_block
     assert "==" not in dependency_block
-    assert main.index("import numpy") < main.index("import gymnasium")
+    runtime = (ROOT / "web" / "runtime.py").read_text(encoding="utf-8")
+    assert "_install_browser_gymnasium_shim()" in runtime
+    assert 'ModuleType("gymnasium")' in runtime
 
 
 def test_pygbag_runtime_is_exactly_locked_local_and_terminal_free() -> None:

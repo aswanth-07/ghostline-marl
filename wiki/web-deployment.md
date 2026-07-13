@@ -103,14 +103,15 @@ node web\tests\onnx-wasm-smoke.mjs .web-build\ghostline\build\web
 
 The local byte figure is deliberately not described as the complete cold
 browser transfer. Pygbag's PEP-723 installer still obtains its small cp312
-package index plus browser wheels for NumPy, pygame-ce, Gymnasium, and
-Gymnasium's pure-Python dependencies from the Pygbag/PyPI package repositories.
+package index plus browser wheels for NumPy and pygame-ce from the Pygbag/PyPI
+package repositories.
 Those package requests are distinct from the now-self-hosted core runtime and
-must be measured in Chrome. As of the 2026-07 release audit, the wheel bodies
-total about 15.0 MB; their repository selection is not part of Ghostline's
-static checksum lock. The 24.1 MB local bundle plus those wheel bodies is about
-39.1 MB of raw artifacts, so the original under-25-MB total cold-transfer target
-is not established by this build and remains an explicit release limitation.
+must be measured in Chrome. As of the 2026-07 release audit, the NumPy and
+pygame-ce wheel bodies total about 14.0 MB; their repository selection is not
+part of Ghostline's static checksum lock. The 24.1 MB local bundle plus those
+wheel bodies is about 38.1 MB of raw artifacts, so the original under-25-MB
+total cold-transfer target is not established by this build and remains an
+explicit release limitation.
 Only production Chrome transfer traces can account for Vercel compression,
 browser caching, and the package installer's actual request set.
 
@@ -133,13 +134,16 @@ and—when the agent runtime is present—the checksum-locked ONNX Runtime licen
 and full upstream third-party notices. Missing legal documents fail bundle
 validation just like a missing WASM binary.
 
-The PEP 723 block in `web/main.py` intentionally uses bare browser repository
-names (`numpy`, then `gymnasium`). Pygbag 0.9.3's browser installer resolves
-those literal names and does not parse desktop-style `==` constraints. Desktop,
-training, packaging, and ONNX dependencies remain exactly locked by
-`pyproject.toml` and `requirements.lock`; the browser uses Pygbag's matching
-CPython 3.12 WASM wheels (currently NumPy 2.0.2 and pygame-ce 2.5.7) plus the
-pure-Python Gymnasium wheel.
+The PEP 723 block in `web/main.py` intentionally uses the bare browser
+repository name `numpy`. Pygbag 0.9.3's installer resolves that literal name and
+does not parse desktop-style `==` constraints. Gymnasium is deliberately absent
+from the browser package set: its unused vector imports pull in
+`multiprocessing.sharedctypes`, which CPython/WASM does not provide. The web
+policy adapter installs a narrow in-memory compatibility module containing only
+the `Env.reset` seed contract and `Discrete`/`Box`/`Dict` space records used by
+`GhostlineEnv`; desktop, tests, and training continue to use the real locked
+Gymnasium package. This removes the failing import and keeps human startup free
+of an unnecessary wheel without changing observations or simulation behavior.
 
 ## Chrome-only QA
 
