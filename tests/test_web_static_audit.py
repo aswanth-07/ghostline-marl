@@ -90,6 +90,7 @@ def test_pygbag_pep723_dependencies_use_browser_repository_names() -> None:
     assert '"numpy"' in dependency_block
     assert '"gymnasium"' not in dependency_block
     assert "==" not in dependency_block
+    assert "del numpy" not in main
     runtime = (ROOT / "web" / "runtime.py").read_text(encoding="utf-8")
     assert "_install_browser_gymnasium_shim()" in runtime
     assert 'ModuleType("gymnasium")' in runtime
