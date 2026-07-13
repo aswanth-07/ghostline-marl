@@ -24,6 +24,7 @@ def _minimal_bundle(root: Path) -> None:
     for name in (
         "index.html",
         "ghostline.tar.gz",
+        "embed-bridge.mjs",
         "ghostline-shell.mjs",
         "matched-runs.mjs",
         "policy-bridge.mjs",

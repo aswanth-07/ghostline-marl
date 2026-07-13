@@ -1,12 +1,15 @@
+import { GhostlineEmbedBridge } from "./embed-bridge.mjs";
 import { ghostlinePolicy } from "./policy-bridge.mjs";
 import { matchedRunSnapshot } from "./matched-runs.mjs";
 
+const embedBridge = new GhostlineEmbedBridge();
 const commands = [];
 const runHistory = { human: null, agent: null };
 let gameReady = false;
 let lastStatus = "active";
 let autoplayQueued = false;
 let policyFailureQueued = false;
+let policyAvailability = null;
 
 const $ = (id) => document.getElementById(id);
 const tier = () => Number($("tier-select")?.value || 1);
@@ -130,6 +133,7 @@ function updateMetrics(serialized) {
   $("live-trace").textContent = `${Number(metrics.trace).toFixed(0)}%`;
   $("live-damage").textContent = formatMetric(metrics.damage);
   if (lastStatus === "active" && metrics.status !== "active") {
+    embedBridge.publishRunComplete(metrics);
     // Pin the completed contract into the launcher so the other controller's
     // next run is matched by default instead of silently drawing a new seed.
     if ($("tier-select")) $("tier-select").value = String(metrics.tier);
@@ -153,6 +157,11 @@ function maybeAutoplay() {
   setTimeout(() => queue("agent"), 1400);
 }
 
+function maybePublishEmbedReady() {
+  if (!gameReady || policyAvailability === null) return;
+  embedBridge.markReady(policyAvailability);
+}
+
 async function toggleFullscreen() {
   const frame = $("game-frame");
   try {
@@ -167,7 +176,10 @@ async function toggleFullscreen() {
 globalThis.ghostlinePolicy = ghostlinePolicy;
 globalThis.ghostlineShell = {
   consumeCommand: () => commands.length ? JSON.stringify(commands.shift()) : null,
-  markGameReady: () => setBootState("ready"),
+  markGameReady: () => {
+    setBootState("ready");
+    maybePublishEmbedReady();
+  },
   setBootState,
   setPolicyState,
   setControlMode,
@@ -192,12 +204,15 @@ document.addEventListener("visibilitychange", () => {
 globalThis.addEventListener("blur", () => queue("pause-focus"));
 
 globalThis.addEventListener("ghostline:policy-manifest", (event) => {
+  policyAvailability = Boolean(event.detail.available);
+  embedBridge.setModelAvailable(policyAvailability);
   if (event.detail.available) {
     setPolicyState("available", "AGENT READY TO LOAD");
     maybeAutoplay();
   } else {
     setPolicyState("unavailable", "HUMAN-ONLY BUILD");
   }
+  maybePublishEmbedReady();
 });
 globalThis.addEventListener("ghostline:policy-state", (event) => {
   const { state, progress = 0, backend, error } = event.detail;

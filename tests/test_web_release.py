@@ -300,6 +300,7 @@ def _fake_bundle(root: Path, *, with_model: bool = False) -> None:
     for name in (
         "index.html",
         "ghostline.tar.gz",
+        "embed-bridge.mjs",
         "ghostline-shell.mjs",
         "matched-runs.mjs",
         "policy-bridge.mjs",
@@ -411,6 +412,7 @@ def test_web_stage_is_an_explicit_runtime_and_asset_allowlist(monkeypatch, tmp_p
     assert staged_assets == expected_assets
     assert not any("screenshots" in name or "source" in name for name in staged_assets)
     assert (stage / "static" / "THIRD_PARTY_NOTICES.md").is_file()
+    assert (stage / "static" / "embed-bridge.mjs").is_file()
 
 
 def test_web_asset_allowlist_rejects_provenance_and_screenshot_files(tmp_path: Path) -> None:
@@ -439,11 +441,17 @@ def test_web_asset_allowlist_rejects_provenance_and_screenshot_files(tmp_path: P
 def test_web_shell_and_policy_bridge_include_release_behaviors() -> None:
     template = (ROOT / "web" / "ghostline.tmpl").read_text(encoding="utf-8")
     shell = (ROOT / "web" / "static" / "ghostline-shell.mjs").read_text(encoding="utf-8")
+    embed = (ROOT / "web" / "static" / "embed-bridge.mjs").read_text(encoding="utf-8")
     policy = (ROOT / "web" / "static" / "policy-bridge.mjs").read_text(encoding="utf-8")
     for element in ("launch-gate", "agent-control", "human-control", "tier-select", "seed-input", "fullscreen-control"):
         assert f'id="{element}"' in template
     assert "AGENT TAKEOVER" in template
+    assert 'get("embed") === "1"' in template
     assert "consumeCommand" in shell
+    assert "new GhostlineEmbedBridge()" in shell
+    assert "publishRunComplete(metrics)" in shell
+    assert "modelAvailable" in embed
+    assert 'type: "run-complete"' in embed
     assert 'query.get("autoplay")' in shell
     assert 'executionProviders: ["webgpu", "wasm"]' in policy
     assert 'executionProviders: ["wasm"]' in policy

@@ -354,7 +354,13 @@ def stage(*, model: Path | None = None, include_ort: bool = True) -> dict[str, o
     static.mkdir()
     shutil.copy2(ROOT / "LICENSE", static / "LICENSE")
     shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", static / "THIRD_PARTY_NOTICES.md")
-    for source in ("ghostline-shell.mjs", "matched-runs.mjs", "policy-bridge.mjs", "ghostline.css"):
+    for source in (
+        "embed-bridge.mjs",
+        "ghostline-shell.mjs",
+        "matched-runs.mjs",
+        "policy-bridge.mjs",
+        "ghostline.css",
+    ):
         shutil.copy2(ROOT / "web" / "static" / source, static / source)
     _stage_browserfs(static)
     if include_ort:
@@ -373,6 +379,7 @@ def bundle_report(output: Path = OUTPUT) -> dict[str, object]:
     required = (
         output / "index.html",
         output / "ghostline.tar.gz",
+        output / "embed-bridge.mjs",
         output / "ghostline-shell.mjs",
         output / "matched-runs.mjs",
         output / "policy-bridge.mjs",

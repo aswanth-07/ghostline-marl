@@ -78,6 +78,12 @@ asyncio.run(custom_site())
   <meta name="apple-mobile-web-app-capable" content="yes">
   <title>{{cookiecutter.title}}</title>
   <link rel="icon" type="image/png" href="favicon.png" sizes="32x32">
+  <script type="application/javascript">
+    (() => {
+      const embedded = new URLSearchParams(location.search).get("embed") === "1";
+      document.documentElement.dataset.embed = embedded ? "true" : "false";
+    })();
+  </script>
   <link rel="stylesheet" href="./ghostline.css">
   <script type="application/javascript">
     config = {
@@ -100,7 +106,7 @@ asyncio.run(custom_site())
   </script>
   <script src="./vendor/browserfs-1.4.3.min.js"></script>
 </head>
-<body data-control="human" data-boot="booting">
+<body data-control="human" data-boot="booting" data-embed="false">
   <header class="site-header">
     <div class="brand">
       <div class="brand-mark" aria-hidden="true"></div>

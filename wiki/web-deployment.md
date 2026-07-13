@@ -8,12 +8,39 @@ Ghostline's browser release is a static Pygbag 0.9.3 build. The deterministic Py
 - `web/runtime.py` is the only Python adapter. It exposes tier/seed launch, current-run agent takeover, return-to-human control, and player-equivalent observation serialization. It prefetches inference in the spare frame before each 10 Hz decision so the async JavaScript bridge does not add a full policy-step delay.
 - `web/static/policy-bridge.mjs` owns asynchronous inference, legal-action enforcement, persistent GRU state, latency telemetry, and WebGPU-to-WASM fallback.
 - `web/static/matched-runs.mjs` admits comparison cards only when both completed runs have the exact same tier and seed. Mismatched contracts are displayed as `NOT COMPARED` with an explicit refusal reason.
+- `web/static/embed-bridge.mjs` owns the versioned, origin-scoped portfolio message contract. It never accepts gameplay commands from the parent page.
 - `web/ghostline.tmpl` and `web/static/ghostline.css` provide the responsive loading, focus, fullscreen, Agent Lab, and human-versus-agent shell.
 - `scripts/build_web.py` locks and verifies the ONNX Runtime and BrowserFS npm tarballs, validates the selected model's ONNX input/output shapes and dtypes plus its v2 environment-source fingerprint, derives the GRU width instead of assuming it, generates content-addressed model filenames, invokes Pygbag, and writes `bundle-report.json`.
+- `.vercelignore` excludes local virtual environments, training artifacts, evidence ledgers, QA output, caches, and desktop packages from the remote build upload. Vercel receives only the locked build inputs, selected deployment model, runtime source/assets, license documents, and web shell.
 - The Pygbag archive is assembled from an explicit twelve-module game-runtime allowlist and the exact three runtime atlases declared by `assets/licenses.json`. Training, evaluation, export, packaging, recording, screenshots, source drafts, retired key art, and unused web derivatives are never copied into the browser stage.
 
 The model is never fetched on ordinary human play. ONNX Runtime and the content-addressed model are requested only after `AGENT TAKEOVER` or `?autoplay=1`.
 Campaign progression and settings use the desktop JSON contract inside the Python runtime and are mirrored to browser `localStorage`, so refreshes retain unlocked tiers without introducing a second save schema. Storage denial in a restricted iframe falls back to a fresh in-memory profile.
+
+## Portfolio embed contract
+
+Use `?embed=1&autoplay=0` for the portfolio presentation. Embed mode removes only
+the redundant standalone brand header and legal footer; it retains the explicit
+audio/focus gate, keyboard help, human/agent controls, contract launcher, live
+telemetry, and matched-run cards. At narrow widths the lab moves below the game
+instead of being removed. `autoplay=0` never bypasses Chrome's user-activation
+gate and never loads the policy without an explicit takeover.
+
+When embedded in a frame, Ghostline sends these display-only messages to the
+parent after resolving the parent origin from `document.referrer` and Chrome's
+`ancestorOrigins`. It does not use a wildcard target origin and suppresses the
+message if the two origin signals disagree:
+
+```json
+{"source":"ghostline","version":1,"type":"ready","modelAvailable":true}
+{"source":"ghostline","version":1,"type":"run-complete","controller":"agent","tier":6,"seed":2000071,"success":true,"duration":41.25}
+```
+
+`modelAvailable: false` identifies a valid human-only fallback, not a failed
+game load. `controller` is `human`, `agent`, or `hybrid`; mixed-control results
+remain excluded from the in-game matched benchmark. The portfolio must validate
+`event.origin`, `source`, `version`, and `type`, and must treat these events as
+telemetry only. Ghostline intentionally has no parent-to-game command channel.
 
 Losing tab or iframe focus pauses an active human mission and never steals focus
 back automatically; the player explicitly clicks the game before resuming. A
@@ -104,6 +131,7 @@ Verify in Chrome DevTools:
 5. Disable WebGPU and confirm WASM fallback; block the model request and confirm human-only fallback. Also interrupt a live inference request and confirm action zero followed by manual-control restoration and a `hybrid` run label.
 6. Use the Network panel with cache disabled to record usable-start time and transfer size. Use Performance for 60 FPS and ten policy calls per second.
 7. Test both the standalone URL and the portfolio iframe at desktop widths. Keyboard input must remain opt-in through the focus button.
+8. In the iframe, confirm one `ready` message reports the bundled-model state and one `run-complete` message is emitted for each terminal contract state. Confirm a different parent/referrer origin receives no message.
 
 The Pygbag test server does not reproduce Vercel's isolation headers. Repeat policy-threading and embed checks on the Vercel preview. Vercel uses
 `Cross-Origin-Embedder-Policy: credentialless`, rather than `require-corp`,
@@ -134,7 +162,7 @@ Recommended portfolio embed:
 
 ```html
 <iframe
-  src="https://YOUR-GHOSTLINE-DEPLOYMENT.vercel.app/"
+  src="https://YOUR-GHOSTLINE-DEPLOYMENT.vercel.app/?embed=1&amp;autoplay=0"
   title="Play Ghostline or watch its recurrent RL agent"
   allow="autoplay; fullscreen; gamepad; cross-origin-isolated"
   loading="lazy"

@@ -241,6 +241,63 @@ canvas.emscripten:focus-visible { box-shadow: inset 0 0 0 2px var(--cyan); }
 .site-legal a { color: var(--muted); text-decoration: none; }
 .site-legal a:hover, .site-legal a:focus-visible { color: var(--cyan); }
 
+html[data-embed="true"],
+html[data-embed="true"] body {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
+  background: #02040a;
+}
+html[data-embed="true"] body::before,
+html[data-embed="true"] .site-header,
+html[data-embed="true"] .site-legal { display: none; }
+html[data-embed="true"] .workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
+  align-items: start;
+  gap: 8px;
+  width: 100%;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 8px;
+}
+html[data-embed="true"] .game-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  width: 100%;
+}
+html[data-embed="true"] .game-frame {
+  align-self: center;
+  width: min(100%, calc((100dvh - 78px) * 1.777778));
+  max-width: 100%;
+  border-radius: 0;
+}
+html[data-embed="true"] .toolbar {
+  justify-content: flex-end;
+  margin: 8px 0 0;
+  padding: 6px;
+  border: 1px solid rgba(112, 246, 255, 0.18);
+  border-radius: 5px;
+  background: rgba(3, 8, 16, 0.88);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+}
+html[data-embed="true"] .toolbar .spacer { display: none; }
+html[data-embed="true"] .toolbar button { flex: 0 0 auto; }
+html[data-embed="true"] .web-help { margin: 6px 2px 0; }
+html[data-embed="true"] .side-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  scrollbar-color: rgba(112, 246, 255, 0.35) transparent;
+}
+html[data-embed="true"] .panel { padding: 10px; }
+html[data-embed="true"] .panel h2 { margin-bottom: 9px; }
+
 @media (max-width: 980px) {
   .workspace { grid-template-columns: 1fr; }
   .side-panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -254,6 +311,23 @@ canvas.emscripten:focus-visible { box-shadow: inset 0 0 0 2px var(--cyan); }
   .side-panel { display: flex; }
   .toolbar .spacer { display: none; }
   .toolbar button { flex: 1 1 42%; }
+}
+
+@media (max-width: 760px) {
+  html[data-embed="true"] body { overflow: auto; }
+  html[data-embed="true"] .workspace {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+  html[data-embed="true"] .game-frame { width: 100%; }
+  html[data-embed="true"] .toolbar button { flex: 1 1 42%; }
+  html[data-embed="true"] .side-panel {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-height: none;
+    overflow: visible;
+  }
+  html[data-embed="true"] .side-panel .panel:last-child { grid-column: 1 / -1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
