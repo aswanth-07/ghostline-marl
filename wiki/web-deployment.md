@@ -10,7 +10,7 @@ Ghostline's browser release is a static Pygbag 0.9.3 build. The deterministic Py
 - `web/static/matched-runs.mjs` admits comparison cards only when both completed runs have the exact same tier and seed. Mismatched contracts are displayed as `NOT COMPARED` with an explicit refusal reason.
 - `web/static/embed-bridge.mjs` owns the versioned, origin-scoped portfolio message contract. It never accepts gameplay commands from the parent page.
 - `web/ghostline.tmpl` and `web/static/ghostline.css` provide the responsive loading, focus, fullscreen, Agent Lab, and human-versus-agent shell.
-- `scripts/build_web.py` locks and verifies the ONNX Runtime and BrowserFS npm tarballs, validates the selected model's ONNX input/output shapes and dtypes plus its v2 environment-source fingerprint, derives the GRU width instead of assuming it, generates content-addressed model filenames, invokes Pygbag, and writes `bundle-report.json`.
+- `scripts/build_web.py` SHA-256-locks and self-hosts Pygbag's 0.9.3 CPython 3.12 runtime, locks and verifies the ONNX Runtime and BrowserFS npm tarballs, validates the selected model's ONNX input/output shapes and dtypes plus its v2 environment-source fingerprint, derives the GRU width instead of assuming it, generates content-addressed model filenames, invokes Pygbag, and writes `bundle-report.json`.
 - `.vercelignore` excludes local virtual environments, training artifacts, evidence ledgers, QA output, caches, and desktop packages from the remote build upload. Vercel receives only the locked build inputs, selected deployment model, runtime source/assets, license documents, and web shell.
 - `vercel.json` explicitly selects the `Other` framework preset (`framework: null`) and disables Vercel's inferred install phase. This prevents the repository's packaging `pyproject.toml` from being mistaken for a Python Function; the locked custom build command remains the only install/build authority.
 - The custom command creates `.vercel-venv` and installs through that isolated interpreter. Vercel's uv-managed Python image enforces PEP 668, so the release never mutates the system environment or uses `--break-system-packages`.
@@ -90,12 +90,34 @@ With a bundled model, execute two real ONNX Runtime Web/WASM recurrent transitio
 node web\tests\onnx-wasm-smoke.mjs .web-build\ghostline\build\web
 ```
 
-`bundle-report.json` distinguishes the local human first-run payload from the lazy WASM and WebGPU agent payloads. It excludes third-party Pygbag CDN transfer, which must be measured in Chrome during release QA. The build fails over 25 MiB for local human startup or 35 MiB for the lazy WASM agent path.
+`bundle-report.json` distinguishes the complete local human bundle from the lazy WASM and WebGPU agent payloads. The human figure includes `pythons.js`, `cpythonrc.py`, `empty.ogg`, and the CPython 3.12 `main.js`, `main.wasm`, and `main.data`; there is no uncounted external core bootstrap. The build verifies every published runtime hash and fails over 25 MiB for the local human bundle or 50 MiB for the aggregate local human-plus-WASM-agent path.
+
+The local byte figure is deliberately not described as the complete cold
+browser transfer. Pygbag's PEP-723 installer still obtains its small cp312
+package index plus browser wheels for NumPy, pygame-ce, Gymnasium, and
+Gymnasium's pure-Python dependencies from the Pygbag/PyPI package repositories.
+Those package requests are distinct from the now-self-hosted core runtime and
+must be measured in Chrome. As of the 2026-07 release audit, the wheel bodies
+total about 15.0 MB; their repository selection is not part of Ghostline's
+static checksum lock. The 24.1 MB local bundle plus those wheel bodies is about
+39.1 MB of raw artifacts, so the original under-25-MB total cold-transfer target
+is not established by this build and remains an explicit release limitation.
+Only production Chrome transfer traces can account for Vercel compression,
+browser caching, and the package installer's actual request set.
 
 The production post-build removes Pygbag's unused `ghostline.apk`; Vercel serves
 only the browser `ghostline.tar.gz`. The launch gate uses the same flat facility
 grid language as the 2D game and does not ship or display the retired
 three-quarter-view key art.
+
+The Pygbag runtime is downloaded only during the controlled build, verified
+against six reviewed upstream SHA-256 values, and published beneath
+`runtime/pygbag-0.9.3/`. Its `pythons.js` output has a second fixed hash after a
+single narrow patch removes the erroneous console log from Pygbag's caught
+cross-origin `window.top.blanker` probe. The optional top-window blanker is not
+part of Ghostline and the patch changes no Python, WebAssembly, input, audio, or
+rendering behavior. The shell requests only `snd,gui`; the unused `vtx` feature
+is excluded so it cannot import the external terminal bootstrap.
 
 Every web bundle includes `THIRD_PARTY_NOTICES.md`, BrowserFS's MIT license,
 and—when the agent runtime is present—the checksum-locked ONNX Runtime license
@@ -134,13 +156,13 @@ Verify in Chrome DevTools:
 6. Use the Network panel with cache disabled to record usable-start time and transfer size. Use Performance for 60 FPS and ten policy calls per second.
 7. Test both the standalone URL and the portfolio iframe at desktop widths. Keyboard input must remain opt-in through the focus button.
 8. In the iframe, confirm one `ready` message reports the bundled-model state and one `run-complete` message is emitted for each terminal contract state. Confirm a different parent/referrer origin receives no message.
+9. Confirm all six core files, including `runtime/pygbag-0.9.3/cpython312/main.wasm`, are served from the Ghostline origin and the console contains no `window.top.blanker` error. External package-index/wheel requests are allowed and recorded separately; external `0.9.3/pythons.js`, `0.9.3/cpython312/*`, `vtx.js`, `vt/*`, or `xtermjsixel/*` requests are release failures.
 
-The Pygbag test server does not reproduce Vercel's isolation headers. Repeat policy-threading and embed checks on the Vercel preview. Vercel uses
-`Cross-Origin-Embedder-Policy: credentialless`, rather than `require-corp`,
-because Pygbag injects its cross-origin CPython bootstrap as a classic script
-without a CORS attribute. Chrome remains cross-origin isolated in the
-standalone deployment, while the credentialless mode prevents that bootstrap
-from being blocked for lacking a CORP response header.
+The Pygbag test server does not reproduce Vercel's isolation headers. Repeat policy-threading and embed checks on the Vercel preview. Vercel retains
+`Cross-Origin-Embedder-Policy: credentialless` for the standalone threaded-WASM
+path, but all CPython bootstrap resources now come from Ghostline's own origin.
+The versioned `runtime/` tree receives immutable caching; HTML, the policy
+manifest, and the game archive continue to revalidate.
 
 ## Vercel release
 

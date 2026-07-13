@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import importlib.metadata
 import json
 from pathlib import Path
 import shutil
@@ -29,6 +30,27 @@ OUTPUT = STAGE / "build" / "web"
 CACHE = BUILD_ROOT / "cache"
 
 PYGBAG_VERSION = "0.9.3"
+PYGBAG_RUNTIME_ORIGIN = f"https://pygame-web.github.io/cdn/{PYGBAG_VERSION}/"
+PYGBAG_RUNTIME_ROOT = Path("runtime") / f"pygbag-{PYGBAG_VERSION}"
+PYGBAG_RUNTIME_UPSTREAM_SHA256 = {
+    Path("pythons.js"): "6da43e3e62c3db933421b99681e8ef99ed9b0ce1589ed8a0c69b88443278e019",
+    Path("cpythonrc.py"): "b8a0b8168b58ef7c38c17d4705c9cbe1751fa667a0a6d26ed26f0537134735de",
+    Path("empty.ogg"): "884c20d864222b845aa78fb078ec370f4ddaa203cd92ace28440ed7733403b40",
+    Path("cpython312/main.js"): "01c4e4dc7145a482ad259d8272ce73d97b58ec2a141bfb57e620347730d159c7",
+    Path("cpython312/main.wasm"): "3cfb882de90feeb367325f0c58731932880c8f424fb5a670b98d035ae862b280",
+    Path("cpython312/main.data"): "b068df4d59b06b113cfc3c4d6419bdf699d2c2eeb547c9119e2044c98cdc4a59",
+}
+PYGBAG_PATCHED_BOOTSTRAP_SHA256 = "056cd3514f8f72812ed5b043f1e068667bc92aea1ccf966f542ca2efbaa88392"
+PYGBAG_RUNTIME_PUBLISHED_SHA256 = {
+    **PYGBAG_RUNTIME_UPSTREAM_SHA256,
+    Path("pythons.js"): PYGBAG_PATCHED_BOOTSTRAP_SHA256,
+}
+PYGBAG_LICENSE_SHA256 = "c931c0cc84dce2b2f589786eae9a7acf28fe53e7100d80defed2d13c57d798b2"
+PYGBAG_LICENSE_PATH = Path("licenses") / f"pygbag-{PYGBAG_VERSION}" / "LICENSE"
+CPYTHON_LICENSE_VERSION = "3.12.12"
+CPYTHON_LICENSE_URL = f"https://raw.githubusercontent.com/python/cpython/v{CPYTHON_LICENSE_VERSION}/LICENSE"
+CPYTHON_LICENSE_SHA256 = "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+CPYTHON_LICENSE_PATH = Path("licenses") / "cpython-3.12" / "LICENSE"
 ORT_VERSION = "1.27.0"
 ORT_TARBALL = f"https://registry.npmjs.org/onnxruntime-web/-/onnxruntime-web-{ORT_VERSION}.tgz"
 ORT_SHA512 = "ogDLsqIozHZwifPuN37OproAo0byX6t43/bP8GzeZWBWD6MOGExswFAx3up4NS/vvWBOg2u2PXomDt3rMmdQSg=="
@@ -54,7 +76,7 @@ ORT_LICENSE_PATH = Path("licenses") / f"onnxruntime-web-{ORT_VERSION}" / "LICENS
 ORT_NOTICES_PATH = Path("licenses") / f"onnxruntime-web-{ORT_VERSION}" / "ThirdPartyNotices.txt"
 
 DEFAULT_INITIAL_BUDGET = 25 * 1024 * 1024
-DEFAULT_WASM_AGENT_BUDGET = 35 * 1024 * 1024
+DEFAULT_WASM_AGENT_BUDGET = 50 * 1024 * 1024
 ORT_WEB_ROOT = Path("vendor") / f"onnxruntime-web-{ORT_VERSION}"
 MODEL_DIRECTORY = Path("models")
 WEB_RUNTIME_MODULES = (
@@ -119,6 +141,99 @@ def _download_locked_file(*, url: str, filename: str, sha512: str) -> Path:
     """Download one immutable release document with the same gate as npm archives."""
 
     return _download_locked_archive(url=url, filename=filename, sha512=sha512)
+
+
+def _download_locked_sha256(*, url: str, cache_path: Path, sha256: str) -> Path:
+    """Download an individually pinned browser artifact into the build cache."""
+
+    destination = CACHE / cache_path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    expected = sha256.casefold()
+    if destination.is_file() and _sha256(destination) == expected:
+        return destination
+
+    request = Request(url, headers={"User-Agent": "Ghostline-Web-Builder/1.0"})
+    with urlopen(request, timeout=120) as response, tempfile.NamedTemporaryFile(delete=False) as temporary:
+        shutil.copyfileobj(response, temporary)
+        temporary_path = Path(temporary.name)
+    try:
+        if _sha256(temporary_path) != expected:
+            raise RuntimeError(f"Locked web dependency {cache_path.as_posix()} failed its SHA-256 check")
+        shutil.move(str(temporary_path), destination)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return destination
+
+
+def _patch_pygbag_bootstrap(payload: bytes) -> bytes:
+    """Silence one caught cross-origin optional-shell probe in upstream Pygbag."""
+
+    original = (
+        b'        } catch (x) {\n'
+        b'            console.error("FIXME:", x)\n'
+        b'        }'
+    )
+    replacement = (
+        b'        } catch (x) {\n'
+        b'            // Cross-origin portfolio parents intentionally expose no Pygbag blanker.\n'
+        b'        }'
+    )
+    if payload.count(original) != 1:
+        raise RuntimeError("Pinned Pygbag bootstrap no longer matches the reviewed blanker patch")
+    return payload.replace(original, replacement)
+
+
+def _installed_pygbag_license() -> Path:
+    distribution = importlib.metadata.distribution("pygbag")
+    if distribution.version != PYGBAG_VERSION:
+        raise RuntimeError(
+            f"Expected pygbag {PYGBAG_VERSION} while staging its license, found {distribution.version}"
+        )
+    candidates = [
+        entry
+        for entry in distribution.files or ()
+        if entry.as_posix().endswith(".dist-info/licenses/LICENSE")
+    ]
+    if len(candidates) != 1:
+        raise RuntimeError("Could not locate the pinned Pygbag MIT license")
+    license_path = Path(distribution.locate_file(candidates[0]))
+    if not license_path.is_file() or _sha256(license_path) != PYGBAG_LICENSE_SHA256:
+        raise RuntimeError("Pinned Pygbag MIT license failed its SHA-256 check")
+    return license_path
+
+
+def _stage_pygbag_runtime(static: Path) -> None:
+    """Self-host the exact Pygbag/CPython runtime used by the generated shell."""
+
+    runtime_root = static / PYGBAG_RUNTIME_ROOT
+    for relative, upstream_sha256 in PYGBAG_RUNTIME_UPSTREAM_SHA256.items():
+        source = _download_locked_sha256(
+            url=f"{PYGBAG_RUNTIME_ORIGIN}{relative.as_posix()}",
+            cache_path=Path(f"pygbag-{PYGBAG_VERSION}") / relative,
+            sha256=upstream_sha256,
+        )
+        payload = source.read_bytes()
+        if relative == Path("pythons.js"):
+            payload = _patch_pygbag_bootstrap(payload)
+        expected = PYGBAG_RUNTIME_PUBLISHED_SHA256[relative]
+        if hashlib.sha256(payload).hexdigest() != expected:
+            raise RuntimeError(f"Published Pygbag runtime hash mismatch: {relative.as_posix()}")
+        destination = runtime_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(payload)
+
+    pygbag_license = static / PYGBAG_LICENSE_PATH
+    pygbag_license.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_installed_pygbag_license(), pygbag_license)
+
+    cpython_license_source = _download_locked_sha256(
+        url=CPYTHON_LICENSE_URL,
+        cache_path=Path(f"cpython-{CPYTHON_LICENSE_VERSION}-LICENSE.txt"),
+        sha256=CPYTHON_LICENSE_SHA256,
+    )
+    cpython_license = static / CPYTHON_LICENSE_PATH
+    cpython_license.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(cpython_license_source, cpython_license)
 
 
 def _stage_ort_runtime(static: Path) -> None:
@@ -362,6 +477,7 @@ def stage(*, model: Path | None = None, include_ort: bool = True) -> dict[str, o
         "ghostline.css",
     ):
         shutil.copy2(ROOT / "web" / "static" / source, static / source)
+    _stage_pygbag_runtime(static)
     _stage_browserfs(static)
     if include_ort:
         _stage_ort_runtime(static)
@@ -376,6 +492,10 @@ def _payload_size(paths: Iterable[Path]) -> int:
 def bundle_report(output: Path = OUTPUT) -> dict[str, object]:
     if not output.is_dir():
         raise RuntimeError(f"Web output does not exist: {output}")
+    pygbag_runtime_files = [
+        output / PYGBAG_RUNTIME_ROOT / relative
+        for relative in PYGBAG_RUNTIME_PUBLISHED_SHA256
+    ]
     required = (
         output / "index.html",
         output / "ghostline.tar.gz",
@@ -387,6 +507,9 @@ def bundle_report(output: Path = OUTPUT) -> dict[str, object]:
         output / "ghostline.css",
         output / "LICENSE",
         output / "THIRD_PARTY_NOTICES.md",
+        *pygbag_runtime_files,
+        output / PYGBAG_LICENSE_PATH,
+        output / CPYTHON_LICENSE_PATH,
         output / BROWSERFS_LICENSE_PATH,
     )
     missing = [path.name for path in required if not path.is_file()]
@@ -395,6 +518,25 @@ def bundle_report(output: Path = OUTPUT) -> dict[str, object]:
     unused = [name for name in ("ghostline.apk",) if (output / name).is_file()]
     if unused:
         raise RuntimeError(f"Web build contains unused Pygbag artifact(s): {', '.join(unused)}")
+
+    index_html = (output / "index.html").read_text(encoding="utf-8")
+    runtime_url = f"./{PYGBAG_RUNTIME_ROOT.as_posix()}/"
+    if PYGBAG_RUNTIME_ORIGIN in index_html or "pygame-web.github.io/cdn/" in index_html:
+        raise RuntimeError("Web shell still depends on the external Pygbag runtime CDN")
+    if f'src="{runtime_url}pythons.js"' not in index_html or f'cdn: "{runtime_url}"' not in index_html:
+        raise RuntimeError("Web shell does not point at the self-hosted Pygbag runtime")
+    if 'data-os="snd,gui"' not in index_html or 'data-os="vtx' in index_html:
+        raise RuntimeError("Web shell must exclude the unused external vtx terminal bootstrap")
+    for relative, expected in PYGBAG_RUNTIME_PUBLISHED_SHA256.items():
+        published = output / PYGBAG_RUNTIME_ROOT / relative
+        if _sha256(published) != expected:
+            raise RuntimeError(f"Self-hosted Pygbag runtime hash mismatch: {relative.as_posix()}")
+    for published, expected in (
+        (output / PYGBAG_LICENSE_PATH, PYGBAG_LICENSE_SHA256),
+        (output / CPYTHON_LICENSE_PATH, CPYTHON_LICENSE_SHA256),
+    ):
+        if _sha256(published) != expected:
+            raise RuntimeError(f"Self-hosted runtime license hash mismatch: {published.name}")
 
     browserfs = output / BROWSERFS_WEB_PATH
     if not browserfs.is_file():
@@ -421,15 +563,31 @@ def bundle_report(output: Path = OUTPUT) -> dict[str, object]:
             )
         if not model.is_file():
             raise RuntimeError(f"Policy manifest points to a missing model: {manifest.get('model_url')}")
-    legal_paths = [output / "THIRD_PARTY_NOTICES.md", output / BROWSERFS_LICENSE_PATH]
+    legal_paths = [
+        output / "THIRD_PARTY_NOTICES.md",
+        output / PYGBAG_LICENSE_PATH,
+        output / CPYTHON_LICENSE_PATH,
+        output / BROWSERFS_LICENSE_PATH,
+    ]
     if manifest.get("available"):
         legal_paths.extend(ort_documents)
     report: dict[str, object] = {
         "schema": 1,
         "pygbag_version": PYGBAG_VERSION,
+        "cpython_runtime_version": CPYTHON_LICENSE_VERSION,
         "onnxruntime_web_version": ORT_VERSION,
         "browserfs_version": BROWSERFS_VERSION,
         "model_available": bool(manifest["available"]),
+        "pygbag_runtime_bytes": _payload_size(pygbag_runtime_files),
+        "pygbag_runtime_files": [
+            {
+                "path": path.relative_to(output).as_posix(),
+                "bytes": path.stat().st_size,
+                "sha256": _sha256(path),
+                "patched": path.name == "pythons.js",
+            }
+            for path in pygbag_runtime_files
+        ],
         "human_first_run_bytes_local": _payload_size(human_files),
         "wasm_agent_total_bytes_local": _payload_size([*human_files, *wasm_files, *ort_documents, model]),
         "webgpu_agent_total_bytes_local": _payload_size(
@@ -483,7 +641,7 @@ def build(
     strict_model: bool = True,
     human_only: bool = False,
     initial_budget_mb: float = 25.0,
-    wasm_agent_budget_mb: float = 35.0,
+    wasm_agent_budget_mb: float = 50.0,
 ) -> int:
     if human_only and model is not None:
         print("error: --human-only cannot be combined with --model", file=sys.stderr)
@@ -555,7 +713,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--check-only", action="store_true", help="Validate the existing output without rebuilding")
     parser.add_argument("--initial-budget-mb", type=float, default=25.0)
-    parser.add_argument("--wasm-agent-budget-mb", type=float, default=35.0)
+    parser.add_argument("--wasm-agent-budget-mb", type=float, default=50.0)
     return parser
 
 

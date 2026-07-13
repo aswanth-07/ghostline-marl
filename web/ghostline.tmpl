@@ -1,4 +1,4 @@
-<html lang="en"><script src="{{cookiecutter.cdn}}pythons.js" type="module" id="site" data-python="python{{cookiecutter.PYBUILD}}" data-LINES="{{cookiecutter.LINES}}" data-COLUMNS="{{cookiecutter.COLUMNS}}" data-os="vtx,snd,gui" async defer>#<!--
+<html lang="en"><script src="./runtime/pygbag-0.9.3/pythons.js" type="module" id="site" data-python="python{{cookiecutter.PYBUILD}}" data-LINES="{{cookiecutter.LINES}}" data-COLUMNS="{{cookiecutter.COLUMNS}}" data-os="snd,gui" async defer>#<!--
 
 import asyncio
 import json
@@ -96,7 +96,7 @@ asyncio.run(custom_site())
       can_close: {{cookiecutter.can_close}},
       archive: "{{cookiecutter.archive}}",
       gui_debug: 0,
-      cdn: "{{cookiecutter.cdn}}",
+      cdn: "./runtime/pygbag-0.9.3/",
       autorun: 0,
       PYBUILD: "{{cookiecutter.PYBUILD}}",
       fb_ar: 1.7777778,

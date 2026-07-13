@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -296,7 +297,27 @@ def test_live_policy_failure_restores_human_control_without_stale_action() -> No
     assert "manual control" in Host.ghostlineShell.notice[0]
 
 
-def _fake_bundle(root: Path, *, with_model: bool = False) -> None:
+def _fake_pygbag_runtime(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = b"runtime"
+    fake_hash = hashlib.sha256(payload).hexdigest()
+    monkeypatch.setattr(
+        build_web,
+        "PYGBAG_RUNTIME_PUBLISHED_SHA256",
+        {relative: fake_hash for relative in build_web.PYGBAG_RUNTIME_PUBLISHED_SHA256},
+    )
+    monkeypatch.setattr(build_web, "PYGBAG_LICENSE_SHA256", hashlib.sha256(b"license").hexdigest())
+    monkeypatch.setattr(build_web, "CPYTHON_LICENSE_SHA256", hashlib.sha256(b"license").hexdigest())
+    for relative in build_web.PYGBAG_RUNTIME_PUBLISHED_SHA256:
+        destination = root / build_web.PYGBAG_RUNTIME_ROOT / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(payload)
+    for relative in (build_web.PYGBAG_LICENSE_PATH, build_web.CPYTHON_LICENSE_PATH):
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"license")
+
+
+def _fake_bundle(root: Path, monkeypatch: pytest.MonkeyPatch, *, with_model: bool = False) -> None:
     for name in (
         "index.html",
         "ghostline.tar.gz",
@@ -312,6 +333,13 @@ def _fake_bundle(root: Path, *, with_model: bool = False) -> None:
     ):
         (root / name).parent.mkdir(parents=True, exist_ok=True)
         (root / name).write_bytes(b"release")
+    runtime_url = f"./{build_web.PYGBAG_RUNTIME_ROOT.as_posix()}/"
+    (root / "index.html").write_text(
+        f'<script src="{runtime_url}pythons.js" data-os="snd,gui"></script>'
+        f'<script>config = {{cdn: "{runtime_url}"}};</script>',
+        encoding="utf-8",
+    )
+    _fake_pygbag_runtime(root, monkeypatch)
     browserfs = root / build_web.BROWSERFS_WEB_PATH
     browserfs.parent.mkdir(parents=True, exist_ok=True)
     browserfs.write_bytes(b"browserfs")
@@ -339,14 +367,18 @@ def _fake_bundle(root: Path, *, with_model: bool = False) -> None:
     (root / "policy-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
-def test_bundle_budget_report_distinguishes_lazy_agent_payload(tmp_path: Path) -> None:
-    _fake_bundle(tmp_path, with_model=True)
+def test_bundle_budget_report_distinguishes_lazy_agent_payload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _fake_bundle(tmp_path, monkeypatch, with_model=True)
     report = build_web.validate_bundle(tmp_path, initial_budget=1024, wasm_agent_budget=2048)
     assert report["model_available"] is True
     assert report["wasm_agent_total_bytes_local"] > report["human_first_run_bytes_local"]
     assert report["runtime_module_allowlist"] == list(build_web.WEB_RUNTIME_MODULES)
     assert {item["path"] for item in report["legal_documents"]} == {
         "THIRD_PARTY_NOTICES.md",
+        build_web.PYGBAG_LICENSE_PATH.as_posix(),
+        build_web.CPYTHON_LICENSE_PATH.as_posix(),
         build_web.BROWSERFS_LICENSE_PATH.as_posix(),
         build_web.ORT_LICENSE_PATH.as_posix(),
         build_web.ORT_NOTICES_PATH.as_posix(),
@@ -356,13 +388,15 @@ def test_bundle_budget_report_distinguishes_lazy_agent_payload(tmp_path: Path) -
         build_web.validate_bundle(tmp_path, initial_budget=1, wasm_agent_budget=2048)
 
 
-def test_agent_bundle_rejects_missing_onnx_runtime(tmp_path: Path) -> None:
-    _fake_bundle(tmp_path, with_model=True)
+def test_agent_bundle_rejects_missing_onnx_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _fake_bundle(tmp_path, monkeypatch, with_model=True)
     (tmp_path / build_web.ORT_WEB_ROOT / "ort-wasm-simd-threaded.wasm").unlink()
     with pytest.raises(RuntimeError, match="missing WASM runtime"):
         build_web.bundle_report(tmp_path)
 
-    _fake_bundle(tmp_path, with_model=True)
+    _fake_bundle(tmp_path, monkeypatch, with_model=True)
     (tmp_path / build_web.ORT_NOTICES_PATH).unlink()
     with pytest.raises(RuntimeError, match="ThirdPartyNotices"):
         build_web.bundle_report(tmp_path)
@@ -380,7 +414,18 @@ def test_web_stage_is_an_explicit_runtime_and_asset_allowlist(monkeypatch, tmp_p
         script.write_bytes(b"browserfs")
         license_file.write_bytes(b"MIT")
 
+    def fake_pygbag(static: Path) -> None:
+        for relative in build_web.PYGBAG_RUNTIME_PUBLISHED_SHA256:
+            destination = static / build_web.PYGBAG_RUNTIME_ROOT / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"runtime")
+        for relative in (build_web.PYGBAG_LICENSE_PATH, build_web.CPYTHON_LICENSE_PATH):
+            destination = static / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"license")
+
     monkeypatch.setattr(build_web, "_stage_browserfs", fake_browserfs)
+    monkeypatch.setattr(build_web, "_stage_pygbag_runtime", fake_pygbag)
     build_web.stage(model=None, include_ort=False)
 
     staged_modules = {path.name for path in (stage / "ghostline").glob("*.py")}
@@ -413,6 +458,7 @@ def test_web_stage_is_an_explicit_runtime_and_asset_allowlist(monkeypatch, tmp_p
     assert not any("screenshots" in name or "source" in name for name in staged_assets)
     assert (stage / "static" / "THIRD_PARTY_NOTICES.md").is_file()
     assert (stage / "static" / "embed-bridge.mjs").is_file()
+    assert (stage / "static" / build_web.PYGBAG_RUNTIME_ROOT / "cpython312/main.wasm").is_file()
 
 
 def test_web_asset_allowlist_rejects_provenance_and_screenshot_files(tmp_path: Path) -> None:
@@ -467,6 +513,24 @@ def test_web_shell_and_policy_bridge_include_release_behaviors() -> None:
     assert 'href="./THIRD_PARTY_NOTICES.md"' in template
 
 
+def test_bundle_rejects_external_or_modified_pygbag_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _fake_bundle(tmp_path, monkeypatch)
+    (tmp_path / "index.html").write_text(
+        '<script src="https://pygame-web.github.io/cdn/0.9.3/pythons.js"></script>',
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="external Pygbag runtime CDN"):
+        build_web.bundle_report(tmp_path)
+
+    _fake_bundle(tmp_path, monkeypatch)
+    runtime_file = tmp_path / build_web.PYGBAG_RUNTIME_ROOT / "cpython312/main.wasm"
+    runtime_file.write_bytes(b"tampered")
+    with pytest.raises(RuntimeError, match="runtime hash mismatch"):
+        build_web.bundle_report(tmp_path)
+
+
 def test_vercel_headers_enable_threaded_wasm_and_immutable_models() -> None:
     config = json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
     assert config["outputDirectory"] == ".web-build/ghostline/build/web"
@@ -475,9 +539,8 @@ def test_vercel_headers_enable_threaded_wasm_and_immutable_models() -> None:
     headers = config["headers"]
     global_headers = {item["key"]: item["value"] for item in headers[0]["headers"]}
     assert global_headers["Cross-Origin-Opener-Policy"] == "same-origin"
-    # Pygbag loads its classic CPython bootstrap from its cross-origin CDN.
-    # credentialless preserves Chrome cross-origin isolation without requiring
-    # that third-party script to publish a CORP response header.
+    # The CPython bootstrap is self-hosted; credentialless remains the tested
+    # isolation mode for the standalone threaded-WASM path.
     assert global_headers["Cross-Origin-Embedder-Policy"] == "credentialless"
     immutable_sources = {
         entry["source"]
@@ -485,4 +548,5 @@ def test_vercel_headers_enable_threaded_wasm_and_immutable_models() -> None:
         if any(header.get("value", "").endswith("immutable") for header in entry["headers"])
     }
     assert "/vendor/(.*)" in immutable_sources
+    assert "/runtime/(.*)" in immutable_sources
     assert "/models/(.*)" in immutable_sources
