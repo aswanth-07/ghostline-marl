@@ -499,6 +499,13 @@ def test_web_shell_and_policy_bridge_include_release_behaviors() -> None:
     assert "modelAvailable" in embed
     assert 'type: "run-complete"' in embed
     assert 'query.get("autoplay")' in shell
+    engage_branch = shell.split('else if (state === "engage")', 1)[1].split(
+        'else if (state === "running")', 1
+    )[0]
+    assert "embedInteractive = true" in engage_branch
+    assert "maybePublishEmbedReady()" in engage_branch
+    assert "(!gameReady && !embedInteractive)" in shell
+    assert template.index("while not platform.window.MM.UME") < template.index("await shell.source(main")
     assert 'executionProviders: ["webgpu", "wasm"]' in policy
     assert 'executionProviders: ["wasm"]' in policy
     assert "results.next_hidden" in policy

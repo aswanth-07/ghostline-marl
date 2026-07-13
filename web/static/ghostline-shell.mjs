@@ -6,6 +6,7 @@ const embedBridge = new GhostlineEmbedBridge();
 const commands = [];
 const runHistory = { human: null, agent: null };
 let gameReady = false;
+let embedInteractive = false;
 let lastStatus = "active";
 let autoplayQueued = false;
 let policyFailureQueued = false;
@@ -73,11 +74,17 @@ function setBootState(state, message = "") {
     overlay.hidden = false;
     maybeAutoplay();
   } else if (state === "engage") {
+    // The browser runtime is now mounted and waiting only for the visitor's
+    // required audio/user-activation click.  Treat this as embed readiness so
+    // a parent does not time out while the game correctly waits at its own
+    // focus gate.  ``gameReady`` remains false until Python starts the game.
+    embedInteractive = true;
     title.textContent = "AUTHORIZE AUDIO";
     copy.textContent = message || "One click lets the browser start audio and the secure simulation.";
     button.textContent = "INITIALIZE GHOSTLINE";
     button.hidden = false;
     overlay.hidden = false;
+    maybePublishEmbedReady();
   } else if (state === "running") {
     overlay.hidden = true;
     $("canvas")?.focus();
@@ -158,7 +165,7 @@ function maybeAutoplay() {
 }
 
 function maybePublishEmbedReady() {
-  if (!gameReady || policyAvailability === null) return;
+  if ((!gameReady && !embedInteractive) || policyAvailability === null) return;
   embedBridge.markReady(policyAvailability);
 }
 

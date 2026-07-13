@@ -44,6 +44,13 @@ remain excluded from the in-game matched benchmark. The portfolio must validate
 `event.origin`, `source`, `version`, and `type`, and must treat these events as
 telemetry only. Ghostline intentionally has no parent-to-game command channel.
 
+The one-shot `ready` event is emitted when the self-hosted browser runtime has
+mounted and reached its required user-activation gate, once policy-manifest
+availability is known. It does not wait for the visitor to authorize audio and
+start Python. This keeps the parent from timing out while Chrome is correctly
+waiting for an explicit click; Ghostline's own launch gate remains visible and
+`gameReady` stays false until the deterministic game loop has actually started.
+
 Losing tab or iframe focus pauses an active human mission and never steals focus
 back automatically; the player explicitly clicks the game before resuming. A
 mission that switches controllers is labeled `hybrid`, including takeover time
