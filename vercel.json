@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "",
-  "buildCommand": "python -m pip install --disable-pip-version-check --constraint requirements.lock -e \".[web]\" && python scripts/build_web.py --model models/ghostline-policy.onnx",
+  "buildCommand": "python -m venv .vercel-venv && .vercel-venv/bin/python -m pip install --disable-pip-version-check --constraint requirements.lock -e \".[web]\" && .vercel-venv/bin/python scripts/build_web.py --model models/ghostline-policy.onnx",
   "outputDirectory": ".web-build/ghostline/build/web",
   "cleanUrls": true,
   "trailingSlash": false,
