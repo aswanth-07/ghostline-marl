@@ -1,0 +1,10 @@
+stage,kind,validation_offset,episodes_per_tier,tier_1,tier_2,tier_3,tier_4,tier_5,tier_6,worst_tier,meets_thresholds,checkpoint_sha256
+BC GRU-256,equal-budget architecture,3000,100,0.73,0.77,0.84,0.82,0.65,0.35,0.35,false,2af8c4896720d681bcf9130c9403595c9fa8b030f5febedaf7fab516722cafe6
+BC GRU-384,equal-budget architecture,3000,100,0.91,0.85,0.92,0.80,0.72,0.41,0.41,false,714ce2ad1855850eb8ae9aae5f302d230d9655634effa861dd092820901ca96f
+DAgger round 1,sequential recovery,3200,100,0.93,0.94,0.95,0.97,0.92,0.81,0.81,false,16035e3dd0bb259490e5f9d2a4b27ed13c5df75c112a90c7e7ffba6e532e13c5
+DAgger round 2,sequential recovery,3400,100,0.95,0.94,1.00,0.92,0.90,0.91,0.90,false,ad0b65d9c4f4859c8324a14f8461eeab8dae0f5f594103bfcbe39415912561e9
+DAgger round 3,sequential recovery,3600,100,0.97,0.96,1.00,0.94,0.97,0.87,0.87,false,0ef80ee967a1118a1ca6a212dd54ff14164c433ddfc25e015a236993c8b93e8d
+Targeted DAgger,frozen champion selection,4000,100,0.98,1.00,1.00,0.99,0.95,0.94,0.94,true,458aa28d14b0829481a56c96dcc97a9ab9af2c463c15beef94d4c3e86ab59deb
+Confirmation A,frozen confirmation,7400,200,0.995,0.985,0.985,0.975,0.970,0.915,0.915,true,458aa28d14b0829481a56c96dcc97a9ab9af2c463c15beef94d4c3e86ab59deb
+Confirmation B,frozen confirmation,7600,200,0.980,1.000,0.990,0.975,0.965,0.945,0.945,true,458aa28d14b0829481a56c96dcc97a9ab9af2c463c15beef94d4c3e86ab59deb
+Final 7M,untouched final test,7000000,500,0.980,0.982,0.992,0.970,0.958,0.948,0.948,true,458aa28d14b0829481a56c96dcc97a9ab9af2c463c15beef94d4c3e86ab59deb

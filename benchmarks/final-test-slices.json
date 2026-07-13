@@ -34,8 +34,29 @@
       "episodes_per_tier": 500,
       "note": "Reserved for the selected frozen-distribution neural champion only. Do not run before checkpoint selection is complete.",
       "policy_kind": "neural",
+      "result": {
+        "audit_id": "c44eec376f8d37ffbf596c7502558469ac07357bf996a5a9d2b0095df6bcf740",
+        "meets_acceptance_thresholds": true,
+        "outputs": [
+          {
+            "bytes": 3039258,
+            "path": "benchmarks/neural/champion-final-7m-500.json",
+            "sha256": "71487fd05c5080e5ee2037d4b4ae25bf5a264fc3d0c6510abdcc79d5e102bd96"
+          },
+          {
+            "bytes": 2259,
+            "path": "benchmarks/neural/champion-final-7m-500.csv",
+            "sha256": "bf78d9e36505cecd22ffd62166ff28850c5ba6943f75ea33d134e9c9242064e0"
+          },
+          {
+            "bytes": 1780550,
+            "path": "benchmarks/neural/champion-final-7m-500.episodes.csv",
+            "sha256": "cee762bc640cd2ac446396918e3d754e27dfe38761f57b2a90abdaeee4da6568"
+          }
+        ]
+      },
       "seed_start": 7000000,
-      "status": "reserved_unopened",
+      "status": "consumed",
       "tiers": [
         1,
         2,

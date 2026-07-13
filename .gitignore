@@ -25,3 +25,5 @@ progression.json
 .venv-py*/
 .web-build/
 .vercel/
+.vercel-venv/
+.env.local

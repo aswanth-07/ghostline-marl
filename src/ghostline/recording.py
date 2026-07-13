@@ -10,6 +10,8 @@ from ghostline.presentation import GhostlineRenderer
 from ghostline.simulation import GhostlineSimulation
 from ghostline.types import Action
 
+RECURRENT_POLICY_LABEL = "GRU BC+DAGGER"
+
 
 def record(*, model: Path | None, tier: int, seed: int, output: Path, fps: int = 60) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -25,7 +27,11 @@ def record(*, model: Path | None, tier: int, seed: int, output: Path, fps: int =
         observation_env.sim = sim
     hidden = None
     action_value = 0
-    with imageio.get_writer(output, fps=fps, codec="libx264", quality=8, macro_block_size=16) as writer:
+    policy_label = RECURRENT_POLICY_LABEL if model else "SCRIPTED BASELINE"
+    # The logical 640x360 canvas is already even-sized for H.264.  Requiring
+    # 16-pixel macroblocks makes imageio rescale it to 640x368, distorting the
+    # exact pixel-art presentation used by the game and web build.
+    with imageio.get_writer(output, fps=fps, codec="libx264", quality=8, macro_block_size=2) as writer:
         while not (sim.terminated or sim.truncated):
             if sim.elapsed_ticks % 6 == 0:
                 if torch_policy is None:
@@ -34,10 +40,10 @@ def record(*, model: Path | None, tier: int, seed: int, output: Path, fps: int =
                     action_value, hidden = torch_policy.act(observation_env._observation(), hidden, deterministic=True)
             sim.advance(Action.decode(action_value), ticks=1)
             renderer.ingest_events(sim.pop_events())
-            frame = renderer.draw(return_array=True, lab_stats={"policy": "RECURRENT PPO" if model else "SCRIPTED BASELINE"})
+            frame = renderer.draw(return_array=True, lab_stats={"policy": policy_label})
             writer.append_data(frame)
         for _ in range(fps * 2):
-            writer.append_data(renderer.draw(return_array=True, lab_stats={"policy": "RECURRENT PPO" if model else "SCRIPTED BASELINE"}))
+            writer.append_data(renderer.draw(return_array=True, lab_stats={"policy": policy_label}))
     renderer.close()
     if observation_env is not None:
         observation_env.close()

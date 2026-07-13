@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import platform
 from pathlib import Path
+import sys
 import time
+from types import ModuleType
 from typing import Any, Mapping
 
 
@@ -21,6 +22,65 @@ OBSERVATION_KEYS = (
     "action_mask",
 )
 PROGRESSION_STORAGE_KEY = "ghostline.progression-v1"
+
+
+def _browser_gymnasium_shim() -> ModuleType:
+    """Return the tiny Gymnasium surface used by the browser policy adapter.
+
+    Pygbag's import rewriter eagerly follows Gymnasium's unused vector package
+    into ``multiprocessing.sharedctypes``, which CPython/WASM does not ship.
+    Ghostline's web agent needs only ``Env.reset`` seeding and declarative space
+    records, so keeping that compatibility layer here avoids changing the real
+    desktop/training environment or pretending multiprocessing exists.
+    """
+    import numpy as np
+
+    module = ModuleType("gymnasium")
+    spaces_module = ModuleType("gymnasium.spaces")
+
+    class Env:
+        @classmethod
+        def __class_getitem__(cls, _item: Any) -> type[Env]:
+            return cls
+
+        def reset(self, *, seed: int | None = None, options: Any = None) -> None:
+            del options
+            if seed is not None or not hasattr(self, "np_random"):
+                self.np_random = np.random.default_rng(seed)
+
+    class Discrete:
+        def __init__(self, n: int):
+            self.n = int(n)
+
+    class Box:
+        def __init__(self, low: Any, high: Any, *, shape: tuple[int, ...], dtype: Any):
+            self.low = low
+            self.high = high
+            self.shape = tuple(shape)
+            self.dtype = np.dtype(dtype)
+
+    class DictSpace:
+        def __init__(self, spaces: Mapping[str, Any]):
+            self.spaces = dict(spaces)
+
+    Env.__module__ = module.__name__
+    Discrete.__module__ = spaces_module.__name__
+    Box.__module__ = spaces_module.__name__
+    DictSpace.__module__ = spaces_module.__name__
+    spaces_module.Discrete = Discrete
+    spaces_module.Box = Box
+    spaces_module.Dict = DictSpace
+    module.Env = Env
+    module.spaces = spaces_module
+    return module
+
+
+def _install_browser_gymnasium_shim() -> None:
+    if "gymnasium" in sys.modules:
+        return
+    module = _browser_gymnasium_shim()
+    sys.modules["gymnasium"] = module
+    sys.modules["gymnasium.spaces"] = module.spaces
 
 
 def hydrate_progression(host: Any, path: Path) -> bool:
@@ -68,10 +128,6 @@ def observation_json(observation: Mapping[str, Any]) -> str:
         if key in OBSERVATION_KEYS
     }
     return json.dumps(payload, separators=(",", ":"), allow_nan=False)
-
-
-async def _await_js(value: Any) -> Any:
-    return await value if inspect.isawaitable(value) else value
 
 
 class BrowserOnnxPolicy:
@@ -170,7 +226,7 @@ class GhostlineWebRuntime:
             self.run_mode = "human"
             self.app._start_mission(agent=False)
             self.host.ghostlineShell.setControlMode("human")
-        elif kind == "agent":
+        elif kind == "agent-ready":
             await self._enable_agent(tier=tier, seed=seed)
         elif kind == "human":
             active_mission = self.app.state in {"play", "pause", "lab_play"} and not self.app.sim.terminated and not self.app.sim.truncated
@@ -198,8 +254,7 @@ class GhostlineWebRuntime:
 
     async def _enable_agent(self, *, tier: int, seed: int | None) -> None:
         self.host.ghostlineShell.setPolicyState("loading", "Loading recurrent policy…")
-        loaded = bool(await _await_js(self.host.ghostlinePolicy.load()))
-        if not loaded:
+        if str(self.host.ghostlinePolicy.state) != "ready":
             self.host.ghostlineShell.setPolicyState("unavailable", "Agent unavailable — human play still works")
             self.host.ghostlineShell.showNotice("The policy could not load. Continuing in human mode.", "error")
             return
@@ -209,6 +264,7 @@ class GhostlineWebRuntime:
         self.app.learned_policy = self.policy
         self.app.selected_tier = tier
         self.app.seed = seed
+        _install_browser_gymnasium_shim()
         active_mission = self.app.state in {"play", "pause", "lab_play"} and not self.app.sim.terminated and not self.app.sim.truncated
         if active_mission:
             if self.run_mode != "agent":

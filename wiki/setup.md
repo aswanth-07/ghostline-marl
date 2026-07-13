@@ -30,7 +30,9 @@ packager dependency. It supports human play and `GhostlineEnv-v2` headlessly.
 python -m pip install --constraint requirements.lock -e ".[agent]"
 ghostline lab --tier 6 --seed 2000000
 
-# Tests, lock maintenance, and Python distribution builds.
+# Complete tests, lock maintenance, and Python distribution builds. This extra
+# includes TensorBoard and recording codecs because the suite imports and
+# exercises the training and recorder modules in a clean CI environment.
 python -m pip install --constraint requirements.lock -e ".[dev]"
 python -m pytest -q
 ```

@@ -76,7 +76,7 @@ def _info(*, success: bool) -> dict[str, object]:
     }
 
 
-def test_cli_defaults_to_the_tracked_unopened_7m_slice() -> None:
+def test_cli_defaults_to_the_tracked_one_way_7m_slice() -> None:
     args = build_parser().parse_args(["evaluate", "--model", "models/ghostline-policy.pt"])
 
     assert args.seed_start == 7_000_000
@@ -87,9 +87,16 @@ def test_cli_defaults_to_the_tracked_unopened_7m_slice() -> None:
     reserved = next(item for item in manifest["slices"] if item["seed_start"] == 7_000_000)
     assert manifest["environment_fingerprint"] == current_environment_fingerprint()
     assert reserved["environment_fingerprint"] == current_environment_fingerprint()
-    assert reserved["status"] == "reserved_unopened"
     assert reserved["episodes_per_tier"] == 500
     assert reserved["tiers"] == [1, 2, 3, 4, 5, 6]
+    final_report = ROOT / args.output
+    if final_report.is_file():
+        assert reserved["status"] == "consumed"
+        assert reserved["result"]["meets_acceptance_thresholds"] is True
+        tracked_outputs = {item["path"] for item in reserved["result"]["outputs"]}
+        assert args.output.as_posix() in tracked_outputs
+    else:
+        assert reserved["status"] == "reserved_unopened"
 
 
 def test_slice_lease_is_one_way_and_hashes_all_outputs(tmp_path: Path) -> None:

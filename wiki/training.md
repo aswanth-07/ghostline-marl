@@ -6,6 +6,25 @@ status: active
 
 # Training
 
+## Final neural release result
+
+The selected 384-unit GRU BC+DAgger checkpoint passed the one-time 7M final
+evaluation at `98.0/98.2/99.2/97.0/95.8/94.8%` across tiers 1-6 (500 unseen
+seeds per tier). Its SHA-256 is
+`458aa28d14b0829481a56c96dcc97a9ab9af2c463c15beef94d4c3e86ab59deb`.
+The immutable ledger is consumed and binds the JSON plus both CSV outputs.
+FP32 ONNX achieved 1,000/1,000 deterministic recurrent-action matches; a 28.3%
+smaller INT8 candidate changed three actions and was rejected. The current
+fingerprint PPO pilot also regressed the matched-seed DAgger rollback and is
+retained as a negative result. See [`benchmarks/neural/README.md`](../benchmarks/neural/README.md)
+for the full training lineage, selection gates, final metrics, and deployment
+parity. No human-superiority claim is made without the planned human cohort.
+
+Environment fingerprints canonicalize CRLF and LF source line endings before
+hashing. This keeps the same semantic simulation/controller contract portable
+across Windows and Linux checkouts while every other source-byte change still
+invalidates datasets, checkpoints, exports, and release evidence.
+
 ## Model and observation contract
 
 - Pure PyTorch 2.13 learning stack: behavior cloning, DAgger collection, recurrent clipped PPO, GAE, RND, and checkpointing are implemented in-project without Sample Factory, Stable-Baselines3, TorchRL, or another RL-framework runtime.
@@ -234,7 +253,7 @@ and the lexicographic worst-tier-first selection tuple. The tuple ranks worst-ti
 success, Tier-6 success, lower damage, higher path efficiency, lower duration,
 then lower latency; final-test results never participate in checkpoint selection.
 
-Final evaluation uses 500 unseen seeds per tier and reports deterministic JSON, aggregate CSV, and episode CSV evidence with Wilson 95% intervals, failure reasons, damage, detections, duration, trace, optional data, path efficiency, inference latency, exact episode seeds, action-sequence hashes, and every cumulative reward component plus its verified total. The evaluator reconstructs that component map from the real Gymnasium terminal keys and rejects a sum mismatch. The report binds the checkpoint SHA-256 and current environment fingerprint. The evaluator atomically changes a declared `reserved_unopened` slice to `opened_locked` before scheduling an episode, then to `consumed` or `aborted_retired`; there is no force/reopen path. Required neural success is at least 95% on tiers 1-5 and at least 85% on tier 6. The reserved 7M command must not run until checkpoint selection is complete.
+Final evaluation uses 500 unseen seeds per tier and reports deterministic JSON, aggregate CSV, and episode CSV evidence with Wilson 95% intervals, failure reasons, damage, detections, duration, trace, optional data, path efficiency, inference latency, exact episode seeds, action-sequence hashes, and every cumulative reward component plus its verified total. The evaluator reconstructs that component map from the real Gymnasium terminal keys and rejects a sum mismatch. The report binds the checkpoint SHA-256 and current environment fingerprint. The evaluator atomically changes a declared `reserved_unopened` slice to `opened_locked` before scheduling an episode, then to `consumed` or `aborted_retired`; there is no force/reopen path. Required neural success is at least 95% on tiers 1-5 and at least 85% on tier 6. The selected checkpoint consumed the reserved 7M slice exactly once and passed all six thresholds; those results are frozen release evidence and cannot be reopened for selection.
 
 ONNX export performs the locked 1,000-transition recurrent-action comparison and writes a sibling `.parity.json` report. The requested `--output` is always the canonical FP32 model. Optional dynamic-INT8 quantization writes a separate candidate, repeats the same deterministic recurrent comparison independently, and selects it only with zero action mismatches. A rejected or failed quantization attempt leaves FP32 as the safe deployment fallback. The report records both artifacts' byte sizes and SHA-256 hashes, their parity results, the INT8 size reduction, and the precision copied to `--deployment-output`; FP32 parity failure still rejects the export entirely.
 
@@ -300,10 +319,10 @@ The complete tracked report is
 with a [CSV export](../benchmarks/teacher/teacher-release-gate-6m-500.csv).
 This historical result validated the original teacher trajectory corpus, but it
 is not the final frozen-distribution or neural-policy result. The current
-teacher has separately passed the two validation gates above. Fresh corpus
-collection, champion BC/DAgger/PPO acceptance, the locked 500-seed-per-tier
-final test, ONNX parity, and any human comparison remain pending until neural
-checkpoint selection.
+teacher separately passed the two validation gates above. Fresh corpus
+collection, BC/DAgger selection, the locked 500-seed-per-tier final test, and
+ONNX parity have since completed as documented at the top of this page. Only
+the human comparison remains pending.
 
 ## Equal-budget ablations
 

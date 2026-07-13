@@ -46,13 +46,19 @@ class OnnxPolicyContract:
 
 
 def environment_fingerprint(package: Path | None = None) -> str:
-    """Hash the exact source set used by neural training and export gates."""
+    """Hash the source contract independently of checkout line endings.
+
+    Git may materialize the same text as LF on Linux and CRLF on Windows.  The
+    policy contract is semantic source content, so canonicalize text newlines
+    before hashing while still detecting every non-line-ending byte change.
+    """
 
     package = package or Path(__file__).resolve().parent
     digest = hashlib.sha256()
     for name in ENVIRONMENT_FINGERPRINT_FILES:
         digest.update(name.encode("utf-8"))
-        digest.update((package / name).read_bytes())
+        source = (package / name).read_bytes()
+        digest.update(source.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
     return digest.hexdigest()
 
 

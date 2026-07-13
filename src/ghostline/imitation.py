@@ -25,6 +25,7 @@ from ghostline.model import (
     require_current_checkpoint,
     save_policy,
 )
+from ghostline.onnx_contract import environment_fingerprint
 from ghostline.policies import ObservationTeacherPolicy
 
 
@@ -82,13 +83,7 @@ _COLLECTION_DEVICE = "cpu"
 
 def training_environment_fingerprint() -> str:
     """Hash the simulator/controller contract used to produce imitation data."""
-    package = Path(__file__).resolve().parent
-    names = ("config.py", "env.py", "generation.py", "policies.py", "simulation.py", "types.py")
-    digest = hashlib.sha256()
-    for name in names:
-        digest.update(name.encode("utf-8"))
-        digest.update((package / name).read_bytes())
-    return digest.hexdigest()
+    return environment_fingerprint(Path(__file__).resolve().parent)
 
 
 @dataclass(frozen=True)

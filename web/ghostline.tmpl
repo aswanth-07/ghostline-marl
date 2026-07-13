@@ -1,4 +1,4 @@
-<html lang="en"><script src="{{cookiecutter.cdn}}pythons.js" type="module" id="site" data-python="python{{cookiecutter.PYBUILD}}" data-LINES="{{cookiecutter.LINES}}" data-COLUMNS="{{cookiecutter.COLUMNS}}" data-os="vtx,snd,gui" async defer>#<!--
+<html lang="en"><script src="./runtime/pygbag-0.9.3/pythons.js" type="module" id="site" data-python="python{{cookiecutter.PYBUILD}}" data-LINES="{{cookiecutter.LINES}}" data-COLUMNS="{{cookiecutter.COLUMNS}}" data-os="snd,gui" async defer>#<!--
 
 import asyncio
 import json
@@ -61,7 +61,6 @@ async def custom_site():
     platform.window.infobox.style.display = "none"
     platform.window.config.gui_divider = 1
     platform.window.window_resize()
-    platform.window.ghostlineShell.setBootState("ready")
     shell.interactive()
 
 
@@ -78,6 +77,12 @@ asyncio.run(custom_site())
   <meta name="apple-mobile-web-app-capable" content="yes">
   <title>{{cookiecutter.title}}</title>
   <link rel="icon" type="image/png" href="favicon.png" sizes="32x32">
+  <script type="application/javascript">
+    (() => {
+      const embedded = new URLSearchParams(location.search).get("embed") === "1";
+      document.documentElement.dataset.embed = embedded ? "true" : "false";
+    })();
+  </script>
   <link rel="stylesheet" href="./ghostline.css">
   <script type="application/javascript">
     config = {
@@ -90,7 +95,7 @@ asyncio.run(custom_site())
       can_close: {{cookiecutter.can_close}},
       archive: "{{cookiecutter.archive}}",
       gui_debug: 0,
-      cdn: "{{cookiecutter.cdn}}",
+      cdn: "./runtime/pygbag-0.9.3/",
       autorun: 0,
       PYBUILD: "{{cookiecutter.PYBUILD}}",
       fb_ar: 1.7777778,
@@ -100,7 +105,7 @@ asyncio.run(custom_site())
   </script>
   <script src="./vendor/browserfs-1.4.3.min.js"></script>
 </head>
-<body data-control="human" data-boot="booting">
+<body data-control="human" data-boot="booting" data-embed="false">
   <header class="site-header">
     <div class="brand">
       <div class="brand-mark" aria-hidden="true"></div>
