@@ -79,7 +79,9 @@ provides a cancellable handoff, and does not claim agent control until the
 browser returns the first recurrent inference. The Python adapter primes that
 first player-equivalent observation immediately after attaching the policy
 environment, so a successful handoff always has an actionable decision behind
-its UI state.
+its UI state. The takeover click also satisfies the launch/focus gesture: if
+the Python canvas is still starting, the shell enters it automatically when it
+becomes ready instead of leaving the policy active behind a second launch gate.
 
 ## Build commands
 

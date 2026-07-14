@@ -575,6 +575,8 @@ def test_web_shell_and_policy_bridge_include_release_behaviors() -> None:
     assert 'setControlMode("handoff")' in shell
     assert 'document.body.dataset.control === "handoff"' in shell
     assert "CANCEL HANDOFF" in shell
+    assert 'if (agentActivationPending) setBootState("running")' in shell
+    assert 'button.textContent = "ENTER FACILITY"' in shell
     assert "await ghostlinePolicy.load()" in shell
     assert 'kind == "agent-ready"' in (
         ROOT / "web" / "runtime.py"

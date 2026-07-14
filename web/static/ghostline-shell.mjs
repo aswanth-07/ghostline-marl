@@ -70,6 +70,7 @@ function setBootState(state, message = "") {
     gameReady = true;
     title.textContent = "THE LINE IS OPEN";
     copy.textContent = "Click to unlock audio and route keyboard input to the game.";
+    button.textContent = "ENTER FACILITY";
     button.hidden = false;
     overlay.hidden = false;
     maybeAutoplay();
@@ -170,6 +171,9 @@ function maybeAutoplay() {
 async function requestAgentControl() {
   if (agentActivationPending) return;
   agentActivationPending = true;
+  if (gameReady) setBootState("running");
+  else setBootState("booting", "Initializing the game before agent handoff…");
+  queue("focus");
   setControlMode("handoff");
   setPolicyState("loading", "LOADING AGENT 0%");
   showNotice("Loading the recurrent policy. You can cancel the handoff at any time.", "info");
@@ -223,7 +227,9 @@ globalThis.ghostlinePolicy = ghostlinePolicy;
 globalThis.ghostlineShell = {
   consumeCommand: () => commands.length ? JSON.stringify(commands.shift()) : null,
   markGameReady: () => {
-    setBootState("ready");
+    gameReady = true;
+    if (agentActivationPending) setBootState("running");
+    else setBootState("ready");
     maybePublishEmbedReady();
   },
   setBootState,
