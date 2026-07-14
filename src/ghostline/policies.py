@@ -32,14 +32,14 @@ MOVE_VECTORS[2::2] /= np.sqrt(2.0)
 class TeacherConfig:
     """Weights for the deterministic, player-equivalent expert controller."""
 
-    objective_weight: float = 15.0
-    clearance_weight: float = 2.0
-    escape_weight: float = 1.2
-    sight_weight: float = 1.2
-    inertia_weight: float = 0.8
-    tier6_inertia_scale: float = 3.5
-    dash_energy_threshold: float = 0.10
-    pulse_trace_threshold: float = 0.75
+    objective_weight: float = 20.0
+    clearance_weight: float = 1.0
+    escape_weight: float = 0.8
+    sight_weight: float = 0.8
+    inertia_weight: float = 0.5
+    tier6_inertia_scale: float = 1.8
+    dash_energy_threshold: float = 0.05
+    pulse_trace_threshold: float = 0.55
 
 
 class ObservationTeacherPolicy:

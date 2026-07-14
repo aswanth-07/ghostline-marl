@@ -18,7 +18,7 @@ PULSE_RADIUS = 150.0
 PULSE_DISABLE_SECONDS = 5.0
 HACK_RADIUS = 40.0
 DETECTION_GRACE_SECONDS = 0.65
-DAMAGE_INVULNERABILITY_SECONDS = 1.35
+DAMAGE_INVULNERABILITY_SECONDS = 1.75
 GUARD_STRIKE_WINDUP_SECONDS = 0.42
 DRONE_STRIKE_WINDUP_SECONDS = 0.55
 CAMERA_VISION_DISTANCE = 220.0
@@ -27,9 +27,11 @@ CAMERA_SWEEP_RADIANS = 0.85
 GUARD_VISION_BASE_DISTANCE = 205.0
 GUARD_VISION_DISTANCE_PER_ALERT = 18.0
 GUARD_VISION_COSINE = 0.62
-# Standard, Interceptor, and Elite. Even the baseline receives the requested
-# modest pace lift; higher grades remain slower than the undashed runner.
+# Standard, Interceptor, and Elite non-chase movement multipliers.
 GUARD_GRADE_SPEED_MULTIPLIERS = (1.04, 1.10, 1.16)
+# Chase speeds stay readable by grade while the elite operative now matches
+# 99% of the runner's undashed speed. Dash remains the decisive escape tool.
+GUARD_CHASE_SPEED_RATIOS = (0.95, 0.97, 0.99)
 # Standard guards deliberately hold their scan longer; higher grades trade
 # that readability for quicker patrol cadence and more persistent searches.
 GUARD_PATROL_DWELL_SECONDS = (0.78, 0.52, 0.36)
@@ -64,7 +66,7 @@ TIERS: dict[int, TierSpec] = {
     3: TierSpec(3, "Patrol", 4, 2, 4, 5, 2, 3, False, 101.0, 2, 160, 0.32),
     4: TierSpec(4, "Countermeasure", 4, 3, 5, 6, 3, 3, False, 101.0, 3, 180, 0.38),
     5: TierSpec(5, "Lockdown", 5, 3, 5, 7, 4, 3, True, 100.0, 4, 205, 0.46),
-    6: TierSpec(6, "Ghostline", 5, 3, 5, 8, 5, 6, True, 72.0, 3, 225, 0.52),
+    6: TierSpec(6, "Ghostline", 5, 3, 5, 8, 5, 5, True, 72.0, 3, 225, 0.52),
 }
 MAX_PULSE_CHARGES = max(spec.pulse_charges for spec in TIERS.values())
 

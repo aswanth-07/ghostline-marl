@@ -10,6 +10,7 @@ from gymnasium.utils.env_checker import check_env
 from ghostline.curriculum import AdaptiveCurriculum
 from ghostline.config import (
     DRONE_STRIKE_WINDUP_SECONDS,
+    GUARD_CHASE_SPEED_RATIOS,
     GUARD_GRADE_SPEED_MULTIPLIERS,
     GUARD_PATROL_DWELL_SECONDS,
     GUARD_SEARCH_DURATION_MULTIPLIERS,
@@ -65,9 +66,9 @@ def test_guard_grades_escalate_without_turning_every_guard_elite() -> None:
     assert [guard.grade for guard in tier4].count(GuardGrade.INTERCEPTOR) == 1
     assert {guard.grade for guard in GhostlineSimulation(seed=91, tier=5).level.guards} == set(GuardGrade)
     tier6_grades = [guard.grade for guard in GhostlineSimulation(seed=91, tier=6).level.guards]
-    assert tier6_grades.count(GuardGrade.STANDARD) == 2
-    assert tier6_grades.count(GuardGrade.INTERCEPTOR) == 2
-    assert tier6_grades.count(GuardGrade.ELITE) == 2
+    assert tier6_grades.count(GuardGrade.STANDARD) == 3
+    assert tier6_grades.count(GuardGrade.INTERCEPTOR) == 1
+    assert tier6_grades.count(GuardGrade.ELITE) == 1
 
 
 def test_guard_grade_speed_curve_is_modest_and_player_escape_remains_possible(monkeypatch) -> None:
@@ -85,11 +86,13 @@ def test_guard_grade_speed_curve_is_modest_and_player_escape_remains_possible(mo
     sim._update_guards(1.0 / 60.0)
 
     expected = {
-        grade: 84.0 * GUARD_GRADE_SPEED_MULTIPLIERS[int(grade)] for grade in GuardGrade
+        grade: PLAYER_SPEED * GUARD_CHASE_SPEED_RATIOS[int(grade)]
+        for grade in GuardGrade
     }
     assert captured == pytest.approx(expected)
-    assert 84.0 < captured[GuardGrade.STANDARD] < captured[GuardGrade.INTERCEPTOR]
+    assert captured[GuardGrade.STANDARD] < captured[GuardGrade.INTERCEPTOR]
     assert captured[GuardGrade.INTERCEPTOR] < captured[GuardGrade.ELITE] < PLAYER_SPEED
+    assert captured[GuardGrade.ELITE] == pytest.approx(PLAYER_SPEED * 0.99)
 
 
 def test_guard_grades_have_readable_scan_cadence_and_search_persistence(monkeypatch) -> None:
@@ -235,15 +238,15 @@ def test_terminal_telemetry_has_efficiency_and_action_accounting() -> None:
     env.close()
 
 
-def test_v2_never_exposes_occluded_patrol_state() -> None:
+def test_v2_shares_live_facility_security_tracking_with_the_player() -> None:
     env = GhostlineEnv(seed=19, tier=3)
     env.reset(seed=19)
     for guard in env.sim.level.guards:
         guard.mode = GuardMode.PATROL
     env.sim.line_of_sight = lambda *args, **kwargs: False  # type: ignore[method-assign]
     observation = env._observation()
-    assert observation["entity_mask"].sum() == 0
-    assert observation["local_grid"][6].sum() == 0.0
+    assert observation["entity_mask"].sum() == len(env.sim.level.guards) + len(env.sim.level.cameras)
+    assert observation["local_grid"][6].sum() > 0.0
     env.close()
 
 
@@ -264,7 +267,7 @@ def test_player_and_policy_share_one_live_perception_gate(monkeypatch) -> None:
     env.close()
 
 
-def test_last_seen_intel_persists_without_tracking_hidden_guard(monkeypatch) -> None:
+def test_facility_intel_tracks_live_guard_through_occlusion(monkeypatch) -> None:
     env = GhostlineEnv(seed=19, tier=3)
     env.reset(seed=19)
     guard = env.sim.level.guards[0]
@@ -274,23 +277,21 @@ def test_last_seen_intel_persists_without_tracking_hidden_guard(monkeypatch) -> 
     visible = True
     monkeypatch.setattr(env.sim, "line_of_sight", lambda *_args, **_kwargs: visible)
     env.sim._update_player_intel()
-    remembered = env.sim.security_intel[("guard", guard.guard_id)].position.copy()
-
     visible = False
     guard.mode = GuardMode.PATROL
     guard.velocity[:] = 0.0
     guard.position += np.asarray((91.0, 57.0), dtype=np.float32)
     env.sim.elapsed_ticks += 180
+    env.sim._update_player_intel()
     percept = env._security_percepts()[0]
-    assert np.array_equal(percept.position, remembered)
-    assert not np.array_equal(percept.position, guard.position)
+    assert np.array_equal(percept.position, guard.position)
     observation = env._observation()
     assert observation["entity_mask"].sum() == 1
-    assert 0.0 < observation["entities"][0, 11] < 1.0
+    assert observation["entities"][0, 11] == pytest.approx(1.0)
     env.close()
 
 
-def test_audible_guard_is_quantized_and_never_exact_hidden_state(monkeypatch) -> None:
+def test_live_facility_tracking_takes_precedence_over_audio_estimates(monkeypatch) -> None:
     env = GhostlineEnv(seed=19, tier=3)
     env.reset(seed=19)
     guard = env.sim.level.guards[0]
@@ -301,10 +302,9 @@ def test_audible_guard_is_quantized_and_never_exact_hidden_state(monkeypatch) ->
     monkeypatch.setattr(env.sim, "line_of_sight", lambda *_args, **_kwargs: False)
 
     percept = env._security_percepts()[0]
-    assert not np.allclose(percept.position, guard.position)
+    assert np.allclose(percept.position, guard.position)
     record = env._entities([percept])[0][0]
-    assert record[8] == 0.0 and record[9] == 0.0
-    assert -0.8 <= record[11] <= -0.2
+    assert record[11] == pytest.approx(1.0)
     env.close()
 
 
@@ -480,7 +480,7 @@ def test_damage_breaks_up_nearby_guard_dogpile() -> None:
     sim._damage(nearby[0].position, source_kind="guard")
     assert all(guard.mode == GuardMode.SEARCH for guard in nearby)
     assert all(guard.attack_windup == 0.0 for guard in nearby)
-    assert all(guard.hit_cooldown >= 1.25 for guard in nearby)
+    assert all(guard.hit_cooldown >= 1.75 for guard in nearby)
 
 
 def test_guard_tackle_has_readable_windup_before_damage() -> None:

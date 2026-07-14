@@ -51,9 +51,9 @@ FORBIDDEN = {
 }
 FORBIDDEN_PREFIXES = ("src/neon_arena/",)
 RELEASE_REQUIRED = {
-    "benchmarks/neural/champion-final-7m-500.json",
-    "benchmarks/neural/champion-final-7m-500.csv",
-    "benchmarks/neural/champion-final-7m-500.episodes.csv",
+    "benchmarks/neural/champion-final-8m-500.json",
+    "benchmarks/neural/champion-final-8m-500.csv",
+    "benchmarks/neural/champion-final-8m-500.episodes.csv",
     "benchmarks/neural/champion-onnx-parity.json",
     "benchmarks/system/headless-throughput.json",
 }

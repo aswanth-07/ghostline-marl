@@ -6,7 +6,7 @@ Ghostline's browser release is a static Pygbag 0.9.3 build. The deterministic Py
 
 - `web/main.py` starts the same `GameApp` through its cooperative async loop.
 - `web/runtime.py` is the only Python adapter. It exposes tier/seed launch, current-run agent takeover, return-to-human control, and player-equivalent observation serialization. It prefetches inference in the spare frame before each 10 Hz decision so the async JavaScript bridge does not add a full policy-step delay.
-- `web/static/policy-bridge.mjs` owns asynchronous inference, legal-action enforcement, persistent GRU state, latency telemetry, and WebGPU-to-WASM fallback.
+- `web/static/policy-bridge.mjs` owns asynchronous inference, legal-action enforcement, persistent GRU state, latency telemetry, and backend selection. Threaded WASM is the measured release default for this compact recurrent graph; `?backend=webgpu` retains the WebGPU comparison path with automatic WASM fallback.
 - `web/static/matched-runs.mjs` admits comparison cards only when both completed runs have the exact same tier and seed. Mismatched contracts are displayed as `NOT COMPARED` with an explicit refusal reason.
 - `web/static/embed-bridge.mjs` owns the versioned, origin-scoped portfolio message contract. It never accepts gameplay commands from the parent page.
 - `web/ghostline.tmpl` and `web/static/ghostline.css` provide the responsive loading, focus, fullscreen, Agent Lab, and human-versus-agent shell.
@@ -28,10 +28,12 @@ telemetry, and matched-run cards. At narrow widths the lab moves below the game
 instead of being removed. `autoplay=0` never bypasses Chrome's user-activation
 gate and never loads the policy without an explicit takeover.
 
-Because the portfolio and game are separate Vercel origins, the iframe must
-include `webgpu` in its Permissions Policy `allow` attribute. Chrome can then
-use the preferred WebGPU execution provider; unsupported or disabled clients
-still fall back to ONNX Runtime Web WASM.
+Because the portfolio and game are separate Vercel origins, the iframe includes
+`webgpu` in its Permissions Policy `allow` attribute for the optional
+`?backend=webgpu` comparison path. The release defaults to threaded ONNX Runtime
+Web WASM because the selected 5.83 MB GRU measured substantially faster there
+on the target Chrome machine. An unavailable or failed WebGPU request falls
+back to the same WASM path.
 
 When embedded in a frame, Ghostline sends these display-only messages to the
 parent after resolving the parent origin from `document.referrer` and Chrome's
@@ -76,12 +78,22 @@ Promise across the Pygbag boundary.
 Takeover uses an explicit three-state handshake: `HUMAN CONTROL`, `AGENT
 HANDOFF`, and `AGENT CONTROL`. The shell mirrors model-download progress,
 provides a cancellable handoff, and does not claim agent control until the
-browser returns the first recurrent inference. The Python adapter primes that
-first player-equivalent observation immediately after attaching the policy
-environment, so a successful handoff always has an actionable decision behind
-its UI state. The takeover click also satisfies the launch/focus gesture: if
+browser returns the first recurrent inference. Each asynchronous inference is
+identified by the bridge's monotonic completion count. Python retains an
+outstanding generation across 10 Hz boundaries until that exact result is
+ready, rather than clearing it to `HOLD`, and queues the next observation five
+60 Hz frames before consumption. This tolerates cold or approximately 60 ms
+WebGPU decisions without replaying stale actions or issuing a duplicate
+request. The takeover click also satisfies the launch/focus gesture: if
 the Python canvas is still starting, the shell enters it automatically when it
 becomes ready instead of leaving the policy active behind a second launch gate.
+
+Pygbag writes a device-pixel-ratio-adjusted inline canvas size during startup.
+The Ghostline shell deliberately overrides that hint and scales the fixed 16:9
+framebuffer across the complete game frame. The WebAssembly presentation path
+also scales the logical 640x360 scene to the exact browser canvas dimensions,
+so browser zoom and intermediate viewport widths cannot fall back to a small
+centered image. Desktop builds retain crisp integer-only scaling.
 
 ## Build commands
 

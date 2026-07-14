@@ -111,7 +111,7 @@ def _write_valid_release_tree(root: Path) -> dict[str, object]:
         "policy": release_evidence.CHECKPOINT.as_posix(),
         "checkpoint_sha256": checkpoint_sha256,
         "release_audit": True,
-        "seed_namespace": "final_test_7_000_000_plus",
+        "seed_namespace": "final_test_8_000_000_plus",
         "seed_start": release_evidence.FINAL_SEED_START,
         "seed_formula": "seed_start + tier * 100000 + episode_index",
         "episodes_per_tier": release_evidence.EPISODES_PER_TIER,

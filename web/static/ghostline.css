@@ -127,8 +127,13 @@ canvas.emscripten {
   position: absolute;
   inset: 0;
   z-index: 5;
-  width: 100%;
-  height: 100%;
+  /* Pygbag writes a half-resolution inline CSS size on high-DPI displays.
+     The shell owns layout, so override that runtime hint and let the browser
+     scale the fixed 16:9 framebuffer into the complete game frame. */
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
   margin: 0;
   padding: 0;
   border: 0;

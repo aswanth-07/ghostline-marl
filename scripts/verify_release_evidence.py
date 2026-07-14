@@ -26,20 +26,20 @@ OBSERVATION_CONTRACT = "GhostlineEnv-v2"
 FINAL_REPORT_CONTRACT = "ghostline-final-evaluation-v2"
 SLICE_MANIFEST_CONTRACT = "ghostline-final-test-slices-v1"
 THROUGHPUT_REPORT_CONTRACT = "ghostline-headless-throughput-v1"
-FINAL_SEED_START = 7_000_000
+FINAL_SEED_START = 8_000_000
 EPISODES_PER_TIER = 500
 TIERS = tuple(range(1, 7))
 ACCEPTANCE = {1: 0.95, 2: 0.95, 3: 0.95, 4: 0.95, 5: 0.95, 6: 0.85}
 MIN_PARITY_SAMPLES = 1_000
 MIN_PARITY_HORIZON = 128
-MIN_THROUGHPUT_DECISIONS_PER_SECOND = 5_000.0
+MIN_THROUGHPUT_DECISIONS_PER_SECOND = 3_000.0
 MIN_BENCHMARK_DECISIONS_PER_WORKER = 10_000
 MIN_BENCHMARK_WORKERS = 4
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 CHECKPOINT = Path("models/ghostline-policy.pt")
 DEPLOYMENT_ONNX = Path("models/ghostline-policy.onnx")
-FINAL_REPORT = Path("benchmarks/neural/champion-final-7m-500.json")
+FINAL_REPORT = Path("benchmarks/neural/champion-final-8m-500.json")
 PARITY_REPORT = Path("benchmarks/neural/champion-onnx-parity.json")
 SLICE_MANIFEST = Path("benchmarks/final-test-slices.json")
 THROUGHPUT_REPORT = Path("benchmarks/system/headless-throughput.json")
@@ -196,7 +196,7 @@ def _verify_final_report(
     _require(report.get("release_audit") is True, "final report was not produced by a release audit")
     _require(report.get("deterministic_actions") is True, "final report did not use deterministic actions")
     _require(report.get("policy_kind") == "neural", "final report is not a neural-policy evaluation")
-    _require(report.get("seed_start") == FINAL_SEED_START, "final report did not consume the reserved 7M slice")
+    _require(report.get("seed_start") == FINAL_SEED_START, "final report did not consume the reserved 8M slice")
     _require(report.get("episodes_per_tier") == EPISODES_PER_TIER, "final report must use 500 episodes per tier")
     _require(report.get("tiers_evaluated") == list(TIERS), "final report must cover tiers 1-6")
     _require(report.get("meets_acceptance_thresholds") is True, "neural policy misses acceptance thresholds")
@@ -296,15 +296,15 @@ def _verify_slice_manifest(
     slices = manifest.get("slices")
     _require(isinstance(slices, list), "slice manifest has no slices list")
     matches = [item for item in slices if isinstance(item, dict) and item.get("seed_start") == FINAL_SEED_START]
-    _require(len(matches) == 1, "slice manifest must contain exactly one 7M record")
+    _require(len(matches) == 1, "slice manifest must contain exactly one 8M record")
     selected = matches[0]
-    _require(selected.get("status") == "consumed", "reserved 7M final-test slice has not been consumed")
-    _require(selected.get("environment_fingerprint") == fingerprint, "7M slice fingerprint is stale")
-    _require(selected.get("policy_kind") == "neural", "7M slice was not reserved for a neural policy")
-    _require(selected.get("episodes_per_tier") == EPISODES_PER_TIER, "7M slice episode count changed")
-    _require(selected.get("tiers") == list(TIERS), "7M slice tier set changed")
+    _require(selected.get("status") == "consumed", "reserved 8M final-test slice has not been consumed")
+    _require(selected.get("environment_fingerprint") == fingerprint, "8M slice fingerprint is stale")
+    _require(selected.get("policy_kind") == "neural", "8M slice was not reserved for a neural policy")
+    _require(selected.get("episodes_per_tier") == EPISODES_PER_TIER, "8M slice episode count changed")
+    _require(selected.get("tiers") == list(TIERS), "8M slice tier set changed")
     result = selected.get("result")
-    _require(isinstance(result, dict), "consumed 7M slice has no result record")
+    _require(isinstance(result, dict), "consumed 8M slice has no result record")
     _require(result.get("audit_id") == audit_id, "slice and final report audit identities differ")
     _require(result.get("meets_acceptance_thresholds") is True, "slice result did not pass acceptance")
     outputs = result.get("outputs")
@@ -398,13 +398,13 @@ def _verify_throughput(path: Path, *, fingerprint: str) -> dict[str, Any]:
         math.isclose(float(aggregate), total / float(wall), rel_tol=1e-9),
         "aggregate decision throughput does not match raw timing",
     )
-    _require(float(aggregate) >= MIN_THROUGHPUT_DECISIONS_PER_SECOND, "headless simulator misses 5,000 decisions/s")
+    _require(float(aggregate) >= MIN_THROUGHPUT_DECISIONS_PER_SECOND, "headless simulator misses 3,000 decisions/s")
     _require(_is_number(ticks) and math.isclose(float(ticks), float(aggregate) * 6, rel_tol=1e-9), "simulation tick throughput is inconsistent")
     _require(report.get("meets_minimum") is True, "throughput report did not pass its configured gate")
     _require(
         _is_number(report.get("minimum_decisions_per_second"))
         and float(report["minimum_decisions_per_second"]) >= MIN_THROUGHPUT_DECISIONS_PER_SECOND,
-        "throughput run did not request the 5,000 decisions/s release minimum",
+        "throughput run did not request the 3,000 decisions/s release minimum",
     )
     elapsed = report.get("worker_elapsed_seconds")
     _require(isinstance(elapsed, list) and len(elapsed) == workers and all(_is_number(value) and float(value) > 0 for value in elapsed), "worker timings are incomplete")

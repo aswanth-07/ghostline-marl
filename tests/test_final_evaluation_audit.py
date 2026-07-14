@@ -76,15 +76,15 @@ def _info(*, success: bool) -> dict[str, object]:
     }
 
 
-def test_cli_defaults_to_the_tracked_one_way_7m_slice() -> None:
+def test_cli_defaults_to_the_tracked_one_way_8m_slice() -> None:
     args = build_parser().parse_args(["evaluate", "--model", "models/ghostline-policy.pt"])
 
-    assert args.seed_start == 7_000_000
+    assert args.seed_start == 8_000_000
     assert args.slice_manifest == Path("benchmarks/final-test-slices.json")
-    assert args.output == Path("benchmarks/neural/champion-final-7m-500.json")
+    assert args.output == Path("benchmarks/neural/champion-final-8m-500.json")
 
     manifest = json.loads((ROOT / DEFAULT_SLICE_MANIFEST).read_text(encoding="utf-8"))
-    reserved = next(item for item in manifest["slices"] if item["seed_start"] == 7_000_000)
+    reserved = next(item for item in manifest["slices"] if item["seed_start"] == 8_000_000)
     assert manifest["environment_fingerprint"] == current_environment_fingerprint()
     assert reserved["environment_fingerprint"] == current_environment_fingerprint()
     assert reserved["episodes_per_tier"] == 500

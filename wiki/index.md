@@ -14,7 +14,7 @@ Ghostline is the active RL experiment: a procedural stealth-infiltration game wi
 - Three integrity points, tier-scaled mission clock, escalating recoverable trace, dash, and disruption pulse.
 - Cameras, human guards, and late-tier response drones; no player weapon combat.
 - Keyboard play plus Agent Lab and a static Chrome-first web showcase; no gamepad or multiplayer scope.
-- Player-equivalent structured observations; no rendered pixels or hidden enemy state.
+- Player-equivalent structured observations; no rendered pixels or renderer-only information. Facility telemetry keeps operative positions live for both human and policy controllers.
 - Objective-aware recurrent policy trained through fair-teacher imitation, DAgger recovery data, and PPO fine-tuning.
 
 ## Pages

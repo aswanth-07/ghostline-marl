@@ -16,6 +16,7 @@ from ghostline.config import (
     DETECTION_GRACE_SECONDS,
     DRONE_STRIKE_WINDUP_SECONDS,
     GUARD_GRADE_SPEED_MULTIPLIERS,
+    GUARD_CHASE_SPEED_RATIOS,
     GUARD_PATROL_DWELL_SECONDS,
     GUARD_SEARCH_DURATION_MULTIPLIERS,
     GUARD_STRIKE_WINDUP_SECONDS,
@@ -256,7 +257,7 @@ class GhostlineSimulation:
             if not self._dash_latched:
                 self.events.append(SimEvent("dash_noise", tuple(self.player), 185.0))
             self._dash_latched = True
-            if self.elapsed_ticks % 8 == 0:
+            if self.elapsed_ticks % 15 == 0:
                 self.events.append(SimEvent("dash", tuple(self.player)))
             self._broadcast_noise(radius=185.0)
         else:
@@ -398,6 +399,20 @@ class GhostlineSimulation:
 
         return norm(position - self.player) <= distance and self.line_of_sight(self.player, position)
 
+    def player_can_track_security(self, position: np.ndarray) -> bool:
+        """Return the shared human/policy security-tracking contract.
+
+        The infiltrated facility exposes operative transponders, so guards,
+        cameras, and drones remain live tactical information instead of
+        disappearing into stale silhouettes at a wall boundary. ``position``
+        remains part of the interface so presentation and observations use the
+        same semantic gate if tracking is constrained in a future environment
+        version.
+        """
+
+        del position
+        return True
+
     def player_can_hear_guard(self, guard: Guard) -> bool:
         """Return whether a guard earns an audibility-gated inference cue."""
 
@@ -428,17 +443,11 @@ class GhostlineSimulation:
         return estimate.astype(np.float32), 0.10 + 0.30 * strength
 
     def _update_player_intel(self) -> None:
-        """Snapshot only security actors currently inside true player LOS.
-
-        Moving actors retain their last-seen snapshot after they leave sight;
-        fixed cameras remain mapped.  This small deterministic intelligence
-        layer prevents jarring disappearance while avoiding through-wall live
-        tracking, and gives human/agent takeover an identical starting state.
-        """
+        """Publish live facility security telemetry to human and policy alike."""
 
         tick = int(self.elapsed_ticks)
         for camera in self.level.cameras:
-            if self.player_can_see(camera.position):
+            if self.player_can_track_security(camera.position):
                 self.security_intel[("camera", camera.camera_id)] = SecurityIntel(
                     "camera",
                     camera.camera_id,
@@ -449,7 +458,7 @@ class GhostlineSimulation:
                     tick,
                 )
         for guard in self.level.guards:
-            if self.player_can_see(guard.position):
+            if self.player_can_track_security(guard.position):
                 self.security_intel[("guard", guard.guard_id)] = SecurityIntel(
                     "guard",
                     guard.guard_id,
@@ -461,7 +470,7 @@ class GhostlineSimulation:
                     guard.grade,
                 )
         for drone in self.drones:
-            if self.player_can_see(drone.position):
+            if self.player_can_track_security(drone.position):
                 self.security_intel[("drone", drone.drone_id)] = SecurityIntel(
                     "drone",
                     drone.drone_id,
@@ -550,7 +559,8 @@ class GhostlineSimulation:
                     self.events.append(SimEvent("guard_clear", tuple(guard.position)))
 
             if guard.mode == GuardMode.CHASE:
-                target, speed = self.player, 84.0
+                target = self.player
+                speed = PLAYER_SPEED * GUARD_CHASE_SPEED_RATIOS[int(guard.grade)]
             elif guard.mode == GuardMode.SUSPICIOUS:
                 target, speed = guard.last_known, 0.0
             elif guard.mode in (GuardMode.INVESTIGATE, GuardMode.SEARCH):
@@ -569,7 +579,8 @@ class GhostlineSimulation:
                     guard.patrol_pause_seconds = GUARD_PATROL_DWELL_SECONDS[int(guard.grade)]
                     speed = 0.0
 
-            speed *= GUARD_GRADE_SPEED_MULTIPLIERS[int(guard.grade)]
+            if guard.mode != GuardMode.CHASE:
+                speed *= GUARD_GRADE_SPEED_MULTIPLIERS[int(guard.grade)]
             self._move_agent(guard, target, speed, dt)
             if guard.mode == GuardMode.SEARCH and norm(guard.last_known - guard.position) < 18.0:
                 turn = 1.0 if guard.guard_id % 2 == 0 else -1.0
@@ -814,7 +825,7 @@ class GhostlineSimulation:
         # doorway dogpile. Nearby pursuers search the impact point through the
         # global grace window, leaving a short but earned route to escape.
         for guard in self.level.guards:
-            if norm(guard.position - self.player) <= 92.0 and guard.mode == GuardMode.CHASE:
+            if norm(guard.position - self.player) <= 150.0 and guard.mode == GuardMode.CHASE:
                 guard.mode = GuardMode.SEARCH
                 guard.mode_seconds = max(
                     guard.mode_seconds,
@@ -823,7 +834,7 @@ class GhostlineSimulation:
                 guard.last_known = self.player.copy()
                 guard.awareness = 0.0
                 guard.attack_windup = 0.0
-                guard.hit_cooldown = max(guard.hit_cooldown, 1.25)
+                guard.hit_cooldown = max(guard.hit_cooldown, 1.75)
                 guard.stimulus = "eye"
         self.events.append(SimEvent("damage", tuple(self.player), 1.0))
 

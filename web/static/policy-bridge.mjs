@@ -1,6 +1,10 @@
 const FLOAT_INPUTS = new Set(["ego", "objective", "local_grid", "targets", "entities", "rays", "hidden"]);
 const MASK_INPUTS = new Set(["target_mask", "entity_mask", "action_mask"]);
 
+export function requestedExecutionProvider(search = globalThis.location?.search ?? "") {
+  return new URLSearchParams(search).get("backend") === "webgpu" ? "webgpu" : "wasm";
+}
+
 function flatten(values, output = []) {
   if (Array.isArray(values)) {
     for (const value of values) flatten(value, output);
@@ -121,8 +125,9 @@ export class GhostlinePolicyBridge {
       });
       this._emit("state", { state: "loading", progress: 0.82 });
 
+      const requestedProvider = requestedExecutionProvider();
       const webgpuAvailable = Boolean(navigator.gpu);
-      if (webgpuAvailable) {
+      if (requestedProvider === "webgpu" && webgpuAvailable) {
         try {
           this.session = await this.ort.InferenceSession.create(model, {
             executionProviders: ["webgpu", "wasm"],
@@ -130,7 +135,7 @@ export class GhostlinePolicyBridge {
           });
           this.backend = "webgpu";
         } catch (webgpuError) {
-          console.warn("Ghostline WebGPU policy initialization failed; using WASM.", webgpuError);
+          console.warn("Ghostline WebGPU comparison path failed; using WASM.", webgpuError);
         }
       }
       if (!this.session) {
@@ -190,6 +195,16 @@ export class GhostlinePolicyBridge {
     return this.session && this.state === "ready" && !this.busy && !this.pendingObservation
       ? this.lastAction
       : 0;
+  }
+
+  hasCompletedAction(afterInferenceCount = -1) {
+    return Boolean(
+      this.session &&
+      this.state === "ready" &&
+      !this.busy &&
+      !this.pendingObservation &&
+      this.inferenceCount > Number(afterInferenceCount)
+    );
   }
 
   async _drain() {

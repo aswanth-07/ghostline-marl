@@ -136,8 +136,12 @@ class BrowserOnnxPolicy:
     def __init__(self, host: Any):
         self.host = host
         self.prefetched = False
+        self._prefetch_inference_count = -1
 
     def prefetch(self, observation: Mapping[str, Any]) -> None:
+        if self.prefetched:
+            return
+        self._prefetch_inference_count = int(self.host.ghostlinePolicy.inferenceCount)
         self.host.ghostlinePolicy.step(observation_json(observation))
         self.prefetched = True
 
@@ -150,11 +154,24 @@ class BrowserOnnxPolicy:
         device: str = "cpu",
     ) -> tuple[int, None]:
         del hidden, deterministic, device
-        if self.prefetched:
-            action = self.host.ghostlinePolicy.currentAction()
-            self.prefetched = False
-        else:
-            action = self.host.ghostlinePolicy.step(observation_json(observation))
+        if not self.prefetched:
+            # Browser inference is asynchronous. Queue this observation and
+            # fail closed for the current decision instead of pretending that
+            # the bridge's immediate neutral return is the finished result.
+            self.prefetch(observation)
+            return 0, None
+        if not bool(
+            self.host.ghostlinePolicy.hasCompletedAction(
+                self._prefetch_inference_count
+            )
+        ):
+            # Keep the outstanding generation alive. Clearing it here caused
+            # every 60 ms WebGPU result to be replaced before Python consumed
+            # it, leaving the production agent permanently on HOLD.
+            return 0, None
+        action = self.host.ghostlinePolicy.currentAction()
+        self.prefetched = False
+        self._prefetch_inference_count = -1
         return int(action), None
 
 
@@ -261,6 +278,7 @@ class GhostlineWebRuntime:
 
         self.host.ghostlinePolicy.reset()
         self.policy.prefetched = False
+        self.policy._prefetch_inference_count = -1
         self.app.learned_policy = self.policy
         self.app.selected_tier = tier
         self.app.seed = seed
@@ -293,8 +311,9 @@ class GhostlineWebRuntime:
             "Agent connected. Acquiring its first policy decision…",
             "info",
         )
-        self.policy.prefetch(self.app.agent_env._observation())
-        self._last_prefetch_tick = int(self.app._agent_tick)
+        # The first game decision queues its own observation. Subsequent
+        # decisions are phase-advanced by the control loop below.
+        self._last_prefetch_tick = -1
 
     def _mark_hybrid_run(self) -> None:
         """Exclude mixed-control runs from pure human/agent comparisons."""
@@ -326,6 +345,7 @@ class GhostlineWebRuntime:
             self.app.state = "play"
         self.control_mode = "human"
         self.policy.prefetched = False
+        self.policy._prefetch_inference_count = -1
         self._last_prefetch_tick = -1
         self.app._agent_action = 0
         self.app.learned_policy = None
@@ -350,12 +370,17 @@ class GhostlineWebRuntime:
         self.app.agent_hidden = None
 
     def _prefetch_agent_action(self) -> None:
-        """Use the spare frame before each 10 Hz decision to hide async browser latency."""
+        """Queue each 10 Hz decision five frames before it is consumed."""
         if self.app.state != "lab_play" or self.app.agent_env is None:
             self._last_prefetch_tick = -1
             return
         tick = int(self.app._agent_tick)
-        if tick <= 0 or tick % 6 or tick == self._last_prefetch_tick:
+        if (
+            tick <= 0
+            or tick % 6 != 1
+            or tick == self._last_prefetch_tick
+            or self.policy.prefetched
+        ):
             return
         self.policy.prefetch(self.app.agent_env._observation())
         self._last_prefetch_tick = tick
