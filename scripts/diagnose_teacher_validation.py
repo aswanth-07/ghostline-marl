@@ -45,13 +45,13 @@ def main() -> None:
     }
     for tier in range(1, 7):
         jobs = [
-            (tier, args.seed_start + episode, "teacher")
+            (tier, args.seed_start + episode, episode, "teacher")
             for episode in range(args.episodes)
         ]
         with ProcessPoolExecutor(max_workers=args.workers) as pool:
             infos = list(pool.map(_baseline_episode, jobs))
-        successes = sum(int(info["is_success"]) for info in infos)
-        failures = Counter(str(info["fail_reason"]) for info in infos)
+        successes = sum(int(info["success"]) for info in infos)
+        failures = Counter(str(info["failure_reason"]) for info in infos)
         damage = [int(info["damage"]) for info in infos]
         report["tiers"][str(tier)] = {
             "successes": successes,
@@ -66,12 +66,12 @@ def main() -> None:
             "episodes": [
                 {
                     "seed": seed,
-                    "success": bool(info["is_success"]),
-                    "fail_reason": str(info["fail_reason"]),
+                    "success": bool(info["success"]),
+                    "fail_reason": str(info["failure_reason"]),
                     "damage": int(info["damage"]),
                     "duration_seconds": float(info["duration_seconds"]),
                 }
-                for (_, seed, _), info in zip(jobs, infos, strict=True)
+                for (_, seed, _, _), info in zip(jobs, infos, strict=True)
             ],
         }
 

@@ -301,9 +301,18 @@ class LevelGenerator:
             return GuardGrade.INTERCEPTOR if index == count - 1 else GuardGrade.STANDARD
         if tier == 5:
             return (GuardGrade.STANDARD, GuardGrade.INTERCEPTOR, GuardGrade.ELITE)[index % 3]
-        # Ghostline's six-guard distribution exposes two of each grade, so a
-        # player can learn the speed language without every guard becoming elite.
-        return GuardGrade(min(2, index * 3 // max(1, count)))
+        # Ghostline uses a readable five-operative threat pyramid: three
+        # Standard, one Interceptor, and one 99%-speed Elite. Five cameras and
+        # the trace-triggered drone retain full-system pressure without a six-
+        # guard doorway stack.
+        distribution = (
+            GuardGrade.STANDARD,
+            GuardGrade.STANDARD,
+            GuardGrade.STANDARD,
+            GuardGrade.INTERCEPTOR,
+            GuardGrade.ELITE,
+        )
+        return distribution[min(len(distribution) - 1, index)]
 
     def _place_props(self, rooms: list[Room], grid: np.ndarray, rng: np.random.Generator) -> list[Prop]:
         props: list[Prop] = []

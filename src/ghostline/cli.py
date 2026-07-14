@@ -40,8 +40,8 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument(
         "--seed-start",
         type=int,
-        default=7_000_000,
-        help="reserved one-shot release slice (7,000,000 by default; 2M-6M are retired)",
+        default=8_000_000,
+        help="reserved one-shot release slice (8,000,000 by default; earlier slices are historical)",
     )
     evaluate.add_argument(
         "--slice-manifest",
@@ -52,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument(
         "--output",
         type=Path,
-        default=Path("benchmarks/neural/champion-final-7m-500.json"),
+        default=Path("benchmarks/neural/champion-final-8m-500.json"),
     )
     imitate = subparsers.add_parser("imitate", help="Collect fair-teacher data, behavior-clone, or run DAgger")
     imitate_commands = imitate.add_subparsers(dest="imitation_command", required=True)

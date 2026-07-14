@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import sys
 from typing import Any, Iterable
 
 import numpy as np
@@ -28,6 +29,38 @@ from ghostline.types import GuardGrade, GuardMode, Prop, SimEvent, Tile
 
 LOGICAL_SIZE = (640, 360)
 WINDOW_SIZE = (1280, 720)
+
+
+def _presentation_scaled_size(
+    target_size: tuple[int, int],
+    *,
+    web_runtime: bool | None = None,
+) -> tuple[int, int]:
+    """Choose the output size for desktop and browser presentation.
+
+    Desktop keeps crisp integer scaling. Browser canvas dimensions follow CSS
+    pixels and device zoom, so an intermediate 16:9 size such as 927x521 must
+    fill the canvas instead of falling back to a centered 640x360 image.
+    """
+
+    if web_runtime is None:
+        web_runtime = sys.platform == "emscripten"
+    if web_runtime:
+        return max(1, int(target_size[0])), max(1, int(target_size[1]))
+    integer_scale = max(
+        1,
+        min(target_size[0] // LOGICAL_SIZE[0], target_size[1] // LOGICAL_SIZE[1]),
+    )
+    if target_size[0] < LOGICAL_SIZE[0] or target_size[1] < LOGICAL_SIZE[1]:
+        scale = min(
+            target_size[0] / LOGICAL_SIZE[0],
+            target_size[1] / LOGICAL_SIZE[1],
+        )
+        return (
+            max(1, int(LOGICAL_SIZE[0] * scale)),
+            max(1, int(LOGICAL_SIZE[1] * scale)),
+        )
+    return LOGICAL_SIZE[0] * integer_scale, LOGICAL_SIZE[1] * integer_scale
 
 BG = (8, 12, 17)
 INK = (222, 235, 232)
@@ -443,7 +476,10 @@ class GhostlineRenderer:
                     self.captions = self.captions[-3:]
             if event.kind in ("dash_noise", "pulse", "damage", "quota_met", "lockdown", "extracted"):
                 duration = 0.78 if event.kind == "dash_noise" else (0.65 if event.kind in ("pulse", "damage") else 1.25)
+                if event.kind == "dash_noise":
+                    self.effects = [effect for effect in self.effects if effect.kind != "dash_noise"]
                 self.effects.append(ScreenEffect(event.kind, position, duration, duration))
+                self.effects = self.effects[-12:]
             if event.kind == "guard_clear":
                 self.security_clear_life = 1.35
             banner = {
@@ -472,7 +508,12 @@ class GhostlineRenderer:
                 continue
             if self.reduced_motion:
                 continue
-            count = 4 if event.kind in ("dash", "hack_tick") else (9 if self.reduced_flashes else 18)
+            if event.kind in ("dash", "hack_tick"):
+                count = 2
+            elif event.kind == "dash_noise":
+                count = 4
+            else:
+                count = 9 if self.reduced_flashes else 18
             rng = np.random.default_rng(self.sim.elapsed_ticks + len(self.particles) * 19)
             for _ in range(count):
                 angle = rng.uniform(0.0, math.tau)
@@ -480,6 +521,7 @@ class GhostlineRenderer:
                 self.particles.append(
                     Particle(position.copy(), np.asarray((math.cos(angle), math.sin(angle)), dtype=np.float32) * speed, color, rng.uniform(0.25, 0.8), int(rng.integers(1, 3)))
                 )
+            self.particles = self.particles[-72:]
 
     def draw(self, *, return_array: bool = False, lab_stats: dict[str, Any] | None = None) -> np.ndarray | bool:
         dt = min(0.05, self._clock.tick(60) / 1000.0) if self.visible else 1.0 / 60.0
@@ -495,7 +537,6 @@ class GhostlineRenderer:
         self._draw_walls()
         self._draw_props()
         self._draw_objectives()
-        self._draw_security_memories()
         self._draw_security()
         self._draw_player()
         self._draw_particles()
@@ -580,12 +621,7 @@ class GhostlineRenderer:
         if return_array:
             return np.transpose(pygame.surfarray.array3d(self.logical), (1, 0, 2)).copy()
         target_size = self.window.get_size()
-        integer_scale = max(1, min(target_size[0] // LOGICAL_SIZE[0], target_size[1] // LOGICAL_SIZE[1]))
-        if target_size[0] < LOGICAL_SIZE[0] or target_size[1] < LOGICAL_SIZE[1]:
-            scale = min(target_size[0] / LOGICAL_SIZE[0], target_size[1] / LOGICAL_SIZE[1])
-            scaled_size = (max(1, int(LOGICAL_SIZE[0] * scale)), max(1, int(LOGICAL_SIZE[1] * scale)))
-        else:
-            scaled_size = (LOGICAL_SIZE[0] * integer_scale, LOGICAL_SIZE[1] * integer_scale)
+        scaled_size = _presentation_scaled_size(target_size)
         scaled = pygame.transform.scale(self.logical, scaled_size)
         self.window.fill((1, 3, 5))
         destination = ((target_size[0] - scaled_size[0]) // 2, (target_size[1] - scaled_size[1]) // 2)
@@ -1189,83 +1225,14 @@ class GhostlineRenderer:
 
         return self.sim.security_intel
 
-    def _draw_security_memories(self) -> None:
-        current: dict[tuple[str, int], np.ndarray] = {
-            **{("camera", item.camera_id): item.position for item in self.sim.level.cameras},
-            **{("guard", item.guard_id): item.position for item in self.sim.level.guards},
-            **{("drone", item.drone_id): item.position for item in self.sim.drones},
-        }
-        for key, memory in sorted(self._security_memory.items()):
-            live_position = current.get(key)
-            if live_position is not None and self._visible_from_player(live_position):
-                continue
-            # Audio is the current-best public percept in Env-v2.  Do not draw
-            # a contradictory stale ghost at the old position while the same
-            # hidden guard is producing a quantized STEPS cue.
-            if self._memory_superseded_by_audio(key):
-                continue
-            sx, sy = self._world(memory.position)
-            if sx < -48 or sy < -48 or sx > LOGICAL_SIZE[0] + 48 or sy > LOGICAL_SIZE[1] + 48:
-                continue
-            age = max(0.0, (self.sim.elapsed_ticks - memory.last_seen_tick) / 60.0)
-            fixed = memory.kind == "camera"
-            color = (104, 154, 158) if fixed else (104, 132, 139)
-            alpha = 96 if fixed else max(42, int(104 - age * 5.0))
-            sprite: pygame.Surface | None
-            if memory.kind == "guard":
-                sprite = self._guard_atlas_sprite(memory.facing, GuardMode.PATROL, False, 0.0)
-            elif memory.kind == "drone":
-                sprite = self._drone_atlas_sprite(memory.facing, 0.0, 0.0)
-            else:
-                sprite = self._camera_atlas_sprite(disabled_for=0.0, detected=False, awareness=0.0)
-            if sprite is not None:
-                ghost = sprite.copy()
-                ghost.set_alpha(alpha)
-                if memory.kind == "camera":
-                    destination = (sx - ghost.get_width() // 2, sy - ghost.get_height() // 2)
-                else:
-                    destination = (sx - ghost.get_width() // 2, sy + 10 - ghost.get_height())
-                self.logical.blit(ghost, destination)
-            else:
-                self._draw_threat_glyph(self.logical, memory.kind, (sx - 4, sy), color)
-
-            radius = 12 if fixed else min(34, 12 + int(age * 2.2))
-            ring = pygame.Rect(sx - radius, sy - radius, radius * 2, radius * 2)
-            for segment in range(6):
-                start = segment * math.tau / 6.0 + (0.0 if self.reduced_motion else self._time * 0.16)
-                pygame.draw.arc(self.logical, color, ring, start, start + 0.42, 1)
-            label = "MAPPED" if fixed else f"LAST {min(99, int(age)):02d}s"
-            if memory.kind == "guard":
-                label += f"  {('I', 'II', 'III')[int(memory.grade)]}"
-            label_width = self.font_small.size(label)[0]
-            pygame.draw.rect(
-                self.logical,
-                (4, 9, 12),
-                (sx - label_width // 2 - 3, sy + radius + 2, label_width + 6, 11),
-                border_radius=2,
-            )
-            self._text(label, sx - label_width // 2, sy + radius + 3, self.font_small, color)
-
-    def _memory_superseded_by_audio(self, key: tuple[str, int]) -> bool:
-        if key[0] != "guard":
-            return False
-        guard = next(
-            (guard for guard in self.sim.level.guards if guard.guard_id == key[1]),
-            None,
-        )
-        return bool(
-            guard is not None
-            and not self._visible_from_player(guard.position)
-            and self.sim.player_can_hear_guard(guard)
-        )
-
     def _visible_from_player(
         self,
         position: np.ndarray,
         *,
         distance: float = PLAYER_PERCEPTION_DISTANCE,
     ) -> bool:
-        return self.sim.player_can_see(position, distance=distance)
+        del distance
+        return self.sim.player_can_track_security(position)
 
     @staticmethod
     def _direction_index(facing: float) -> int:
@@ -1742,17 +1709,6 @@ class GhostlineRenderer:
                 sx, sy = self._world(effect.position)
                 radius = 185 if self.reduced_motion else int(10 + 175 * progress)
                 pygame.draw.circle(effect_layer, (*CYAN, max(30, alpha // 2)), (sx, sy), radius, 1)
-                if not self.reduced_motion:
-                    for angle in np.linspace(0.0, math.tau, 12, endpoint=False):
-                        inner = max(4, radius - 4)
-                        outer = radius + 3
-                        pygame.draw.line(
-                            effect_layer,
-                            (*CYAN, max(24, alpha // 3)),
-                            (int(sx + math.cos(angle) * inner), int(sy + math.sin(angle) * inner)),
-                            (int(sx + math.cos(angle) * outer), int(sy + math.sin(angle) * outer)),
-                            1,
-                        )
             elif effect.kind == "pulse":
                 sx, sy = self._world(effect.position)
                 radius = int(18 + 155 * progress)
@@ -1883,8 +1839,6 @@ class GhostlineRenderer:
             ty = y0 + 3 + terminal.position[1] / TILE_SIZE * sy
             pygame.draw.rect(self.logical, AMBER, (int(tx), int(ty), 2, 2))
         for key, memory in self._security_memory.items():
-            if self._memory_superseded_by_audio(key):
-                continue
             mx = x0 + 3 + memory.position[0] / TILE_SIZE * sx
             my = y0 + 3 + memory.position[1] / TILE_SIZE * sy
             color = AMBER if memory.kind == "camera" else (VIOLET if memory.kind == "drone" else RED)

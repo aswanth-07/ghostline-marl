@@ -30,9 +30,10 @@ subsequent portfolio mechanics pass deliberately created a new distribution.
 
 This is historical teacher-quality evidence, not the initialization-corpus
 release gate. The final current-fingerprint teacher subsequently passed two
-disjoint 200-seed-per-tier validation gates at
-`100/100/100/100/100/95%` and `100/99.5/99.5/100/100/94%`; see
-[`teacher-current-validation-c-200.json`](teacher-current-validation-c-200.json)
-and [`teacher-current-validation-d-200.json`](teacher-current-validation-d-200.json).
-The neural champion, locked 7M final test, ONNX parity report, and human
-comparison remain pending. No superhuman claim is made.
+disjoint 100-seed-per-tier validation gates at
+`100/100/99/99/99/86%` and `100/100/99/99/99/89%`; see
+[`teacher-fast-ops-validation-a-100.json`](teacher-fast-ops-validation-a-100.json)
+and [`teacher-fast-ops-validation-b-100.json`](teacher-fast-ops-validation-b-100.json).
+The neural champion later passed the locked 8M final test and 1,000-transition
+ONNX parity gate. Human comparison remains pending, so no superhuman claim is
+made.

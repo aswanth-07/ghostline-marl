@@ -164,14 +164,19 @@ def test_browser_policy_prefetch_uses_completed_action_without_duplicate_inferen
     class Bridge:
         def __init__(self):
             self.steps = 0
+            self.inferenceCount = 0
 
         def step(self, payload: str) -> int:
             assert json.loads(payload)["ego"] == [0.0] * 24
             self.steps += 1
+            self.inferenceCount += 1
             return 0
 
         def currentAction(self) -> int:
             return 17
+
+        def hasCompletedAction(self, after: int) -> bool:
+            return self.inferenceCount > after
 
     class Host:
         ghostlinePolicy = Bridge()
@@ -194,7 +199,50 @@ def test_browser_policy_prefetch_uses_completed_action_without_duplicate_inferen
     assert Host.ghostlinePolicy.steps == 1
 
 
-def test_agent_handoff_prefetches_a_real_decision_before_claiming_visible_control() -> None:
+def test_browser_policy_retains_slow_inference_until_it_can_be_consumed() -> None:
+    class Bridge:
+        inferenceCount = 0
+        steps = 0
+        complete = False
+
+        def step(self, _payload: str) -> int:
+            self.steps += 1
+            return 0
+
+        def hasCompletedAction(self, after: int) -> bool:
+            return self.complete and self.inferenceCount > after
+
+        def currentAction(self) -> int:
+            return 3
+
+    class Host:
+        ghostlinePolicy = Bridge()
+
+    observation = {
+        "ego": np.zeros(24, dtype=np.float32),
+        "objective": np.zeros(8, dtype=np.float32),
+        "local_grid": np.zeros((8, 15, 15), dtype=np.float32),
+        "targets": np.zeros((5, 10), dtype=np.float32),
+        "target_mask": np.zeros(5, dtype=np.int8),
+        "entities": np.zeros((12, 13), dtype=np.float32),
+        "entity_mask": np.zeros(12, dtype=np.int8),
+        "rays": np.zeros((24, 3), dtype=np.float32),
+        "action_mask": np.ones(36, dtype=np.int8),
+    }
+    policy = web_runtime.BrowserOnnxPolicy(Host)
+    assert policy.act(observation) == (0, None)
+    assert policy.prefetched is True
+    assert policy.act(observation) == (0, None)
+    policy.prefetch(observation)
+    assert Host.ghostlinePolicy.steps == 1
+
+    Host.ghostlinePolicy.inferenceCount = 1
+    Host.ghostlinePolicy.complete = True
+    assert policy.act(observation) == (3, None)
+    assert policy.prefetched is False
+
+
+def test_agent_handoff_phase_advances_prefetch_without_duplicate_startup_request() -> None:
     observation = {
         "ego": np.zeros(24, dtype=np.float32),
         "objective": np.zeros(8, dtype=np.float32),
@@ -210,6 +258,7 @@ def test_agent_handoff_prefetches_a_real_decision_before_claiming_visible_contro
     class Bridge:
         state = "ready"
         payload = None
+        inferenceCount = 0
 
         def reset(self) -> None:
             pass
@@ -257,12 +306,19 @@ def test_agent_handoff_prefetches_a_real_decision_before_claiming_visible_contro
     asyncio.run(runtime._enable_agent(tier=2, seed=123))
 
     assert runtime.control_mode == "agent"
-    assert runtime.policy.prefetched is True
+    assert runtime.policy.prefetched is False
     assert runtime.app.learned_policy is runtime.policy
-    assert Host.ghostlinePolicy.payload["ego"] == [0.0] * 24
+    assert Host.ghostlinePolicy.payload is None
     assert Host.ghostlineShell.mode == "handoff"
     assert Host.ghostlineShell.policy_state[0] == "loading"
     assert "first policy decision" in Host.ghostlineShell.notice[0]
+
+    runtime.app._agent_tick = 1
+    runtime._prefetch_agent_action()
+    assert runtime.policy.prefetched is True
+    assert Host.ghostlinePolicy.payload["ego"] == [0.0] * 24
+    runtime._prefetch_agent_action()
+    assert Host.ghostlinePolicy.inferenceCount == 0
 
 
 def test_mixed_control_run_is_marked_hybrid_and_releases_agent_wrapper() -> None:
@@ -595,6 +651,10 @@ def test_web_shell_and_policy_bridge_include_release_behaviors() -> None:
     assert 'executionProviders: ["wasm"]' in policy
     assert "results.next_hidden" in policy
     assert "pendingObservation" in policy
+    assert "hasCompletedAction" in policy
+    css = (ROOT / "web" / "static" / "ghostline.css").read_text(encoding="utf-8")
+    assert "width: 100% !important" in css
+    assert "height: 100% !important" in css
     assert 'queue("pause-hidden")' in shell
     assert 'queue("pause-focus")' in shell
     assert 'metrics.mode === "hybrid"' in shell

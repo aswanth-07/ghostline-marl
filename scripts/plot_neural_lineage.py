@@ -29,9 +29,9 @@ def main() -> None:
 
     axis.axhline(95, color="#b8c4cf", linestyle="--", linewidth=1.0, alpha=0.55)
     axis.axhline(85, color="#f25f5c", linestyle=":", linewidth=1.0, alpha=0.65)
-    axis.axvline(4.5, color="#62e6ff", linestyle="--", linewidth=1.0, alpha=0.35)
-    axis.text(4.55, 32, "checkpoint frozen after targeted DAgger", color="#9defff", fontsize=8)
-    axis.set_ylim(30, 102)
+    axis.axvline(5.5, color="#62e6ff", linestyle="--", linewidth=1.0, alpha=0.35)
+    axis.text(5.55, 101.2, "checkpoint frozen after consolidation", color="#9defff", fontsize=8, va="top")
+    axis.set_ylim(80, 102)
     axis.set_ylabel("Deterministic success rate (%)")
     axis.set_title("Ghostline neural policy: closed-loop generalization lineage", loc="left", pad=14)
     axis.set_xticks(x, labels, rotation=24, ha="right")
@@ -40,7 +40,7 @@ def main() -> None:
     figure.text(
         0.01,
         0.01,
-        "BC architectures share offset 3000; DAgger rounds use disjoint validation windows; final uses 500 untouched 7M seeds/tier.",
+        "DAgger checkpoints use held-out validation contracts; final uses 500 untouched 8M seeds per tier.",
         color="#9aa7b3",
         fontsize=8,
     )

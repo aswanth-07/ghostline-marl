@@ -1,20 +1,21 @@
 ---
 title: Ghostline Training
-updated: 2026-07-13
+updated: 2026-07-14
 status: active
 ---
 
 # Training
 
-## Final neural release result
+## Current neural release result
 
-The selected 384-unit GRU BC+DAgger checkpoint passed the one-time 7M final
-evaluation at `98.0/98.2/99.2/97.0/95.8/94.8%` across tiers 1-6 (500 unseen
+The selected 384-unit GRU BC+DAgger checkpoint passed the one-time 8M final
+evaluation at `99.8/100.0/96.4/98.0/99.0/89.6%` across tiers 1-6 (500 unseen
 seeds per tier). Its SHA-256 is
-`458aa28d14b0829481a56c96dcc97a9ab9af2c463c15beef94d4c3e86ab59deb`.
-The immutable ledger is consumed and binds the JSON plus both CSV outputs.
+`76baa30af55cdaa2e71bb6ba06672bd9203455552358017505685827240b2e47`.
+The immutable ledger is consumed and binds the JSON plus both CSV outputs to
+fingerprint `521c449a...e129`.
 FP32 ONNX achieved 1,000/1,000 deterministic recurrent-action matches; a 28.3%
-smaller INT8 candidate changed three actions and was rejected. The current
+smaller INT8 candidate changed five actions and was rejected. The historical
 fingerprint PPO pilot also regressed the matched-seed DAgger rollback and is
 retained as a negative result. See [`benchmarks/neural/README.md`](../benchmarks/neural/README.md)
 for the full training lineage, selection gates, final metrics, and deployment
@@ -28,7 +29,7 @@ invalidates datasets, checkpoints, exports, and release evidence.
 ## Model and observation contract
 
 - Pure PyTorch 2.13 learning stack: behavior cloning, DAgger collection, recurrent clipped PPO, GAE, RND, and checkpointing are implemented in-project without Sample Factory, Stable-Baselines3, TorchRL, or another RL-framework runtime.
-- `GhostlineEnv-v2` player-equivalent inputs, including the explicit eight-value objective vector and twelve 13-feature live/last-seen/audible security-intel rows.
+- `GhostlineEnv-v2` shared tactical inputs, including the explicit eight-value objective vector and twelve 13-feature live facility-security rows.
 - Local-grid convolution, masked target/entity attention, ego/objective/ray encoders, and a fused 384-value representation.
 - Configurable 256- or 384-unit GRU; 384 is the default and 512 is load-only legacy compatibility.
 - Separate 256-unit policy/value paths, legal-action masking, and auxiliary goal-bearing and danger heads.
@@ -38,10 +39,10 @@ invalidates datasets, checkpoints, exports, and release evidence.
 
 ## Hybrid pipeline
 
-The historical pure-PPO attempt reached 2.98 million decisions with zero tier-one successes and remains negative evidence. The current observation-only teacher is qualified for fresh collection at environment fingerprint `17d8617fd92015dc5a00b5314558fc7c0ff957685b12966efa5253806463739b`: two disjoint 200-seed-per-tier validation gates scored `100/100/100/100/100/95%` and `100/99.5/99.5/100/100/94%`. These are training-process gates, not a final-test or neural-policy claim. Every earlier corpus, BC/DAgger checkpoint, PPO state, and teacher report has a different fingerprint and is historical-only.
+The historical pure-PPO attempt reached 2.98 million decisions with zero tier-one successes and remains negative evidence. After the 95/97/99% operative-speed curve and five-operative Ghostline threat pyramid were frozen, the recalibrated observation-only teacher passed two disjoint 100-seed-per-tier gates at `100/100/99/99/99/86%` and `100/100/99/99/99/89%`. The reports are [`teacher-fast-ops-validation-a-100.json`](../benchmarks/teacher/teacher-fast-ops-validation-a-100.json) and [`teacher-fast-ops-validation-b-100.json`](../benchmarks/teacher/teacher-fast-ops-validation-b-100.json), both bound to fingerprint `521c449a8bd9a540977a918f5b094dd3aeff44cc579a55f75e22a74bab20e129`. These are training-process gates, not a final-test or neural-policy claim. Every earlier corpus, checkpoint, and optimizer state remains historical-only.
 
-1. The deterministic teacher consumes only the public v2 observation. It uses the sticky objective selected by the simulation, a visible six-tile navigation look-ahead, projected-footprint collision/ray clearance, player-earned live/last-seen/quantized-audio threat records, explicit guard grade, cone exposure, action masks, and reserved pulse logic. Live confidence is exact, last-seen tactical pressure decays to zero at the public `0.51` memory floor, and audible cues create coarse escape pressure without inventing a viewing cone or hidden coordinate. It has no simulation object or hidden enemy state.
-   Tier 6 uses a validation-selected 3.5× directional-inertia scale. Two independent 200-seed validation slices improved from 87.5%/82.5% at the prior scale to 89.0%/90.0%, while mean damage fell; the setting changes only controller commitment, not observations or game rules.
+1. The deterministic teacher consumes only the public v2 observation. It uses the sticky objective selected by the simulation, a visible six-tile navigation look-ahead, projected-footprint collision/ray clearance, live facility-security telemetry, explicit guard grade, cone exposure, action masks, and reserved pulse logic. It has no simulation object or renderer-only state.
+   Tier 6 uses the validation-selected 1.8× directional-inertia scale. The setting changes only controller commitment, not observations or game rules.
 2. Teacher and DAgger episodes are stored as compressed, independently recoverable trajectory files with a manifest declaring the observation contract and seed range.
    The manifest also records a SHA-256 fingerprint of simulation, generation,
    environment, controller, configuration, and entity-contract sources. The
@@ -236,7 +237,7 @@ Checkpoints are selected only at held-out validation windows by worst-tier succe
 
 - Training: `0-999,999`
 - Validation: `1,000,000-1,049,999`
-- Final test: `2,000,000+`. Audit slices become immutable when an attempt begins. The 2M-6M slices are retired pre-final-mechanics history; `benchmarks/final-test-slices.json` explicitly reserves 7M for the selected frozen-distribution neural champion.
+- Final test: `2,000,000+`. Audit slices become immutable when an attempt begins. The 2M-7M slices are historical; the current champion consumed the locked 8M slice exactly once.
 
 Validation allocates six non-overlapping 8,000-seed tier blocks inside the reserved 50,000-seed range. Shared seed helpers enforce these bounds so curriculum validation and calibration cannot silently drift into another namespace.
 
@@ -253,7 +254,7 @@ and the lexicographic worst-tier-first selection tuple. The tuple ranks worst-ti
 success, Tier-6 success, lower damage, higher path efficiency, lower duration,
 then lower latency; final-test results never participate in checkpoint selection.
 
-Final evaluation uses 500 unseen seeds per tier and reports deterministic JSON, aggregate CSV, and episode CSV evidence with Wilson 95% intervals, failure reasons, damage, detections, duration, trace, optional data, path efficiency, inference latency, exact episode seeds, action-sequence hashes, and every cumulative reward component plus its verified total. The evaluator reconstructs that component map from the real Gymnasium terminal keys and rejects a sum mismatch. The report binds the checkpoint SHA-256 and current environment fingerprint. The evaluator atomically changes a declared `reserved_unopened` slice to `opened_locked` before scheduling an episode, then to `consumed` or `aborted_retired`; there is no force/reopen path. Required neural success is at least 95% on tiers 1-5 and at least 85% on tier 6. The selected checkpoint consumed the reserved 7M slice exactly once and passed all six thresholds; those results are frozen release evidence and cannot be reopened for selection.
+Final evaluation uses 500 unseen seeds per tier and reports deterministic JSON, aggregate CSV, and episode CSV evidence with Wilson 95% intervals, failure reasons, damage, detections, duration, trace, optional data, path efficiency, inference latency, exact episode seeds, action-sequence hashes, and every cumulative reward component plus its verified total. The evaluator reconstructs that component map from the real Gymnasium terminal keys and rejects a sum mismatch. The report binds the checkpoint SHA-256 and current environment fingerprint. The evaluator atomically changes a declared `reserved_unopened` slice to `opened_locked` before scheduling an episode, then to `consumed` or `aborted_retired`; there is no force/reopen path. Required neural success is at least 95% on tiers 1-5 and at least 85% on tier 6. The selected checkpoint consumed the reserved 8M slice exactly once and passed all six thresholds; those results are frozen release evidence and cannot be reopened for selection.
 
 ONNX export performs the locked 1,000-transition recurrent-action comparison and writes a sibling `.parity.json` report. The requested `--output` is always the canonical FP32 model. Optional dynamic-INT8 quantization writes a separate candidate, repeats the same deterministic recurrent comparison independently, and selects it only with zero action mismatches. A rejected or failed quantization attempt leaves FP32 as the safe deployment fallback. The report records both artifacts' byte sizes and SHA-256 hashes, their parity results, the INT8 size reduction, and the precision copied to `--deployment-output`; FP32 parity failure still rejects the export entirely.
 
@@ -266,16 +267,31 @@ read-only and has no code path that schedules or reopens final-test episodes.
 
 ## Current-fingerprint teacher qualification
 
-The final policy-only repair made projected runner-footprint clearance authoritative instead of treating a blocked coarse look-ahead cell as proof that a safe wall slide was impossible. It also made confidence-band semantics explicit, decayed stale moving-actor pressure to zero at the persistent-memory floor, decoded `RETURN` as recovery rather than maximum danger, and consumed the public guard-grade feature. Focused Tier-6 regressions `1,040,005`, `1,040,006`, and `1,040,011` now all extract with zero damage.
+The 2026-07-14 gameplay revision keeps every operative live in facility
+telemetry shared by human and policy controllers, raises chase speeds to
+95/97/99% of the runner, and uses a readable five-operative Tier-6 pyramid.
+The resulting environment fingerprint is
+`521c449a8bd9a540977a918f5b094dd3aeff44cc579a55f75e22a74bab20e129`.
 
-No teacher or environment source changed between these two disjoint validation gates:
+The observation-only teacher was recalibrated exclusively in the validation
+namespace. No teacher or environment source changed between these two
+disjoint gates:
 
-| Validation offset | Tier 1 | Tier 2 | Tier 3 | Tier 4 | Tier 5 | Tier 6 |
-|---:|---:|---:|---:|---:|---:|---:|
-| 6,000 | 200/200 | 200/200 | 200/200 | 200/200 | 200/200 | 190/200 (95.0%) |
-| 7,000 | 200/200 | 199/200 | 199/200 | 200/200 | 200/200 | 188/200 (94.0%) |
+| Gate | Tier 1 | Tier 2 | Tier 3 | Tier 4 | Tier 5 | Tier 6 |
+|---|---:|---:|---:|---:|---:|---:|
+| A | 100/100 | 100/100 | 99/100 | 99/100 | 99/100 | 86/100 |
+| B | 100/100 | 100/100 | 99/100 | 99/100 | 99/100 | 89/100 |
 
-Both gates exceed the teacher thresholds of 95% on tiers 1–5 and 85% on tier 6. Their machine-readable reports are [`teacher-current-validation-c-200.json`](../benchmarks/teacher/teacher-current-validation-c-200.json) and [`teacher-current-validation-d-200.json`](../benchmarks/teacher/teacher-current-validation-d-200.json). They use only the reserved validation namespace and carry the exact current fingerprint. Fresh training-only trajectory collection is now permitted after the repository-wide fingerprint freeze, but these reports do not authorize a final-test, neural acceptance, ONNX, or human-comparison claim. The earlier A/B reports are retained with an explicit superseded status because the final audit replaced a legacy `360` px entity-range decoder with the shared `390` px public perception constant before opening the C/D gates.
+Both gates exceed the teacher thresholds of 95% on tiers 1-5 and 85% on tier
+6. Their machine-readable reports are
+[`teacher-fast-ops-validation-a-100.json`](../benchmarks/teacher/teacher-fast-ops-validation-a-100.json)
+and
+[`teacher-fast-ops-validation-b-100.json`](../benchmarks/teacher/teacher-fast-ops-validation-b-100.json).
+They qualify training data collection only; they are not neural-policy or
+final-test claims. Collection produced 600 successful trajectories and 138,610
+transitions after six failed attempts were discarded. The untouched 8M
+final-test slice remains sealed until validation selects and freezes one neural
+checkpoint.
 
 ## Historical teacher audit series
 

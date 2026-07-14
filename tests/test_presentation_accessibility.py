@@ -403,12 +403,10 @@ def test_visible_security_cones_match_real_detection_contract(monkeypatch) -> No
     assert math.isclose(guard_contract["cosine"], math.cos(GUARD_VIEW_HALF_ANGLE))
 
 
-def test_hidden_guard_memory_freezes_instead_of_tracking_through_walls(monkeypatch) -> None:
+def test_security_telemetry_keeps_guard_position_live_through_walls(monkeypatch) -> None:
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
     monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
-    import pygame
-
-    from ghostline.presentation import BG, GhostlineRenderer
+    from ghostline.presentation import GhostlineRenderer
 
     sim = GhostlineSimulation(seed=2_000_004, tier=6)
     guard = sim.level.guards[0]
@@ -418,33 +416,44 @@ def test_hidden_guard_memory_freezes_instead_of_tracking_through_walls(monkeypat
     monkeypatch.setattr(sim, "player_can_see", lambda _position, **_kwargs: visible)
     renderer._update_security_memory()
     memory = renderer._security_memory[("guard", guard.guard_id)]
-    remembered_position = memory.position.copy()
-    remembered_tick = memory.last_seen_tick
-
     visible = False
     sim.elapsed_ticks += 180
     guard.position += np.asarray((96.0, 64.0), dtype=np.float32)
     guard.facing += 1.25
     renderer._update_security_memory()
     memory = renderer._security_memory[("guard", guard.guard_id)]
-    assert np.array_equal(memory.position, remembered_position)
-    assert memory.last_seen_tick == remembered_tick
-
-    renderer.logical.fill(BG)
-    renderer.camera = sim.player.copy()
-    renderer._draw_security_memories()
-    remembered_screen = renderer._world(remembered_position)
-    patch = np.transpose(pygame.surfarray.array3d(renderer.logical), (1, 0, 2))[
-        remembered_screen[1] - 28 : remembered_screen[1] + 40,
-        remembered_screen[0] - 40 : remembered_screen[0] + 40,
-    ]
-    assert patch.size and np.any(patch != np.asarray(BG, dtype=np.uint8))
+    assert np.array_equal(memory.position, guard.position)
+    assert memory.last_seen_tick == sim.elapsed_ticks
     renderer.reset_for_sim(GhostlineSimulation(seed=2_000_005, tier=6))
-    assert renderer._security_memory == {}
+    assert renderer._security_memory
+    assert all(memory.last_seen_tick == 0 for memory in renderer._security_memory.values())
     renderer.close()
 
 
-def test_audible_guard_replaces_stale_ghost_with_grade_and_status_cue(monkeypatch) -> None:
+def test_dash_noise_uses_one_bounded_presentation_wave(monkeypatch) -> None:
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+    from ghostline.presentation import GhostlineRenderer
+
+    sim = GhostlineSimulation(seed=91, tier=1)
+    renderer = GhostlineRenderer(sim, visible=False)
+    events = [SimEvent("dash_noise", tuple(sim.player), 185.0) for _ in range(120)]
+    renderer.ingest_events(events)
+
+    assert sum(effect.kind == "dash_noise" for effect in renderer.effects) == 1
+    assert len(renderer.particles) <= 72
+    renderer.close()
+
+
+def test_browser_presentation_fills_intermediate_canvas_sizes() -> None:
+    from ghostline.presentation import _presentation_scaled_size
+
+    assert _presentation_scaled_size((927, 521), web_runtime=True) == (927, 521)
+    assert _presentation_scaled_size((927, 521), web_runtime=False) == (640, 360)
+    assert _presentation_scaled_size((1920, 1080), web_runtime=False) == (1920, 1080)
+
+
+def test_occluded_guard_uses_live_sprite_instead_of_stale_ghost(monkeypatch) -> None:
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
     monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
 
@@ -463,30 +472,17 @@ def test_audible_guard_replaces_stale_ghost_with_grade_and_status_cue(monkeypatc
 
     visible = False
     guard.mode = GuardMode.CHASE
-    guard.velocity[:] = (48.0, 0.0)
-    memory_sprites: list[int] = []
-    remembered_glyphs: list[str] = []
-    labels: list[str] = []
+    guard.position += np.asarray((48.0, 24.0), dtype=np.float32)
+    drawn_positions: list[np.ndarray] = []
     monkeypatch.setattr(
         renderer,
-        "_guard_atlas_sprite",
-        lambda *_args, **_kwargs: memory_sprites.append(guard.guard_id),
+        "_draw_guard",
+        lambda position, *_args, **_kwargs: drawn_positions.append(position.copy()),
     )
-    monkeypatch.setattr(
-        renderer,
-        "_draw_threat_glyph",
-        lambda _surface, kind, _center, _color: remembered_glyphs.append(kind),
-    )
-    monkeypatch.setattr(renderer, "_text", lambda value, *_args, **_kwargs: labels.append(str(value)))
+    renderer._draw_security()
 
-    renderer._draw_security_memories()
-    renderer._draw_alert_indicators()
-
-    assert renderer._memory_superseded_by_audio(("guard", guard.guard_id))
-    assert memory_sprites == []
-    assert "guard" not in remembered_glyphs
-    assert remembered_glyphs == ["sound"]
-    assert "STEPS II / CHASE" in labels
+    assert len(drawn_positions) == 1
+    assert np.array_equal(drawn_positions[0], guard.position)
     renderer.close()
 
 

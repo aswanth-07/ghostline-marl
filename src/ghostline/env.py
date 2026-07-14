@@ -411,7 +411,7 @@ class GhostlineEnv(gym.Env[dict[str, np.ndarray], int]):
         percepts: list[PerceivedEntity] = []
         for guard in sim.level.guards:
             key = ("guard", guard.guard_id)
-            if sim.player_can_see(guard.position):
+            if sim.player_can_track_security(guard.position):
                 percepts.append(
                     PerceivedEntity(
                         0,
@@ -447,7 +447,7 @@ class GhostlineEnv(gym.Env[dict[str, np.ndarray], int]):
 
         for camera in sim.level.cameras:
             key = ("camera", camera.camera_id)
-            if sim.player_can_see(camera.position):
+            if sim.player_can_track_security(camera.position):
                 percepts.append(
                     PerceivedEntity(
                         1,
@@ -465,7 +465,7 @@ class GhostlineEnv(gym.Env[dict[str, np.ndarray], int]):
 
         for drone in sim.drones:
             key = ("drone", drone.drone_id)
-            if sim.player_can_see(drone.position):
+            if sim.player_can_track_security(drone.position):
                 percepts.append(
                     PerceivedEntity(
                         2,

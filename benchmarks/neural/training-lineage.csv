@@ -1,10 +1,10 @@
 stage,kind,validation_offset,episodes_per_tier,tier_1,tier_2,tier_3,tier_4,tier_5,tier_6,worst_tier,meets_thresholds,checkpoint_sha256
-BC GRU-256,equal-budget architecture,3000,100,0.73,0.77,0.84,0.82,0.65,0.35,0.35,false,2af8c4896720d681bcf9130c9403595c9fa8b030f5febedaf7fab516722cafe6
-BC GRU-384,equal-budget architecture,3000,100,0.91,0.85,0.92,0.80,0.72,0.41,0.41,false,714ce2ad1855850eb8ae9aae5f302d230d9655634effa861dd092820901ca96f
-DAgger round 1,sequential recovery,3200,100,0.93,0.94,0.95,0.97,0.92,0.81,0.81,false,16035e3dd0bb259490e5f9d2a4b27ed13c5df75c112a90c7e7ffba6e532e13c5
-DAgger round 2,sequential recovery,3400,100,0.95,0.94,1.00,0.92,0.90,0.91,0.90,false,ad0b65d9c4f4859c8324a14f8461eeab8dae0f5f594103bfcbe39415912561e9
-DAgger round 3,sequential recovery,3600,100,0.97,0.96,1.00,0.94,0.97,0.87,0.87,false,0ef80ee967a1118a1ca6a212dd54ff14164c433ddfc25e015a236993c8b93e8d
-Targeted DAgger,frozen champion selection,4000,100,0.98,1.00,1.00,0.99,0.95,0.94,0.94,true,458aa28d14b0829481a56c96dcc97a9ab9af2c463c15beef94d4c3e86ab59deb
-Confirmation A,frozen confirmation,7400,200,0.995,0.985,0.985,0.975,0.970,0.915,0.915,true,458aa28d14b0829481a56c96dcc97a9ab9af2c463c15beef94d4c3e86ab59deb
-Confirmation B,frozen confirmation,7600,200,0.980,1.000,0.990,0.975,0.965,0.945,0.945,true,458aa28d14b0829481a56c96dcc97a9ab9af2c463c15beef94d4c3e86ab59deb
-Final 7M,untouched final test,7000000,500,0.980,0.982,0.992,0.970,0.958,0.948,0.948,true,458aa28d14b0829481a56c96dcc97a9ab9af2c463c15beef94d4c3e86ab59deb
+Initial BC,current-fingerprint clone,6000,50,1.00,0.98,0.98,1.00,0.88,0.86,0.86,false,526de873a0d0758069494b927cbe6bfe406208537e11408d0662a40b20fa51b9
+DAgger round 1,sequential recovery,6100,50,1.00,0.96,0.98,0.98,0.96,0.86,0.86,true,cc04bce7b13f5826113e2b1835cd84dddd096b58f9210990ca3b849adb75bcc1
+DAgger round 2,sequential recovery,6600,50,0.96,1.00,0.96,0.98,1.00,0.86,0.86,true,5caf1b5f3cce7530ebb6497ee886120238037033f9f56752742e768be885b83c
+DAgger round 3,sequential recovery,7100,50,1.00,1.00,0.92,0.94,0.96,0.92,0.92,false,21d054e6a848b74aa200a7dcc0af09a23cbb56e83fbe31347763d721166fa099
+DAgger round 4,sequential recovery,7100,50,1.00,1.00,0.96,0.98,0.98,0.90,0.90,true,a49db3e87a183026a924964bac27f2287e6da8f2171b79b82adcb56ddc74c42f
+Consolidated candidate,low-rate replay consolidation,7100,50,1.00,1.00,0.98,1.00,0.98,0.94,0.94,true,76baa30af55cdaa2e71bb6ba06672bd9203455552358017505685827240b2e47
+Confirmation A,frozen confirmation,6700,100,0.99,0.99,0.96,0.99,0.99,0.85,0.85,true,76baa30af55cdaa2e71bb6ba06672bd9203455552358017505685827240b2e47
+Confirmation B,frozen confirmation,6900,100,1.00,1.00,0.96,0.99,0.99,0.86,0.86,true,76baa30af55cdaa2e71bb6ba06672bd9203455552358017505685827240b2e47
+Final 8M,untouched final test,8000000,500,0.998,1.000,0.964,0.980,0.990,0.896,0.896,true,76baa30af55cdaa2e71bb6ba06672bd9203455552358017505685827240b2e47

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { GhostlinePolicyBridge } from "../static/policy-bridge.mjs";
+import { GhostlinePolicyBridge, requestedExecutionProvider } from "../static/policy-bridge.mjs";
 
 
 class Tensor {
@@ -20,6 +20,14 @@ globalThis.CustomEvent = class {
   }
 };
 globalThis.dispatchEvent = () => true;
+
+
+test("WASM is the measured default while WebGPU remains an explicit comparison path", () => {
+  assert.equal(requestedExecutionProvider(""), "wasm");
+  assert.equal(requestedExecutionProvider("?embed=1"), "wasm");
+  assert.equal(requestedExecutionProvider("?backend=webgpu"), "webgpu");
+  assert.equal(requestedExecutionProvider("?backend=wasm"), "wasm");
+});
 
 
 test("masked action selection and recurrent state persist", async () => {
@@ -53,8 +61,11 @@ test("masked action selection and recurrent state persist", async () => {
   bridge.state = "ready";
 
   assert.equal(bridge.step(JSON.stringify({ ego: [0, 0], action_mask: [1, 0, 1, 1] })), 0);
+  assert.equal(bridge.hasCompletedAction(0), false);
   while (bridge.busy) await new Promise((resolve) => setTimeout(resolve, 1));
   assert.equal(bridge.lastAction, 2, "illegal logit 1 must be ignored");
+  assert.equal(bridge.hasCompletedAction(0), true);
+  assert.equal(bridge.hasCompletedAction(bridge.inferenceCount), false);
   assert.equal(bridge.currentAction(), 2);
   assert.deepEqual(Array.from(bridge.hidden.data), [1, 2, 3, 4]);
 });

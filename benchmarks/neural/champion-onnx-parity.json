@@ -1,19 +1,19 @@
 {
   "report_version": 2,
   "checkpoint": "models\\ghostline-policy.pt",
-  "checkpoint_sha256": "458aa28d14b0829481a56c96dcc97a9ab9af2c463c15beef94d4c3e86ab59deb",
+  "checkpoint_sha256": "76baa30af55cdaa2e71bb6ba06672bd9203455552358017505685827240b2e47",
   "onnx": "models\\ghostline-policy.fp32.onnx",
   "parity_samples": 1000,
   "mismatches": 0,
   "recurrent_size": 384,
   "observation_contract": "GhostlineEnv-v2",
-  "environment_fingerprint": "17d8617fd92015dc5a00b5314558fc7c0ff957685b12966efa5253806463739b",
+  "environment_fingerprint": "521c449a8bd9a540977a918f5b094dd3aeff44cc579a55f75e22a74bab20e129",
   "quantization": "dynamic-int8",
   "artifacts": {
     "fp32": {
       "path": "models\\ghostline-policy.fp32.onnx",
       "bytes": 5831535,
-      "sha256": "cd90659286310f75766fe8ab6dc1dd22f36cb40e0e72ca7c0b9ac9a00a694b14",
+      "sha256": "d27ff0aed1f9578b21fd490aa9071abc417c8b1a3e662832e988a96bbc7c031a",
       "precision": "fp32",
       "parity": {
         "samples": 1000,
@@ -35,12 +35,12 @@
     "dynamic_int8": {
       "path": "models\\ghostline-policy.fp32.int8.onnx",
       "bytes": 4179227,
-      "sha256": "1489b92a937ed6748cbb5edc7f65eae6d8279a49c52be5fa49d1a1fcc537d3f6",
+      "sha256": "648979f5c2347f5b42336d362f040e991a77db1c76a027f862263e3f7ad26588",
       "precision": "dynamic-int8",
       "parity": {
         "samples": 1000,
-        "action_mismatches": 3,
-        "first_mismatch_index": 575,
+        "action_mismatches": 5,
+        "first_mismatch_index": 279,
         "passed": false,
         "seed_start": 2000000,
         "sequence_horizon": 128,
@@ -62,7 +62,7 @@
   "deployment_copy": {
     "path": "models\\ghostline-policy.onnx",
     "bytes": 5831535,
-    "sha256": "cd90659286310f75766fe8ab6dc1dd22f36cb40e0e72ca7c0b9ac9a00a694b14",
+    "sha256": "d27ff0aed1f9578b21fd490aa9071abc417c8b1a3e662832e988a96bbc7c031a",
     "precision": "fp32"
   },
   "status": "passed"

@@ -24,7 +24,7 @@ from ghostline.simulation import GhostlineSimulation
 from ghostline.types import Action
 
 
-DEFAULT_RELEASE_SEED_START = 7_000_000
+DEFAULT_RELEASE_SEED_START = 8_000_000
 DEFAULT_SLICE_MANIFEST = Path("benchmarks/final-test-slices.json")
 FINAL_REPORT_CONTRACT = "ghostline-final-evaluation-v2"
 FINAL_SLICE_MANIFEST_CONTRACT = "ghostline-final-test-slices-v1"

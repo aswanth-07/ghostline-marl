@@ -1,5 +1,5 @@
 {
-  "environment_fingerprint": "17d8617fd92015dc5a00b5314558fc7c0ff957685b12966efa5253806463739b",
+  "environment_fingerprint": "521c449a8bd9a540977a918f5b094dd3aeff44cc579a55f75e22a74bab20e129",
   "manifest_contract": "ghostline-final-test-slices-v1",
   "observation_contract": "GhostlineEnv-v2",
   "policy": "A final-test slice is a one-way door. The evaluator locks it before the first episode and marks it consumed or aborted-retired after any attempted run. There is no force/reopen path.",
@@ -56,6 +56,43 @@
         ]
       },
       "seed_start": 7000000,
+      "status": "consumed",
+      "tiers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    },
+    {
+      "environment_fingerprint": "521c449a8bd9a540977a918f5b094dd3aeff44cc579a55f75e22a74bab20e129",
+      "episodes_per_tier": 500,
+      "note": "Reserved for the selected faster-operative neural champion only. Do not run before checkpoint selection is complete.",
+      "policy_kind": "neural",
+      "result": {
+        "audit_id": "acdf787576f9d9ff1e3916a4611e6d4f55c9523ba468a8a72c7ef6b8bfa60151",
+        "meets_acceptance_thresholds": true,
+        "outputs": [
+          {
+            "bytes": 3033548,
+            "path": "benchmarks/neural/champion-final-8m-500.json",
+            "sha256": "715aaf6205b2af09cee62441b4d53a9baedf63b56265f78e77fedd4724f55d0d"
+          },
+          {
+            "bytes": 2157,
+            "path": "benchmarks/neural/champion-final-8m-500.csv",
+            "sha256": "bd38a2105e852458136756efaeeb2a837bbfedf9e53f8cd51770ddefccf74817"
+          },
+          {
+            "bytes": 1774962,
+            "path": "benchmarks/neural/champion-final-8m-500.episodes.csv",
+            "sha256": "d43ea5e021397a72d0202f1bc2834b20bbd958f804deca97982877b39b74de09"
+          }
+        ]
+      },
+      "seed_start": 8000000,
       "status": "consumed",
       "tiers": [
         1,
