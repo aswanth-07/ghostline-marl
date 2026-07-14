@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import importlib.util
 import json
@@ -191,6 +192,77 @@ def test_browser_policy_prefetch_uses_completed_action_without_duplicate_inferen
     action, hidden = policy.act(observation)
     assert (action, hidden) == (17, None)
     assert Host.ghostlinePolicy.steps == 1
+
+
+def test_agent_handoff_prefetches_a_real_decision_before_claiming_visible_control() -> None:
+    observation = {
+        "ego": np.zeros(24, dtype=np.float32),
+        "objective": np.zeros(8, dtype=np.float32),
+        "local_grid": np.zeros((8, 15, 15), dtype=np.float32),
+        "targets": np.zeros((5, 10), dtype=np.float32),
+        "target_mask": np.zeros(5, dtype=np.int8),
+        "entities": np.zeros((12, 13), dtype=np.float32),
+        "entity_mask": np.zeros(12, dtype=np.int8),
+        "rays": np.zeros((24, 3), dtype=np.float32),
+        "action_mask": np.ones(36, dtype=np.int8),
+    }
+
+    class Bridge:
+        state = "ready"
+        payload = None
+
+        def reset(self) -> None:
+            pass
+
+        def step(self, payload: str) -> int:
+            self.payload = json.loads(payload)
+            return 0
+
+    class Shell:
+        mode = None
+        policy_state = None
+        notice = None
+
+        def setControlMode(self, mode: str) -> None:
+            self.mode = mode
+
+        def setPolicyState(self, state: str, message: str) -> None:
+            self.policy_state = (state, message)
+
+        def showNotice(self, message: str, kind: str) -> None:
+            self.notice = (message, kind)
+
+    class Environment:
+        def _observation(self):
+            return observation
+
+    class App:
+        state = "main"
+        selected_tier = 1
+        seed = None
+        learned_policy = None
+        agent_env = None
+        _agent_tick = 0
+
+        def _start_mission(self, *, agent: bool) -> None:
+            assert agent is True
+            self.agent_env = Environment()
+            self.state = "lab_play"
+
+    class Host:
+        ghostlinePolicy = Bridge()
+        ghostlineShell = Shell()
+
+    runtime = web_runtime.GhostlineWebRuntime(App(), host=Host())
+    asyncio.run(runtime._enable_agent(tier=2, seed=123))
+
+    assert runtime.control_mode == "agent"
+    assert runtime.policy.prefetched is True
+    assert runtime.app.learned_policy is runtime.policy
+    assert Host.ghostlinePolicy.payload["ego"] == [0.0] * 24
+    assert Host.ghostlineShell.mode == "handoff"
+    assert Host.ghostlineShell.policy_state[0] == "loading"
+    assert "first policy decision" in Host.ghostlineShell.notice[0]
 
 
 def test_mixed_control_run_is_marked_hybrid_and_releases_agent_wrapper() -> None:
@@ -500,6 +572,11 @@ def test_web_shell_and_policy_bridge_include_release_behaviors() -> None:
     assert 'type: "run-complete"' in embed
     assert 'query.get("autoplay")' in shell
     assert 'queue("agent-ready")' in shell
+    assert 'setControlMode("handoff")' in shell
+    assert 'document.body.dataset.control === "handoff"' in shell
+    assert "CANCEL HANDOFF" in shell
+    assert 'if (agentActivationPending) setBootState("running")' in shell
+    assert 'button.textContent = "ENTER FACILITY"' in shell
     assert "await ghostlinePolicy.load()" in shell
     assert 'kind == "agent-ready"' in (
         ROOT / "web" / "runtime.py"

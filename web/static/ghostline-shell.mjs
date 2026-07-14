@@ -70,6 +70,7 @@ function setBootState(state, message = "") {
     gameReady = true;
     title.textContent = "THE LINE IS OPEN";
     copy.textContent = "Click to unlock audio and route keyboard input to the game.";
+    button.textContent = "ENTER FACILITY";
     button.hidden = false;
     overlay.hidden = false;
     maybeAutoplay();
@@ -113,11 +114,20 @@ function setPolicyState(state, message) {
 function setControlMode(mode) {
   document.body.dataset.control = mode;
   const chip = $("control-chip");
-  if (chip) chip.textContent = mode === "agent" ? "AGENT CONTROL" : "HUMAN CONTROL";
+  if (chip) {
+    chip.textContent = mode === "agent"
+      ? "AGENT CONTROL"
+      : mode === "handoff"
+        ? "AGENT HANDOFF"
+        : "HUMAN CONTROL";
+  }
   const takeover = $("agent-control");
   const manual = $("human-control");
-  if (takeover) takeover.hidden = mode === "agent";
-  if (manual) manual.hidden = mode !== "agent";
+  if (takeover) takeover.hidden = mode !== "human";
+  if (manual) {
+    manual.hidden = mode === "human";
+    manual.textContent = mode === "handoff" ? "CANCEL HANDOFF" : "TAKE CONTROL";
+  }
 }
 
 function updateMetrics(serialized) {
@@ -161,13 +171,36 @@ function maybeAutoplay() {
 async function requestAgentControl() {
   if (agentActivationPending) return;
   agentActivationPending = true;
+  if (gameReady) setBootState("running");
+  else setBootState("booting", "Initializing the game before agent handoff…");
+  queue("focus");
+  setControlMode("handoff");
+  setPolicyState("loading", "LOADING AGENT 0%");
+  showNotice("Loading the recurrent policy. You can cancel the handoff at any time.", "info");
   try {
     const loaded = await ghostlinePolicy.load();
-    if (loaded) queue("agent-ready");
-    else showNotice("The policy could not load. Continuing in human mode.", "error");
-  } finally {
+    if (!agentActivationPending) return;
+    if (loaded) {
+      setPolicyState("loading", "CONNECTING AGENT");
+      queue("agent-ready");
+    } else {
+      agentActivationPending = false;
+      setControlMode("human");
+      showNotice("The policy could not load. Continuing in human mode.", "error");
+    }
+  } catch (error) {
     agentActivationPending = false;
+    setControlMode("human");
+    showNotice(`The policy could not load: ${error.message}`, "error");
   }
+}
+
+function restoreHumanControl() {
+  const cancelledHandoff = agentActivationPending || document.body.dataset.control === "handoff";
+  agentActivationPending = false;
+  setControlMode("human");
+  queue("human");
+  if (cancelledHandoff) showNotice("Agent handoff cancelled. Manual control remains active.", "info");
 }
 
 function maybePublishEmbedReady() {
@@ -194,7 +227,9 @@ globalThis.ghostlinePolicy = ghostlinePolicy;
 globalThis.ghostlineShell = {
   consumeCommand: () => commands.length ? JSON.stringify(commands.shift()) : null,
   markGameReady: () => {
-    setBootState("ready");
+    gameReady = true;
+    if (agentActivationPending) setBootState("running");
+    else setBootState("ready");
     maybePublishEmbedReady();
   },
   setBootState,
@@ -206,7 +241,7 @@ globalThis.ghostlineShell = {
 
 $("play-selected")?.addEventListener("click", () => queue("launch-human"));
 $("agent-control")?.addEventListener("click", () => { void requestAgentControl(); });
-$("human-control")?.addEventListener("click", () => queue("human"));
+$("human-control")?.addEventListener("click", restoreHumanControl);
 $("fullscreen-control")?.addEventListener("click", toggleFullscreen);
 $("focus-control")?.addEventListener("click", () => $("canvas")?.focus());
 $("focus-game")?.addEventListener("click", () => {
@@ -237,11 +272,14 @@ globalThis.addEventListener("ghostline:policy-state", (event) => {
   if (state === "loading") setPolicyState(state, `LOADING AGENT ${percentage}%`);
   else if (state === "ready") {
     policyFailureQueued = false;
-    setPolicyState(state, `AGENT ONLINE // ${String(backend).toUpperCase()}`);
+    if (document.body.dataset.control === "handoff") setPolicyState("loading", "CONNECTING AGENT");
+    else setPolicyState(state, `AGENT ONLINE // ${String(backend).toUpperCase()}`);
   } else if (state === "unavailable") {
     setPolicyState(state, `AGENT UNAVAILABLE${error ? " // RETRY" : ""}`);
-    if (document.body.dataset.control === "agent" && !policyFailureQueued) {
+    if (["agent", "handoff"].includes(document.body.dataset.control) && !policyFailureQueued) {
       policyFailureQueued = true;
+      agentActivationPending = false;
+      setControlMode("human");
       queue("policy-failed");
     }
   }
@@ -250,6 +288,12 @@ globalThis.addEventListener("ghostline:policy-inference", (event) => {
   const latency = Number(event.detail.average_latency_ms || 0);
   $("policy-latency").textContent = `${latency.toFixed(1)} ms`;
   $("policy-backend").textContent = String(event.detail.backend || "—").toUpperCase();
+  if (document.body.dataset.control === "handoff") {
+    agentActivationPending = false;
+    setControlMode("agent");
+    setPolicyState("ready", `AGENT ONLINE // ${String(event.detail.backend || "—").toUpperCase()}`);
+    showNotice("Agent takeover engaged. Use TAKE CONTROL at any time.", "success");
+  }
 });
 
 renderComparison();

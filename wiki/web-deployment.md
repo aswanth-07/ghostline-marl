@@ -28,6 +28,11 @@ telemetry, and matched-run cards. At narrow widths the lab moves below the game
 instead of being removed. `autoplay=0` never bypasses Chrome's user-activation
 gate and never loads the policy without an explicit takeover.
 
+Because the portfolio and game are separate Vercel origins, the iframe must
+include `webgpu` in its Permissions Policy `allow` attribute. Chrome can then
+use the preferred WebGPU execution provider; unsupported or disabled clients
+still fall back to ONNX Runtime Web WASM.
+
 When embedded in a frame, Ghostline sends these display-only messages to the
 parent after resolving the parent origin from `document.referrer` and Chrome's
 `ancestorOrigins`. It does not use a wildcard target origin and suppresses the
@@ -67,6 +72,16 @@ JavaScript owns the asynchronous ONNX session load and enqueues a plain
 `agent-ready` command only after initialization succeeds. Python performs the
 synchronous environment handoff from that command; it never awaits a JavaScript
 Promise across the Pygbag boundary.
+
+Takeover uses an explicit three-state handshake: `HUMAN CONTROL`, `AGENT
+HANDOFF`, and `AGENT CONTROL`. The shell mirrors model-download progress,
+provides a cancellable handoff, and does not claim agent control until the
+browser returns the first recurrent inference. The Python adapter primes that
+first player-equivalent observation immediately after attaching the policy
+environment, so a successful handoff always has an actionable decision behind
+its UI state. The takeover click also satisfies the launch/focus gesture: if
+the Python canvas is still starting, the shell enters it automatically when it
+becomes ready instead of leaving the policy active behind a second launch gate.
 
 ## Build commands
 

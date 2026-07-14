@@ -284,9 +284,17 @@ class GhostlineWebRuntime:
             self.app._start_mission(agent=True)
             self.run_mode = "agent"
         self.control_mode = "agent"
-        self.host.ghostlineShell.setControlMode("agent")
-        self.host.ghostlineShell.setPolicyState("ready", "Agent online")
-        self.host.ghostlineShell.showNotice("Agent takeover engaged. Use TAKE CONTROL at any time.", "success")
+        # Do not claim visible control until the browser has produced a real
+        # first decision. Cold WebGPU/WASM initialization can take long enough
+        # that an immediate "AGENT CONTROL" label looks like a dead button.
+        self.host.ghostlineShell.setControlMode("handoff")
+        self.host.ghostlineShell.setPolicyState("loading", "Agent acquiring first action…")
+        self.host.ghostlineShell.showNotice(
+            "Agent connected. Acquiring its first policy decision…",
+            "info",
+        )
+        self.policy.prefetch(self.app.agent_env._observation())
+        self._last_prefetch_tick = int(self.app._agent_tick)
 
     def _mark_hybrid_run(self) -> None:
         """Exclude mixed-control runs from pure human/agent comparisons."""
