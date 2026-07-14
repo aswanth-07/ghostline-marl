@@ -1,0 +1,5 @@
+# Immutable evaluation artifacts are byte-addressed by the consumed-slice
+# ledger. They must survive Windows checkouts without CRLF conversion.
+benchmarks/neural/champion-final-8m-500.json -text
+benchmarks/neural/champion-final-8m-500.csv -text
+benchmarks/neural/champion-final-8m-500.episodes.csv -text

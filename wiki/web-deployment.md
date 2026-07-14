@@ -194,7 +194,7 @@ Verify in Chrome DevTools:
 
 1. Loading progress is readable, the audio-authorization gate works, and `FOCUS GAME` restores keyboard input.
 2. WASD, Shift, Space, Escape, restart, menus, fullscreen, tier selection, and deterministic seed selection work.
-3. `AGENT TAKEOVER` continues the current mission, updates backend/latency telemetry, and `TAKE CONTROL` returns the same mission to the player.
+3. `AGENT TAKEOVER` continues an active human mission on its exact seed, updates backend/latency telemetry, and `TAKE CONTROL` returns the same mission to the player. From the menu or `autoplay=1`, a blank seed is pinned to the selected tier's disclosed passing validation showcase so the first Watch Agent view is representative rather than a random failure-tail sample.
 4. Complete human and agent runs on an identical tier/seed and confirm the matched cards appear; then use a different seed and confirm comparison is explicitly refused.
 5. Disable WebGPU and confirm WASM fallback; block the model request and confirm human-only fallback. Also interrupt a live inference request and confirm action zero followed by manual-control restoration and a `hybrid` run label.
 6. Use the Network panel with cache disabled to record usable-start time and transfer size. Use Performance for 60 FPS and ten policy calls per second.

@@ -107,6 +107,25 @@ class ScreenEffect:
 
 
 @dataclass(frozen=True)
+class NativeTextCommand:
+    """One glyph run redrawn at the actual output resolution.
+
+    The world deliberately remains a 640x360 pixel-art canvas. Text does not:
+    rasterizing glyphs into that canvas made a 1080p/fullscreen window enlarge
+    the same low-resolution pixels. Keeping logical coordinates while drawing
+    the final glyph run after world scaling preserves the exact field of view
+    and gives every HUD, menu, caption, and Agent Lab label native-resolution
+    edges.
+    """
+
+    text: str
+    x: float
+    y: float
+    design_size: int
+    color: tuple[int, int, int]
+
+
+@dataclass(frozen=True)
 class AtlasRegion:
     rect: tuple[int, int, int, int]
     maximum_world_width: int
@@ -306,6 +325,17 @@ class GhostlineRenderer:
             )
             for scale in (1.0, 1.25, 1.5)
         }
+        self._font_design_sizes = {
+            id(self.font_small): 10,
+            id(self.font): 13,
+            id(self.font_large): 26,
+            id(self.font_title): 46,
+        }
+        for scale, (small, regular) in self._hud_fonts.items():
+            self._font_design_sizes[id(small)] = int(round(10 * scale))
+            self._font_design_sizes[id(regular)] = int(round(13 * scale))
+        self._native_text_commands: list[NativeTextCommand] = []
+        self._native_font_cache: dict[int, pygame.font.Font] = {}
         self._clock = pygame.time.Clock()
         self._time = 0.0
         self._environment_atlas = self._load_environment_atlas()
@@ -531,6 +561,7 @@ class GhostlineRenderer:
         self._update_presentation_state(dt)
         self._ensure_level_cache()
         self._update_security_memory()
+        self._native_text_commands.clear()
         self.logical.fill(BG)
         self._draw_floor()
         self._draw_security_cones()
@@ -566,6 +597,7 @@ class GhostlineRenderer:
         return_array: bool = False,
     ) -> np.ndarray | bool:
         self._time += self._clock.tick(60) / 1000.0
+        self._native_text_commands.clear()
         self.logical.fill(BG)
         self._draw_menu_backdrop(title)
         self._text(title, 38, 48, self.font_title, INK)
@@ -623,6 +655,7 @@ class GhostlineRenderer:
         target_size = self.window.get_size()
         scaled_size = _presentation_scaled_size(target_size)
         scaled = pygame.transform.scale(self.logical, scaled_size)
+        self._draw_native_text(scaled, scaled_size)
         self.window.fill((1, 3, 5))
         destination = ((target_size[0] - scaled_size[0]) // 2, (target_size[1] - scaled_size[1]) // 2)
         self.window.blit(scaled, destination)
@@ -1172,8 +1205,9 @@ class GhostlineRenderer:
                 cause = {"eye": "EYE", "sound": "SOUND", "radio": "RADIO"}.get(guard.stimulus, "CHECK")
                 cause_color = RED if guard.stimulus == "eye" else (CYAN if guard.stimulus == "sound" else VIOLET)
                 width = self.font_small.size(cause)[0] + 6
-                pygame.draw.rect(self.logical, (4, 8, 12), (sx - width // 2, sy - 47, width, 10), border_radius=2)
-                self._text(cause, sx - width // 2 + 3, sy - 46, self.font_small, cause_color)
+                cause_y = sy - 47 if sy - 47 >= 116 else sy + 26
+                pygame.draw.rect(self.logical, (4, 8, 12), (sx - width // 2, cause_y, width, 10), border_radius=2)
+                self._text(cause, sx - width // 2 + 3, cause_y + 1, self.font_small, cause_color)
         for drone in self.sim.drones:
             if not self._visible_from_player(drone.position):
                 continue
@@ -1385,7 +1419,8 @@ class GhostlineRenderer:
             self.logical.blit(sprite, (sx - sprite.get_width() // 2, sy - 17))
         if not calm:
             symbol = "!" if mode == GuardMode.CHASE else "?"
-            self._text(symbol, sx - 3, sy - 22, self.font, RED if symbol == "!" else AMBER)
+            symbol_y = sy - 22 if sy - 22 >= 116 else sy + 48
+            self._text(symbol, sx - 3, symbol_y, self.font, RED if symbol == "!" else AMBER)
         grade_color = (142, 166, 171) if grade == GuardGrade.STANDARD else (AMBER if grade == GuardGrade.INTERCEPTOR else RED)
         grade_label = ("I", "II", "III")[int(grade)]
         label_width = self.font_small.size(grade_label)[0]
@@ -1404,7 +1439,8 @@ class GhostlineRenderer:
             pygame.draw.arc(self.logical, cue_color, (sx - 18, sy - 18, 36, 36), -math.pi / 2, -math.pi / 2 + math.tau * progress, 3)
             player_screen = self._world(self.sim.player)
             pygame.draw.line(self.logical, (*cue_color, 90), (sx, sy), player_screen, 1)
-            self._text("STRIKE", sx - 18, sy - 34, self.font_small, cue_color)
+            strike_y = sy - 34 if sy - 34 >= 116 else sy + 39
+            self._text("STRIKE", sx - 18, strike_y, self.font_small, cue_color)
 
     def _draw_player(self) -> None:
         sx, sy = self._world(self.sim.player)
@@ -1585,6 +1621,9 @@ class GhostlineRenderer:
             label_width = self.font_small.size(label)[0]
             label_x = int(np.clip(tip[0] - label_width / 2, 4, LOGICAL_SIZE[0] - label_width - 4))
             label_y = int(np.clip(tip[1] + (9 if direction[1] <= 0.7 else -18), 68, 340))
+            detection_left = (LOGICAL_SIZE[0] - 210) // 2
+            if label_y < 91 and label_x + label_width >= detection_left and label_x <= detection_left + 210:
+                label_y = 96
             self._text(label, label_x, label_y, self.font_small, color)
 
     def _draw_detection_status(self) -> None:
@@ -1732,9 +1771,11 @@ class GhostlineRenderer:
             self._text(self.banner_text, 320 - width // 2 + 18, y + 7, self.font, INK)
         elif self.room_label_life > 0.0:
             width = self.font_small.size(self.room_label)[0] + 20
-            pygame.draw.rect(self.logical, (4, 10, 14), (320 - width // 2, 76, width, 18), border_radius=2)
-            pygame.draw.rect(self.logical, MUTED, (320 - width // 2, 76, width, 18), 1, border_radius=2)
-            self._text(self.room_label, 320 - width // 2 + 10, 80, self.font_small, MUTED)
+            # Detection owns y=70..88. The old room tag sat directly beneath
+            # that rectangle and its delayed native glyphs visibly collided.
+            pygame.draw.rect(self.logical, (4, 10, 14), (320 - width // 2, 96, width, 18), border_radius=2)
+            pygame.draw.rect(self.logical, MUTED, (320 - width // 2, 96, width, 18), 1, border_radius=2)
+            self._text(self.room_label, 320 - width // 2 + 10, 100, self.font_small, MUTED)
 
     def _draw_captions(self) -> None:
         if not self.sound_captions_enabled or not self.captions:
@@ -1805,17 +1846,23 @@ class GhostlineRenderer:
             self._text(hint, 320 - width // 2 + 8, 331, self.font_small, CYAN if self.sim.quota_met else (190, 208, 207))
         self._draw_minimap()
         if lab_stats:
-            pygame.draw.rect(self.logical, (5, 10, 14), (10, 246, 230, 104), border_radius=3)
-            pygame.draw.rect(self.logical, VIOLET, (10, 246, 3, 104))
-            self._text("AGENT LAB // LIVE POLICY", 19, 253, self.font_small, VIOLET)
-            self._text(str(lab_stats.get("policy", "SCRIPTED BASELINE")), 19, 269, self.font_small, INK)
-            self._text(f"SEED {self.sim.seed}  DECISION {self.sim.elapsed_ticks // 6}", 19, 285, self.font_small, MUTED)
+            # Live inference should be observable without becoming a second
+            # HUD. The former 230x104 panel covered the lower-left route and
+            # terminals; this compact card uses under four percent of the
+            # playfield and keeps full run details for the debrief/web shell.
+            panel = pygame.Surface((218, 44), pygame.SRCALPHA)
+            panel.fill((5, 10, 14, 208))
+            self.logical.blit(panel, (10, 70))
+            pygame.draw.rect(self.logical, VIOLET, (10, 70, 3, 44))
+            policy_name = str(lab_stats.get("policy", "SCRIPTED BASELINE"))
+            if len(policy_name) > 23:
+                policy_name = policy_name.replace(" POLICY", "")[:23]
+            self._text(f"AGENT // {policy_name}", 19, 76, self.font_small, VIOLET)
             action_text = str(lab_stats.get("action", "HOLD"))
-            self._text(f"ACTION  {action_text}", 19, 301, self.font_small, CYAN)
             latency = float(lab_stats.get("latency_ms", 0.0))
-            self._text(f"LATENCY {latency:5.2f}ms   HIDDEN {lab_stats.get('hidden', '--')}", 19, 317, self.font_small, INK)
             phase = "EXTRACT" if self.sim.quota_met else "ACQUIRE DATA"
-            self._text(f"OBJECTIVE {phase}   TRACE {self.sim.trace:04.1f}", 19, 333, self.font_small, GREEN if self.sim.quota_met else AMBER)
+            self._text(f"{action_text:<11} {latency:4.1f}ms", 19, 91, self.font_small, CYAN)
+            self._text(f"{phase}  T{self.sim.trace:02.0f}", 19, 103, self.font_small, GREEN if self.sim.quota_met else AMBER)
 
     def _draw_minimap(self) -> None:
         width, height = 100, 56
@@ -1908,8 +1955,36 @@ class GhostlineRenderer:
         pygame.draw.line(self.logical, CYAN, (0, 18), (640, 18), 2)
         self._text("PROCEDURAL INFILTRATION", 452, 337, self.font_small, MUTED)
 
+    def _draw_native_text(self, target: pygame.Surface, scaled_size: tuple[int, int]) -> None:
+        """Composite recorded text at output resolution instead of scaling it."""
+
+        if not self._native_text_commands:
+            return
+        scale_x = scaled_size[0] / LOGICAL_SIZE[0]
+        scale_y = scaled_size[1] / LOGICAL_SIZE[1]
+        font_scale = min(scale_x, scale_y)
+        for command in self._native_text_commands:
+            size = max(7, int(round(command.design_size * font_scale)))
+            font = self._native_font_cache.get(size)
+            if font is None:
+                font = pygame.font.SysFont("consolas", size, bold=True)
+                self._native_font_cache[size] = font
+            color = command.color
+            if self.color_safe:
+                if color == RED:
+                    color = (255, 92, 190)
+                elif color == GREEN:
+                    color = (82, 184, 255)
+            glyph = font.render(command.text, True, color)
+            target.blit(glyph, (int(round(command.x * scale_x)), int(round(command.y * scale_y))))
+
     def _text(self, text: str, x: float, y: float, font: pygame.font.Font, color: tuple[int, int, int]) -> None:
-        self.logical.blit(font.render(str(text), False, color), (int(x), int(y)))
+        value = str(text)
+        if self.visible:
+            design_size = self._font_design_sizes.get(id(font), max(7, font.get_height() - 2))
+            self._native_text_commands.append(NativeTextCommand(value, x, y, design_size, color))
+            return
+        self.logical.blit(font.render(value, False, color), (int(x), int(y)))
 
     @staticmethod
     def _wrap_text(text: str, font: pygame.font.Font, maximum_width: int) -> list[str]:

@@ -12,7 +12,7 @@ Ghostline is a clean break from the legacy `neon_arena` package.
 
 - `simulation.py`: deterministic fixed-timestep movement, hacking, trace, integrity, guard/camera/drone AI, pulse, timer, and event stream.
 - `generation.py`: modular room graph, authored furniture arrangements, security placement, tile collision, and validation.
-- `presentation.py` and `app.py`: scrolling 640x360 pixel canvas, integer scaling, cinematic menus, camera, lighting, props, HUD, minimap, effects, accessibility, run telemetry, and game flow.
+- `presentation.py` and `app.py`: scrolling 640x360 pixel world canvas, native-resolution typography, cinematic menus, camera, lighting, props, HUD, minimap, effects, accessibility, run telemetry, and game flow.
 - `env.py`, `model.py`, and the training pipeline: versioned Gymnasium contract, entity-aware recurrent policy, action masking, rewards, curriculum, imitation learning, and PPO integration.
 
 Simulation and generation do not import Pygame. Human and agent controllers both produce `Action(move, dash, pulse)`. Replays are deterministic from seed, tier, and action sequence.
@@ -51,11 +51,13 @@ The renderer builds a cached tile-to-room-role lookup for each level. It uses or
 
 ## Game flow, accessibility, and local data
 
-The executable includes title, main menu, contract selection, briefing, play, pause, field manual, grouped settings, credits, debrief, Agent Lab selection, and Agent Lab playback. Agent Lab exposes deterministic seed controls, runtime identity, action, latency, recurrent-state norm, objective phase, and matched local human/agent summaries.
+The executable includes title, main menu, contract selection, briefing, play, pause, field manual, grouped settings, credits, debrief, Agent Lab selection, and Agent Lab playback. Agent Lab exposes deterministic seed controls, runtime identity, action, latency, objective phase, and matched local human/agent summaries. Live playback now uses a compact 218x44 telemetry card instead of the former 230x104 lower-left panel; full recurrent/run diagnostics remain in the debrief and external web shell.
 
 The versioned profile at `%LOCALAPPDATA%/Ghostline/progression-v1.json` stores unlocks, scores, audio mix, display/accessibility settings, and keyboard bindings. Every gameplay/menu action is remappable; conflicting assignments swap instead of silently disabling an action. Full benchmark records append to `%LOCALAPPDATA%/Ghostline/runs-v1.jsonl`, including sampled position/trace curves, actions, idle rate, distance, efficiency, outcomes, and agent latency.
 
-Accessibility includes independent master/music/SFX volume, sound captions, high contrast, color-safe cues, reduced motion, reduced flashes, three HUD scales, an opt-in 35% human timer assist, timer warnings, tutorial hints, screen shake, fullscreen, and remappable keyboard controls. Assisted runs are explicitly tagged in telemetry and do not alter the default environment or agent contract. Exact integer scale is used where the window permits; non-native ratios are letterboxed rather than stretched.
+Accessibility includes independent master/music/SFX volume, sound captions, high contrast, color-safe cues, reduced motion, reduced flashes, three HUD scales, an opt-in 35% human timer assist, timer warnings, tutorial hints, screen shake, fullscreen, and remappable keyboard controls. Assisted runs are explicitly tagged in telemetry and do not alter the default environment or agent contract. The authored world remains nearest-neighbour pixel art, while every menu, HUD, caption, warning, and Agent Lab glyph is rerasterized at the real desktop/browser framebuffer resolution. Desktop preserves integer world scaling and letterboxes non-native ratios; the browser fills its 16:9 canvas.
+
+The default Watch Agent entries use one curated passing contract per tier from the held-out validation namespace (`1,007,004` through `1,047,023`). This is presentation curation, not a replacement for the immutable 500-seed-per-tier final report: users can still step to any seed, and failures remain visible. Runtime policy lookup is source/wheel/PyInstaller-relative rather than working-directory-relative, preventing an accidental silent fallback when Agent Lab is launched outside the repository root.
 
 ## Public contract
 

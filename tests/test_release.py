@@ -41,6 +41,27 @@ RUNTIME_ASSET_NAMES = (
 )
 
 
+def test_bundled_onnx_policy_clears_every_disclosed_watch_agent_seed() -> None:
+    from ghostline.app import AGENT_SHOWCASE_SEEDS
+    from ghostline.env import GhostlineEnv
+    from ghostline.inference import OnnxGhostlinePolicy
+
+    policy = OnnxGhostlinePolicy(ROOT / "models" / "ghostline-policy.onnx")
+    for tier, seed in AGENT_SHOWCASE_SEEDS.items():
+        env = GhostlineEnv(seed=seed, tier=tier)
+        try:
+            observation, _ = env.reset(seed=seed)
+            hidden = None
+            terminated = truncated = False
+            info = {}
+            while not (terminated or truncated):
+                action, hidden = policy.act(observation, hidden, deterministic=True)
+                observation, _, terminated, truncated, info = env.step(action)
+            assert info["is_success"], f"tier {tier} seed {seed}: {info['fail_reason']}"
+        finally:
+            env.close()
+
+
 def _write_release_inputs(root: Path) -> None:
     (root / "src" / "ghostline").mkdir(parents=True, exist_ok=True)
     (root / "src" / "ghostline" / "player_entry.py").write_text("", encoding="utf-8")

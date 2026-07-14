@@ -4,7 +4,6 @@ import asyncio
 import importlib
 import itertools
 import math
-from pathlib import Path
 import random
 import time
 from typing import Any, Literal
@@ -16,6 +15,7 @@ from ghostline.audio import AudioDirector
 from ghostline.config import TIERS
 from ghostline.policies import FairScriptedPolicy
 from ghostline.presentation import GhostlineRenderer
+from ghostline.resources import runtime_asset_path
 from ghostline.progression import (
     DEFAULT_BINDINGS,
     load_progression,
@@ -52,6 +52,19 @@ CONTROL_ACTIONS = (
     ("back", "MENU BACK"),
 )
 
+# Curated held-out validation contracts for the public "Watch Agent" path.
+# They make the first showcase representative without consuming or publishing
+# another final-test slice. Manual seed editing and random human play remain
+# available for honest failure inspection.
+AGENT_SHOWCASE_SEEDS = {
+    1: 1_007_004,
+    2: 1_015_005,
+    3: 1_023_012,
+    4: 1_031_013,
+    5: 1_039_028,
+    6: 1_047_023,
+}
+
 
 def mission_score(sim: GhostlineSimulation) -> int:
     if not sim.extracted:
@@ -81,10 +94,11 @@ class GameApp:
         self.settings = load_settings()
         self.selected_tier = initial_tier or int(self.progression["highest_unlocked_tier"])
         self.seed = seed
-        self.lab_seed = seed if seed is not None else 2_000_000
+        self.lab_seed = seed if seed is not None else AGENT_SHOWCASE_SEEDS[self.selected_tier]
+        self._lab_seed_is_custom = seed is not None
         self.mode = mode
         self.state = "main" if mode == "menu" else ("lab" if mode == "lab" else "briefing")
-        self.selection = 0
+        self.selection = self.selected_tier - 1 if mode == "lab" else 0
         self.running = True
         self.fullscreen = bool(self.settings["display"]["fullscreen"])
         self.sim = GhostlineSimulation(seed=seed or 10101, tier=self.selected_tier)
@@ -113,26 +127,31 @@ class GameApp:
         self._telemetry: dict[str, Any] = {}
 
     def _load_runtime_policy(self) -> None:
-        onnx_path = Path("models/ghostline-policy.onnx")
-        if onnx_path.exists():
+        # Resolve relative to the source tree, installed wheel, or PyInstaller
+        # bundle. The old working-directory lookup silently dropped Agent Lab
+        # to the weaker scripted fallback when launched from another folder.
+        with runtime_asset_path("models/ghostline-policy.onnx") as onnx_path:
             try:
-                adapter = getattr(importlib.import_module("ghostline.inference"), "OnnxGhostlinePolicy")
-                self.learned_policy = adapter(onnx_path)
-                self.policy_name = "RECURRENT ONNX POLICY"
-                return
+                if onnx_path is not None:
+                    adapter = getattr(importlib.import_module("ghostline.inference"), "OnnxGhostlinePolicy")
+                    self.learned_policy = adapter(onnx_path)
+                    self.policy_name = "RECURRENT ONNX POLICY"
+                    return
             except Exception:
                 # A missing or incompatible policy must never prevent human play.
                 self.learned_policy = None
-        for candidate in (Path("models/ghostline-policy.pt"), Path("artifacts/torchrl/champion/best.pt")):
-            if not candidate.exists():
-                continue
-            try:
-                load_policy = getattr(importlib.import_module("ghostline.model"), "load_policy")
-                self.learned_policy = load_policy(candidate)
-                self.policy_name = "RECURRENT PYTORCH POLICY"
-                return
-            except Exception:
-                self.learned_policy = None
+        for relative in ("models/ghostline-policy.pt", "artifacts/torchrl/champion/best.pt"):
+            with runtime_asset_path(relative) as candidate:
+                if candidate is None:
+                    continue
+                try:
+                    load_policy = getattr(importlib.import_module("ghostline.model"), "load_policy")
+                    self.learned_policy = load_policy(candidate)
+                    self.policy_name = "RECURRENT PYTORCH POLICY"
+                    return
+                except Exception:
+                    self.learned_policy = None
+        self.policy_name = "EXPERT FALLBACK // MODEL UNAVAILABLE"
 
     def run(self) -> int:
         try:
@@ -227,6 +246,8 @@ class GameApp:
         if choice == "confirm":
             self.state = ("stage_select", "lab", "howto", "settings", "credits", "quit")[self.selection]
             self.selection = 0
+            if self.state == "lab" and not self._lab_seed_is_custom:
+                self.lab_seed = AGENT_SHOWCASE_SEEDS[1]
             if self.state == "quit":
                 self.running = False
         cleared = len(self.progression.get("best_scores", {}))
@@ -279,7 +300,11 @@ class GameApp:
 
     def _lab_select(self) -> None:
         items = [f"WATCH TIER {tier}  {TIERS[tier].name.upper()}" for tier in range(1, 7)]
+        previous_tier = self.selection + 1
         choice = self._menu_events(self._events(), len(items), horizontal=True)
+        selected_tier = self.selection + 1
+        if selected_tier != previous_tier and not self._lab_seed_is_custom:
+            self.lab_seed = AGENT_SHOWCASE_SEEDS[selected_tier]
         if choice == "back":
             self.state, self.selection = "main", 0
         elif choice == "confirm":
@@ -289,14 +314,16 @@ class GameApp:
             modifiers = pygame.key.get_mods()
             step = 100 if modifiers & pygame.KMOD_SHIFT else 1
             self.lab_seed = max(0, self.lab_seed + (step if choice == "right" else -step))
+            self._lab_seed_is_custom = True
         panel = self._lab_history_panel(self.selection + 1)
+        seed_label = "CUSTOM REPLAY SEED" if self._lab_seed_is_custom else "SHOWCASE VALIDATION SEED"
         self.renderer.draw_screen(
             title="AGENT LAB",
             subtitle="Player-equivalent // deterministic replay",
             items=items,
             selected=self.selection,
             badge=self.policy_name,
-            panel=[f"EVALUATION SEED  {self.lab_seed}", "PUBLIC SENSORS // NO HIDDEN STATE", "LEFT/RIGHT ±1", "SHIFT + LEFT/RIGHT ±100", "", *panel],
+            panel=[f"{seed_label}  {self.lab_seed}", "PUBLIC SENSORS // NO HIDDEN STATE", "LEFT/RIGHT ±1", "SHIFT + LEFT/RIGHT ±100", "", *panel],
             footer=f"{self._key_label('confirm')}  WATCH     LEFT/RIGHT  SEED     {self._key_label('back')}  BACK",
         )
 
@@ -795,10 +822,10 @@ class GameApp:
             self._persist_settings()
         self.renderer.draw_screen(
             title="DISPLAY",
-            subtitle="Integer-scaled 640x360 pixel canvas.",
+            subtitle="Pixel-precise world // native-resolution interface.",
             items=items,
             selected=self.selection,
-            panel=["1280x720 uses exact 2x pixels.", "1920x1080 uses exact 3x pixels.", "Other ratios are letterboxed without stretching.", "", "Reduced Motion always suppresses shake."],
+            panel=["The world keeps its authored pixel grid.", "Text is redrawn at the window's real resolution.", "16:9 sizes fill cleanly; other ratios letterbox.", "", "Reduced Motion always suppresses shake."],
             footer=f"{self._key_label('confirm')}  TOGGLE     {self._key_label('back')}  BACK",
         )
 

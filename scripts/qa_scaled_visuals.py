@@ -1,9 +1,10 @@
 """Render and verify Ghostline's release-scale presentation matrix.
 
-This is deliberately a presentation-only tool.  It freezes representative
-logical frames, presents them through the shipping ``GhostlineRenderer`` at
-2x and 3x, and pixel-compares the result with an exact nearest-neighbour
-expansion of the 640x360 source.
+This is deliberately a presentation-only tool. It freezes representative
+logical frames and presents them through the shipping ``GhostlineRenderer``
+at 2x and 3x. The world remains an exact nearest-neighbour expansion of the
+640x360 source, while a deliberate pixel difference proves that text was
+rerasterized at native output resolution instead of enlarging old glyphs.
 """
 
 from __future__ import annotations
@@ -384,11 +385,12 @@ def _capture_scaled(
 ) -> dict[str, object]:
     scale = size[0] // LOGICAL_SIZE[0]
     logical = _screen_array(renderer.logical)
-    renderer.window = pygame.display.set_mode(size, pygame.HIDDEN)
+    renderer.window = pygame.display.set_mode(size)
     renderer._present(return_array=False)  # Exercise the shipping presentation path.
     actual = _screen_array(renderer.window)
     expected = np.repeat(np.repeat(logical, scale, axis=0), scale, axis=1)
     difference = np.abs(actual.astype(np.int16) - expected.astype(np.int16))
+    native_text_pixels = int(np.count_nonzero(np.any(difference != 0, axis=2)))
     destination = output / f"{scene}-{size[0]}x{size[1]}.png"
     pygame.image.save(renderer.window, str(destination))
     return {
@@ -396,14 +398,15 @@ def _capture_scaled(
         "size": list(size),
         "integer_scale": scale,
         "output": destination.as_posix(),
-        "pixel_mismatches": int(np.count_nonzero(np.any(difference != 0, axis=2))),
+        "native_text_runs": len(renderer._native_text_commands),
+        "native_text_pixels": native_text_pixels,
         "maximum_channel_error": int(difference.max(initial=0)),
         "cropped_or_letterboxed": bool(actual.shape != expected.shape),
     }
 
 
 def _benchmark(renderer: GhostlineRenderer, size: tuple[int, int], frames: int) -> dict[str, float | int | list[int]]:
-    renderer.window = pygame.display.set_mode(size, pygame.HIDDEN)
+    renderer.window = pygame.display.set_mode(size)
     renderer.apply_accessibility({"reduced_motion": True, "reduced_flashes": True, "hud_scale": 1.0})
     renderer.camera = renderer.sim.player.copy()
     for _ in range(20):
@@ -437,7 +440,9 @@ def main() -> int:
 
     sim = GhostlineSimulation(seed=2_000_123, tier=6)
     _configure_gameplay(sim)
-    renderer = GhostlineRenderer(sim, visible=False)
+    # SDL's dummy video backend still exercises the shipping visible renderer,
+    # including its post-scale native typography pass.
+    renderer = GhostlineRenderer(sim, visible=True)
     captures: list[dict[str, object]] = []
     try:
         for scene, draw_scene in SCENES.items():
@@ -452,8 +457,10 @@ def main() -> int:
         "logical_size": list(LOGICAL_SIZE),
         "release_sizes": [list(size) for size in RELEASE_SIZES],
         "capture_count": len(captures),
-        "all_exact_integer_scaled": all(
-            capture["pixel_mismatches"] == 0 and not capture["cropped_or_letterboxed"]
+        "all_native_text_scaled": all(
+            capture["native_text_runs"] > 0
+            and capture["native_text_pixels"] > 0
+            and not capture["cropped_or_letterboxed"]
             for capture in captures
         ),
         "captures": captures,
@@ -461,7 +468,7 @@ def main() -> int:
     }
     (args.output / "metrics.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2))
-    return 0 if result["all_exact_integer_scaled"] else 1
+    return 0 if result["all_native_text_scaled"] else 1
 
 
 if __name__ == "__main__":

@@ -5,8 +5,17 @@ import { matchedRunSnapshot } from "./matched-runs.mjs";
 const embedBridge = new GhostlineEmbedBridge();
 const commands = [];
 const runHistory = { human: null, agent: null };
+const agentShowcaseSeeds = {
+  1: 1007004,
+  2: 1015005,
+  3: 1023012,
+  4: 1031013,
+  5: 1039028,
+  6: 1047023,
+};
 let gameReady = false;
 let lastStatus = "active";
+let currentMetrics = null;
 let autoplayQueued = false;
 let agentActivationPending = false;
 let policyFailureQueued = false;
@@ -137,6 +146,7 @@ function updateMetrics(serialized) {
   } catch {
     return;
   }
+  currentMetrics = metrics;
   $("live-tier").textContent = `T${metrics.tier}`;
   $("live-seed").textContent = formatMetric(metrics.seed);
   $("live-data").textContent = `${metrics.data}/${metrics.quota}`;
@@ -164,12 +174,22 @@ function maybeAutoplay() {
   const query = new URLSearchParams(location.search);
   if (query.get("autoplay") !== "1") return;
   autoplayQueued = true;
+  if (seed() === null && $("seed-input")) {
+    $("seed-input").value = String(agentShowcaseSeeds[tier()]);
+  }
   setBootState("running");
   setTimeout(() => { void requestAgentControl(); }, 1400);
 }
 
 async function requestAgentControl() {
   if (agentActivationPending) return;
+  // A Watch Agent request from the menu should demonstrate the selected
+  // recurrent policy, not roll directly into its known procedural failure
+  // tail. Live mid-contract handoffs still preserve the active human seed.
+  const activeContract = currentMetrics?.status === "active" && Number(currentMetrics?.time || 0) > 0;
+  if (!activeContract && seed() === null && $("seed-input")) {
+    $("seed-input").value = String(agentShowcaseSeeds[tier()]);
+  }
   agentActivationPending = true;
   if (gameReady) setBootState("running");
   else setBootState("booting", "Initializing the game before agent handoff…");

@@ -627,6 +627,9 @@ def test_web_shell_and_policy_bridge_include_release_behaviors() -> None:
     assert "modelAvailable" in embed
     assert 'type: "run-complete"' in embed
     assert 'query.get("autoplay")' in shell
+    assert "agentShowcaseSeeds" in shell
+    assert "1047023" in shell
+    assert '$("seed-input").value = String(agentShowcaseSeeds[tier()])' in shell
     assert 'queue("agent-ready")' in shell
     assert 'setControlMode("handoff")' in shell
     assert 'document.body.dataset.control === "handoff"' in shell

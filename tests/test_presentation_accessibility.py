@@ -453,6 +453,81 @@ def test_browser_presentation_fills_intermediate_canvas_sizes() -> None:
     assert _presentation_scaled_size((1920, 1080), web_runtime=False) == (1920, 1080)
 
 
+def test_visible_renderer_redraws_all_text_at_native_output_resolution(monkeypatch) -> None:
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+
+    import pygame
+
+    from ghostline.presentation import GhostlineRenderer
+
+    renderer = GhostlineRenderer(GhostlineSimulation(seed=7, tier=1), visible=True)
+    renderer.window = pygame.display.set_mode((1280, 720), pygame.HIDDEN)
+    renderer.draw_screen(
+        title="GHOSTLINE",
+        subtitle="NATIVE INTERFACE",
+        items=["PLAY CONTRACTS"],
+        return_array=False,
+    )
+
+    assert renderer._native_text_commands
+    # The 46px logical title is rasterized directly at 92px for a 2x window,
+    # rather than enlarging glyph pixels from the 640x360 world surface.
+    assert 92 in renderer._native_font_cache
+    renderer.close()
+
+
+def test_live_agent_card_uses_only_a_compact_upper_left_safe_area(monkeypatch) -> None:
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+
+    import pygame
+
+    from ghostline.presentation import BG, GhostlineRenderer
+
+    renderer = GhostlineRenderer(GhostlineSimulation(seed=7, tier=1), visible=False)
+    renderer.logical.fill(BG)
+    renderer._draw_hud(None)
+    baseline = pygame.surfarray.array3d(renderer.logical).copy()
+
+    renderer.logical.fill(BG)
+    renderer._draw_hud(
+        {"policy": "RECURRENT ONNX POLICY", "action": "NE +DASH", "latency_ms": 0.93}
+    )
+    live = pygame.surfarray.array3d(renderer.logical).copy()
+    changed = np.any(live != baseline, axis=2)
+    xs, ys = np.where(changed)
+
+    assert xs.min() >= 10 and xs.max() <= 227
+    assert ys.min() >= 70 and ys.max() <= 113
+    assert int(changed.sum()) <= 218 * 44
+    assert changed.mean() < 0.05
+    renderer.close()
+
+
+def test_watch_agent_showcase_uses_distinct_validation_seeds() -> None:
+    from ghostline.app import AGENT_SHOWCASE_SEEDS
+    from ghostline.seeds import FINAL_TEST_SEED_START, VALIDATION_SEED_END, VALIDATION_SEED_START
+
+    assert set(AGENT_SHOWCASE_SEEDS) == set(range(1, 7))
+    assert len(set(AGENT_SHOWCASE_SEEDS.values())) == 6
+    assert all(VALIDATION_SEED_START <= seed <= VALIDATION_SEED_END for seed in AGENT_SHOWCASE_SEEDS.values())
+    assert all(seed < FINAL_TEST_SEED_START for seed in AGENT_SHOWCASE_SEEDS.values())
+
+
+def test_runtime_policy_lookup_is_independent_of_launch_directory(tmp_path, monkeypatch) -> None:
+    from ghostline.app import GameApp
+
+    monkeypatch.chdir(tmp_path)
+    app = GameApp.__new__(GameApp)
+    app.learned_policy = None
+    app.policy_name = "FAIR SCRIPTED BASELINE"
+    app._load_runtime_policy()
+
+    assert app.learned_policy is not None
+    assert app.policy_name == "RECURRENT ONNX POLICY"
+
+
 def test_occluded_guard_uses_live_sprite_instead_of_stale_ghost(monkeypatch) -> None:
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
     monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
