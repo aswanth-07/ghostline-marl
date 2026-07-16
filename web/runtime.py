@@ -24,6 +24,33 @@ OBSERVATION_KEYS = (
 PROGRESSION_STORAGE_KEY = "ghostline.progression-v1"
 
 
+def browser_prefers_touch(host: Any) -> bool:
+    """Detect a touch-first browser without making touch a web dependency."""
+
+    touch_points = 0
+    try:
+        navigator = host.navigator
+        touch_points = int(getattr(navigator, "maxTouchPoints", 0) or 0)
+    except Exception:
+        pass
+    try:
+        coarse = bool(host.matchMedia("(pointer: coarse)").matches)
+        fine = bool(host.matchMedia("(pointer: fine)").matches)
+        constrained = bool(
+            host.matchMedia("(max-width: 980px), (max-height: 600px)").matches
+        )
+        # A hybrid Windows laptop commonly reports touch points while retaining
+        # a fine primary pointer. Do not permanently cover its desktop canvas
+        # with phone controls; real finger events can still opt in later.
+        return coarse or (touch_points > 0 and constrained and not fine)
+    except Exception:
+        try:
+            constrained = int(host.innerWidth) <= 980 or int(host.innerHeight) <= 600
+        except Exception:
+            constrained = False
+        return touch_points > 0 and constrained
+
+
 def _browser_gymnasium_shim() -> ModuleType:
     """Return the tiny Gymnasium surface used by the browser policy adapter.
 
@@ -137,6 +164,7 @@ class BrowserOnnxPolicy:
         self.host = host
         self.prefetched = False
         self._prefetch_inference_count = -1
+        self.waiting_for_action = False
 
     def prefetch(self, observation: Mapping[str, Any]) -> None:
         if self.prefetched:
@@ -159,6 +187,7 @@ class BrowserOnnxPolicy:
             # fail closed for the current decision instead of pretending that
             # the bridge's immediate neutral return is the finished result.
             self.prefetch(observation)
+            self.waiting_for_action = True
             return 0, None
         if not bool(
             self.host.ghostlinePolicy.hasCompletedAction(
@@ -168,10 +197,12 @@ class BrowserOnnxPolicy:
             # Keep the outstanding generation alive. Clearing it here caused
             # every 60 ms WebGPU result to be replaced before Python consumed
             # it, leaving the production agent permanently on HOLD.
+            self.waiting_for_action = True
             return 0, None
         action = self.host.ghostlinePolicy.currentAction()
         self.prefetched = False
         self._prefetch_inference_count = -1
+        self.waiting_for_action = False
         return int(action), None
 
 
@@ -181,6 +212,7 @@ class GhostlineWebRuntime:
     def __init__(self, app: Any, *, host: Any | None = None):
         self.app = app
         self.host = host if host is not None else platform.window
+        self.app.touch_controls_enabled = browser_prefers_touch(self.host)
         self.policy = BrowserOnnxPolicy(self.host)
         self.control_mode = "human"
         self.run_mode = "human"
@@ -244,7 +276,7 @@ class GhostlineWebRuntime:
             self.app._start_mission(agent=False)
             self.host.ghostlineShell.setControlMode("human")
         elif kind == "agent-ready":
-            await self._enable_agent(tier=tier, seed=seed)
+            await self._enable_agent(tier=tier, seed=seed, fresh=bool(command.get("fresh", False)))
         elif kind == "human":
             active_mission = self.app.state in {"play", "pause", "lab_play"} and not self.app.sim.terminated and not self.app.sim.truncated
             if active_mission and self.run_mode == "agent":
@@ -258,6 +290,7 @@ class GhostlineWebRuntime:
         elif kind == "policy-failed":
             self._restore_human_after_policy_failure()
         elif kind in {"pause-hidden", "pause-focus"}:
+            self.app.audio.set_focus_active(False)
             # Agent showcase runs do not depend on keyboard focus. Human play
             # must never spend mission time while its iframe/tab has no input.
             if self.app.state == "play" and not self.app.sim.terminated and not self.app.sim.truncated:
@@ -267,9 +300,10 @@ class GhostlineWebRuntime:
         elif kind == "reset-policy":
             self.host.ghostlinePolicy.reset()
         elif kind == "focus":
+            self.app.audio.set_focus_active(True)
             self.host.document.getElementById("canvas").focus()
 
-    async def _enable_agent(self, *, tier: int, seed: int | None) -> None:
+    async def _enable_agent(self, *, tier: int, seed: int | None, fresh: bool = False) -> None:
         self.host.ghostlineShell.setPolicyState("loading", "Loading recurrent policy…")
         if str(self.host.ghostlinePolicy.state) != "ready":
             self.host.ghostlineShell.setPolicyState("unavailable", "Agent unavailable — human play still works")
@@ -279,11 +313,17 @@ class GhostlineWebRuntime:
         self.host.ghostlinePolicy.reset()
         self.policy.prefetched = False
         self.policy._prefetch_inference_count = -1
+        self.policy.waiting_for_action = False
         self.app.learned_policy = self.policy
         self.app.selected_tier = tier
         self.app.seed = seed
         _install_browser_gymnasium_shim()
-        active_mission = self.app.state in {"play", "pause", "lab_play"} and not self.app.sim.terminated and not self.app.sim.truncated
+        active_mission = (
+            not fresh
+            and self.app.state in {"play", "pause", "lab_play"}
+            and not self.app.sim.terminated
+            and not self.app.sim.truncated
+        )
         if active_mission:
             if self.run_mode != "agent":
                 self._mark_hybrid_run()
@@ -346,6 +386,7 @@ class GhostlineWebRuntime:
         self.control_mode = "human"
         self.policy.prefetched = False
         self.policy._prefetch_inference_count = -1
+        self.policy.waiting_for_action = False
         self._last_prefetch_tick = -1
         self.app._agent_action = 0
         self.app.learned_policy = None
@@ -370,14 +411,14 @@ class GhostlineWebRuntime:
         self.app.agent_hidden = None
 
     def _prefetch_agent_action(self) -> None:
-        """Queue each 10 Hz decision five frames before it is consumed."""
+        """Queue each decision from its exact 10 Hz simulation boundary."""
         if self.app.state != "lab_play" or self.app.agent_env is None:
             self._last_prefetch_tick = -1
             return
         tick = int(self.app._agent_tick)
         if (
-            tick <= 0
-            or tick % 6 != 1
+            tick < 0
+            or tick % 6 != 0
             or tick == self._last_prefetch_tick
             or self.policy.prefetched
         ):

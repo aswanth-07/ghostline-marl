@@ -5,7 +5,7 @@ Ghostline's browser release is a static Pygbag 0.9.3 build. The deterministic Py
 ## Architecture
 
 - `web/main.py` starts the same `GameApp` through its cooperative async loop.
-- `web/runtime.py` is the only Python adapter. It exposes tier/seed launch, current-run agent takeover, return-to-human control, and player-equivalent observation serialization. It prefetches inference in the spare frame before each 10 Hz decision so the async JavaScript bridge does not add a full policy-step delay.
+- `web/runtime.py` is the only Python adapter. It exposes tier/seed launch, current-run agent takeover, exact portfolio-run replay, return-to-human control, touch-device detection, and player-equivalent observation serialization. It queues inference from the exact state at each 10 Hz boundary; if a browser result misses the next render frame, simulation time waits instead of advancing with a fabricated neutral action.
 - `web/static/policy-bridge.mjs` owns asynchronous inference, legal-action enforcement, persistent GRU state, latency telemetry, and backend selection. Threaded WASM is the measured release default for this compact recurrent graph; `?backend=webgpu` retains the WebGPU comparison path with automatic WASM fallback.
 - `web/static/matched-runs.mjs` admits comparison cards only when both completed runs have the exact same tier and seed. Mismatched contracts are displayed as `NOT COMPARED` with an explicit refusal reason.
 - `web/static/embed-bridge.mjs` owns the versioned, origin-scoped portfolio message contract. It never accepts gameplay commands from the parent page.
@@ -16,16 +16,19 @@ Ghostline's browser release is a static Pygbag 0.9.3 build. The deterministic Py
 - The custom command creates `.vercel-venv` and installs through that isolated interpreter. Vercel's uv-managed Python image enforces PEP 668, so the release never mutates the system environment or uses `--break-system-packages`.
 - The Pygbag archive is assembled from an explicit twelve-module game-runtime allowlist and the exact three runtime atlases declared by `assets/licenses.json`. Training, evaluation, export, packaging, recording, screenshots, source drafts, retired key art, and unused web derivatives are never copied into the browser stage.
 
-The model is never fetched on ordinary human play. ONNX Runtime and the content-addressed model are requested only after `AGENT TAKEOVER` or `?autoplay=1`.
+The model is never fetched on ordinary human play. ONNX Runtime and the content-addressed model are requested only after `AGENT TAKEOVER`, `REPLAY PORTFOLIO AGENT RUN`, or `?autoplay=1`. The replay action always starts a fresh tier-6 seed-2,000,000 run, while ordinary takeover preserves an already active human contract.
 Campaign progression and settings use the desktop JSON contract inside the Python runtime and are mirrored to browser `localStorage`, so refreshes retain unlocked tiers without introducing a second save schema. Storage denial in a restricted iframe falls back to a fresh in-memory profile.
+
+Coarse-pointer phones enable the in-canvas movement stick, dash, pulse, and pause contacts before the first mission frame; a hybrid touch laptop that still reports a fine primary pointer remains in the desktop layout. The canvas uses `touch-action: none` so browser panning cannot steal a held direction; HTML contract controls remain native pointer/touch targets. Mouse and touch selection inside the Pygame menus is mapped through the same letterbox transform used for rendering. Portrait phones receive an explicit rotate-to-landscape readability gate rather than a silently compressed playfield. Landscape uses dynamic viewport height and safe-area insets, offers fullscreen from the launch gesture, and contains the fixed 16:9 framebuffer instead of stretching it to the phone's physical aspect ratio. Because phones downsample the 1280x720 backing canvas into a smaller CSS viewport, they select browser-quality interpolation instead of nearest-neighbour CSS downscaling; desktop retains the crisp pixel presentation. Contract and telemetry controls remain in a dismissible `RUN SETUP` drawer that behaves as a modal while open, makes the background inert, and restores focus to the initiating control or game canvas when it closes.
 
 ## Portfolio embed contract
 
 Use `?embed=1&autoplay=0` for the portfolio presentation. Embed mode removes only
 the redundant standalone brand header and legal footer; it retains the explicit
-audio/focus gate, keyboard help, human/agent controls, contract launcher, live
-telemetry, and matched-run cards. At narrow widths the lab moves below the game
-instead of being removed. `autoplay=0` never bypasses Chrome's user-activation
+audio/focus gate, human/agent controls, contract launcher, live telemetry, and
+matched-run cards. At narrow widths the playfield comes first and the lab moves
+into the accessible `RUN SETUP` drawer; no policy or telemetry functionality is
+removed. `autoplay=0` never bypasses Chrome's user-activation
 gate and never loads the policy without an explicit takeover.
 
 Because the portfolio and game are separate Vercel origins, the iframe includes
@@ -80,11 +83,12 @@ HANDOFF`, and `AGENT CONTROL`. The shell mirrors model-download progress,
 provides a cancellable handoff, and does not claim agent control until the
 browser returns the first recurrent inference. Each asynchronous inference is
 identified by the bridge's monotonic completion count. Python retains an
-outstanding generation across 10 Hz boundaries until that exact result is
-ready, rather than clearing it to `HOLD`, and queues the next observation five
-60 Hz frames before consumption. This tolerates cold or approximately 60 ms
-WebGPU decisions without replaying stale actions or issuing a duplicate
-request. The takeover click also satisfies the launch/focus gesture: if
+outstanding generation until that exact result is ready, rather than clearing
+it to `HOLD`. The next observation is captured only after all six ticks of the
+previous action complete, so live WASM/WebGPU decisions use the same state
+sequence as Python evaluation and recording. A late backend pauses simulation
+time at the decision boundary without replaying stale actions or issuing a
+duplicate request. The takeover click also satisfies the launch/focus gesture: if
 the Python canvas is still starting, the shell enters it automatically when it
 becomes ready instead of leaving the policy active behind a second launch gate.
 
@@ -94,6 +98,20 @@ framebuffer across the complete game frame. The WebAssembly presentation path
 also scales the logical 640x360 scene to the exact browser canvas dimensions,
 so browser zoom and intermediate viewport widths cannot fall back to a small
 centered image. Desktop builds retain crisp integer-only scaling.
+
+The standalone shell also exposes an `INTEL PANEL` toggle. Wide-screen users
+can collapse the full launcher/telemetry column and give the 16:9 playfield the
+workspace; live telemetry and matched-run analysis remain opt-in disclosures.
+Entering a contract now collapses that rail automatically, expanding the game
+from the setup layout while leaving `SHOW INTEL` available for tier, seed, and
+matched-run analysis. The launcher uses the portfolio's neutral-black surfaces,
+58 px grid, cyan/magenta interaction tokens, and self-hosted Manrope/JetBrains
+Mono Latin variable fonts; their SIL OFL 1.1 texts ship with the static bundle.
+The toggle carries `aria-controls`/`aria-expanded`, restores focus on close,
+and leaves the deterministic simulation and model interface untouched. Rapid
+5 Hz raw telemetry is deliberately not an `aria-live` region; controller and
+run-state changes use the lower-frequency status notice so assistive technology
+is not flooded with continuously changing numbers.
 
 ## Build commands
 

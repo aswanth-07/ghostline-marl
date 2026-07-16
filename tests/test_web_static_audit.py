@@ -82,6 +82,24 @@ def test_launch_shell_uses_flat_facility_graphics_without_retired_key_art() -> N
     assert "repeating-linear-gradient" in css
 
 
+def test_launch_shell_self_hosts_the_portfolio_typography_and_tokens() -> None:
+    css = (ROOT / "web" / "static" / "ghostline.css").read_text(encoding="utf-8")
+    template = (ROOT / "web" / "ghostline.tmpl").read_text(encoding="utf-8")
+
+    for asset in (
+        "manrope-latin-wght-normal.woff2",
+        "jetbrains-mono-latin-wght-normal.woff2",
+        "manrope-OFL-1.1.txt",
+        "jetbrains-mono-OFL-1.1.txt",
+    ):
+        assert (ROOT / "web" / "static" / asset).is_file()
+    assert 'font-family: "Ghostline Manrope"' in css
+    assert "--cyan: #00e5ff" in css
+    assert "--pink: #ff4aa4" in css
+    assert "PLAY THE CONTRACT." in template
+    assert "aaswanthraj.vercel.app/projects/ghostline" in template
+
+
 def test_pygbag_pep723_dependencies_use_browser_repository_names() -> None:
     main = (ROOT / "web" / "main.py").read_text(encoding="utf-8")
     dependency_block = main.split("# /// script", 1)[1].split("# ///", 1)[0]

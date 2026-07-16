@@ -26,6 +26,12 @@ ONNX Runtime Web 1.27.0. Its root `THIRD_PARTY_NOTICES.md` is accompanied by:
 - for agent builds, ONNX Runtime's MIT text and upstream notices under
   `licenses/onnxruntime-web-1.27.0/`.
 
+The standalone launcher self-hosts the Manrope and JetBrains Mono Latin
+variable webfonts used by the portfolio design system. Both are distributed
+under the SIL Open Font License 1.1; their complete texts ship beside
+`ghostline.css` as `manrope-OFL-1.1.txt` and
+`jetbrains-mono-OFL-1.1.txt`.
+
 The web builder validates each self-hosted runtime file and license before it
 can enter the release bundle. Ghostline applies one documented source-level
 patch to the vendored Pygbag bootstrap: a caught, optional `window.top.blanker`

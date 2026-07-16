@@ -62,6 +62,35 @@ def test_bundled_onnx_policy_clears_every_disclosed_watch_agent_seed() -> None:
             env.close()
 
 
+def test_portfolio_video_contract_replays_the_bundled_onnx_action_sequence() -> None:
+    """Bind the recorded showcase to the same graph used by live takeover."""
+
+    from ghostline.app import PORTFOLIO_DEMO_SEED, PORTFOLIO_DEMO_TIER
+    from ghostline.env import GhostlineEnv
+    from ghostline.inference import OnnxGhostlinePolicy
+
+    env = GhostlineEnv(seed=PORTFOLIO_DEMO_SEED, tier=PORTFOLIO_DEMO_TIER)
+    policy = OnnxGhostlinePolicy(ROOT / "models" / "ghostline-policy.onnx")
+    try:
+        observation, _ = env.reset(seed=PORTFOLIO_DEMO_SEED)
+        hidden = None
+        actions = bytearray()
+        terminated = truncated = False
+        info = {}
+        while not (terminated or truncated):
+            action, hidden = policy.act(observation, hidden, deterministic=True)
+            actions.append(action)
+            observation, _, terminated, truncated, info = env.step(action)
+    finally:
+        env.close()
+
+    assert info["is_success"] is True
+    assert len(actions) == 366
+    assert info["duration_seconds"] == pytest.approx(36.5333333333)
+    assert info["damage"] == 2
+    assert hashlib.sha256(actions).hexdigest() == "7887d2fba31b6aeac5e7c4462c2258d28aec428182ec2e906e8450b314591925"
+
+
 def _write_release_inputs(root: Path) -> None:
     (root / "src" / "ghostline").mkdir(parents=True, exist_ok=True)
     (root / "src" / "ghostline" / "player_entry.py").write_text("", encoding="utf-8")

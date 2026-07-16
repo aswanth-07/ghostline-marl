@@ -1,12 +1,12 @@
 ---
 title: Ghostline Assets
-updated: 2026-07-13
+updated: 2026-07-16
 status: active
 ---
 
 # Visual and audio workflow
 
-Ghostline uses a high-detail top-down three-quarter pixel style on a 32 px world grid. Gameplay renders to a 640x360 logical canvas and uses exact integer scaling at 1280x720 and 1920x1080, with centered letterboxing for other window shapes.
+Ghostline uses a high-detail top-down three-quarter pixel style on a 32 px world grid. The world renders on a 640x360 logical canvas, then the presentation compositor scales it at exact integer ratios for 1280x720 and 1920x1080 while rerasterizing every menu, HUD, caption, and telemetry glyph at the final output resolution. The canonical agent recording uses the same 1280x720 compositor rather than storing a 360p logical-frame capture.
 
 ## Visual disclosure
 
@@ -19,8 +19,8 @@ Generated imagery is never collision, navigation, visibility, or simulation trut
 - Runner and guards use reviewed atlases for eight-direction facing and state animation, including dedicated four-frame diagonal run cycles; an original runtime-built eight-direction, four-frame pixel path remains the complete fallback.
 - Room roles have distinct deterministic floor materials, wall trims, signage, vents, cabling, grates, warning stripes, rugs, vault inlays, and extraction markings.
 - Furnishings cover desks, chairs, meeting and coffee tables, sofas, TVs, lab benches, monitors, server racks, consoles, lockers, plants, crates, generators, and vault cases. Animated displays and server lights remain presentation-only.
-- The playfield has no square exploration-fog wash: discovered-state still feeds fair observations and the compact map, while floor, furniture, and wall art stays readable at full authored color. Exact guard/camera entities remain line-of-sight gated.
-- Security shapes, segmented awareness badges, exact 65-ray occlusion-clipped cones, typed off-screen arrows, sound labels, terminal progress rings, pulse waves, damage vignettes, and lockdown banners communicate state without privileged enemy information. Cameras pair a square with a dashed scan beam; guards pair a triangle with notched cone edges, so both remain distinct in monochrome and color-safe modes.
+- The playfield has no square exploration-fog wash: discovered-state still feeds fair observations and the compact map, while floor, furniture, and wall art stays readable at full authored color. Guard, camera, and drone locations remain live through the facility's public transponder network even when a wall breaks direct sight; the policy receives those same player-visible entity records.
+- Security shapes, segmented awareness badges, exact 65-ray occlusion-clipped cones, terminal progress rings, pulse waves, damage vignettes, and lockdown banners communicate state without repeated text tags over every actor. Cameras pair a square with a dashed scan beam; guards pair a triangle with notched cone edges, so both remain distinct in monochrome and color-safe modes.
 - The renderer caches the room-role lookup for each generated level while keeping all Pygame state outside simulation and generation.
 
 ## Environment atlas v1
@@ -59,8 +59,8 @@ Default hazards use amber for suspicion and red for confirmed danger. Color-safe
 
 `scripts/qa_scaled_visuals.py` freezes representative title, briefing, Field Manual, pause, debrief, settings, Accessibility, Agent Lab selection/live, and tier-6 gameplay frames, then presents each through the shipping renderer at 1280x720 and 1920x1080. The world layer remains nearest-neighbour pixel art; the script now requires a non-zero post-scale text difference and native glyph runs in every scene, proving that menus, HUD, captions, and telemetry are rerasterized at output resolution rather than enlarging 640x360 glyph pixels. The earlier 2026-07-13 v4 matrix under `artifacts/visual-qa/flat-vision-grades-v4/` remains the pre-native-text exact-scaling baseline. Reviewed gameplay and locomotion captures are tracked under `assets/screenshots/`; visible-window and Chrome checks remain separate release gates.
 
-The final frozen-gameplay pass is under `artifacts/visual-qa/final-gameplay-readability-2026-07-13/`. Its 20-frame release matrix again recorded exact 2x/3x scaling with zero mismatched pixels, and measured 89.46 FPS at 1280x720 and 77.19 FPS at 1920x1080 over 120 hidden-surface frames. Focused captures verify frozen `LAST` snapshots and uncertainty rings, quantized `STEPS` direction, the 185 px dash-noise ring, `EYE/SOUND/RADIO` guard causes, trace threshold transitions, link-time feedback, fully visible one-cell server fixtures, and whole-name debrief badge lines. Interactive-window and Chrome checks remain separate gates.
+The 2026-07-16 interface pass is under `artifacts/qa/ui-refresh/` and `artifacts/qa/video-refresh/`. It verifies the portfolio-aligned black/cyan/magenta interface, compact Agent Lab tile below the minimap, uncluttered guard awareness language, protected objective/detection lanes, native 720p recording, and current persistent security telemetry. The 20-scene scale matrix passed with native text at both release sizes and measured 60.30 FPS at 1280x720 and 56.24 FPS at 1920x1080 in the conservative hidden-window compositor benchmark. The earlier frozen-gameplay matrices remain useful historical baselines.
 
 ## Audio
 
-All sound effects, ambient pads, and the trace-responsive tension layer are synthesized at runtime from original waveforms. Master, music, and effects volumes are independently adjustable. Optional sound captions identify terminal handshakes, alerts, impacts, pulses, drone rotors, and extraction events. There are no external audio attribution requirements; any future imported sound must be added to `assets/licenses.json`.
+All sound effects, ambient pads, and the trace-responsive tension layer are synthesized at runtime from original waveforms. Master, music, and effects volumes are independently adjustable. Sound captions are an opt-in accessibility mode identifying terminal handshakes, alerts, impacts, pulses, drone rotors, and extraction events; keeping them off by default prevents the standard HUD from becoming a continuous event log. The audio director owns two reserved music channels and only the SFX channels it starts; replacement/reconnected instances retire the preceding owner and shutdown never calls the process-wide mixer stop. The renderer initializes display and fonts without implicitly opening audio, allowing the director to choose a 44.1 kHz buffer (2048 samples in WebAssembly, 1024 on desktop) before sound creation. Score loops start on the first active contract update rather than at the browser connection gate, pause outside live gameplay, and remain suspended while the app or tab lacks focus. Their baked waveform headroom and 82.5 Hz-or-higher fundamentals replace the earlier continuous 46/55 Hz electrical drone, while channel crossfades still follow trace and lockdown. There are no external audio attribution requirements; any future imported sound must be added to `assets/licenses.json`.

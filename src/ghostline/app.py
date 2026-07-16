@@ -14,7 +14,15 @@ import pygame
 from ghostline.audio import AudioDirector
 from ghostline.config import TIERS
 from ghostline.policies import FairScriptedPolicy
-from ghostline.presentation import GhostlineRenderer
+from ghostline.presentation import (
+    GhostlineRenderer,
+    TOUCH_DASH_CENTER,
+    TOUCH_DASH_RADIUS,
+    TOUCH_JOYSTICK_CENTER,
+    TOUCH_PAUSE_RECT,
+    TOUCH_PULSE_CENTER,
+    TOUCH_PULSE_RADIUS,
+)
 from ghostline.resources import runtime_asset_path
 from ghostline.progression import (
     DEFAULT_BINDINGS,
@@ -64,6 +72,8 @@ AGENT_SHOWCASE_SEEDS = {
     5: 1_039_028,
     6: 1_047_023,
 }
+PORTFOLIO_DEMO_TIER = 6
+PORTFOLIO_DEMO_SEED = 2_000_000
 
 
 def mission_score(sim: GhostlineSimulation) -> int:
@@ -125,6 +135,9 @@ class GameApp:
         self._settings_return_state = "settings"
         self._debrief_agent = False
         self._telemetry: dict[str, Any] = {}
+        self.touch_controls_enabled = False
+        self._touch_points: dict[int, tuple[float, float]] = {}
+        self._touch_roles: dict[int, str] = {}
 
     def _load_runtime_policy(self) -> None:
         # Resolve relative to the source tree, installed wheel, or PyInstaller
@@ -179,6 +192,9 @@ class GameApp:
             self.renderer.close()
 
     def tick(self) -> None:
+        # The procedural score belongs to active contracts, not menus or pause
+        # screens. Browser/tab focus is tracked independently by AudioDirector.
+        self.audio.set_gameplay_active(self.state in {"play", "lab_play"})
         handlers = {
             "main": self._main_menu,
             "stage_select": self._stage_select,
@@ -213,12 +229,71 @@ class GameApp:
         for event in events:
             if event.type == pygame.QUIT:
                 self.running = False
-            elif event.type == getattr(pygame, "WINDOWFOCUSLOST", -999) and self.state == "play":
-                self.state, self.selection = "pause", 0
+            elif event.type == getattr(pygame, "WINDOWFOCUSLOST", -999):
+                self.audio.set_focus_active(False)
+                if self.state == "play":
+                    self.state, self.selection = "pause", 0
+            elif event.type == getattr(pygame, "WINDOWFOCUSGAINED", -998):
+                self.audio.set_focus_active(True)
         return events
 
-    def _menu_events(self, events: list[pygame.event.Event], count: int, *, horizontal: bool = False) -> str | None:
+    def _event_window_position(self, event: pygame.event.Event) -> tuple[float, float] | None:
+        if event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+            position = getattr(event, "pos", None)
+            return tuple(position) if position is not None else None
+        if event.type in (pygame.FINGERDOWN, pygame.FINGERMOTION, pygame.FINGERUP):
+            width, height = self.renderer.window.get_size()
+            return float(event.x) * width, float(event.y) * height
+        return None
+
+    def _menu_events(
+        self,
+        events: list[pygame.event.Event],
+        count: int,
+        *,
+        horizontal: bool = False,
+        compact: bool = False,
+        pointer_count: int | None = None,
+        pointer_offset: int = 0,
+    ) -> str | None:
+        hit_count = count if pointer_count is None else pointer_count
         for event in events:
+            if event.type in (pygame.FINGERDOWN, pygame.FINGERMOTION, pygame.FINGERUP):
+                self.touch_controls_enabled = True
+            if event.type in (pygame.MOUSEMOTION, pygame.FINGERMOTION):
+                position = self._event_window_position(event)
+                local_hover = (
+                    self.renderer.menu_item_at(position, hit_count, compact=compact)
+                    if position is not None
+                    else None
+                )
+                hovered = local_hover + pointer_offset if local_hover is not None else None
+                if hovered is not None and hovered != self.selection:
+                    self.selection = hovered
+                    self.audio.menu_move()
+                if event.type == pygame.MOUSEMOTION:
+                    try:
+                        pygame.mouse.set_cursor(
+                            pygame.SYSTEM_CURSOR_HAND if hovered is not None else pygame.SYSTEM_CURSOR_ARROW
+                        )
+                    except pygame.error:
+                        pass
+                continue
+            if event.type in (pygame.MOUSEBUTTONUP, pygame.FINGERUP):
+                if event.type == pygame.MOUSEBUTTONUP and int(getattr(event, "button", 0)) != 1:
+                    continue
+                position = self._event_window_position(event)
+                local_click = (
+                    self.renderer.menu_item_at(position, hit_count, compact=compact)
+                    if position is not None
+                    else None
+                )
+                clicked = local_click + pointer_offset if local_click is not None else None
+                if clicked is not None:
+                    self.selection = clicked
+                    self.audio.menu_confirm()
+                    return "confirm"
+                continue
             if event.type != pygame.KEYDOWN:
                 continue
             if event.key in (self._key("menu_up"), pygame.K_UP):
@@ -247,7 +322,12 @@ class GameApp:
             self.state = ("stage_select", "lab", "howto", "settings", "credits", "quit")[self.selection]
             self.selection = 0
             if self.state == "lab" and not self._lab_seed_is_custom:
-                self.lab_seed = AGENT_SHOWCASE_SEEDS[1]
+                # The first Watch Agent run is the exact tier-six contract used
+                # by the portfolio recording. It makes the live and recorded
+                # policy directly comparable instead of silently showing two
+                # different procedural seeds.
+                self.selection = PORTFOLIO_DEMO_TIER - 1
+                self.lab_seed = PORTFOLIO_DEMO_SEED
             if self.state == "quit":
                 self.running = False
         cleared = len(self.progression.get("best_scores", {}))
@@ -316,7 +396,10 @@ class GameApp:
             self.lab_seed = max(0, self.lab_seed + (step if choice == "right" else -step))
             self._lab_seed_is_custom = True
         panel = self._lab_history_panel(self.selection + 1)
-        seed_label = "CUSTOM REPLAY SEED" if self._lab_seed_is_custom else "SHOWCASE VALIDATION SEED"
+        if selected_tier == PORTFOLIO_DEMO_TIER and self.lab_seed == PORTFOLIO_DEMO_SEED and not self._lab_seed_is_custom:
+            seed_label = "PORTFOLIO VIDEO REPLAY"
+        else:
+            seed_label = "CUSTOM REPLAY SEED" if self._lab_seed_is_custom else "SHOWCASE VALIDATION SEED"
         self.renderer.draw_screen(
             title="AGENT LAB",
             subtitle="Player-equivalent // deterministic replay",
@@ -376,6 +459,8 @@ class GameApp:
         )
 
     def _start_mission(self, *, agent: bool, replay_seed: int | None = None) -> None:
+        self._touch_points.clear()
+        self._touch_roles.clear()
         if self.agent_env is not None:
             self.agent_env.close()
             self.agent_env = None
@@ -445,8 +530,98 @@ class GameApp:
                 break
         return 0.0 if not math.isfinite(best) else best
 
+    @staticmethod
+    def _touch_circle_hit(point: tuple[float, float], center: tuple[int, int], radius: int) -> bool:
+        return math.hypot(point[0] - center[0], point[1] - center[1]) <= radius
+
+    def _touch_logical_position(self, event: pygame.event.Event) -> tuple[float, float] | None:
+        window_position = self._event_window_position(event)
+        return self.renderer.logical_point(window_position) if window_position is not None else None
+
+    def _handle_touch_events(self, events: list[pygame.event.Event]) -> bool:
+        """Update multi-touch roles and report a pause-button press."""
+
+        for event in events:
+            is_finger = event.type in (pygame.FINGERDOWN, pygame.FINGERMOTION, pygame.FINGERUP)
+            is_mouse = event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEMOTION, pygame.MOUSEBUTTONUP)
+            if not is_finger and not (is_mouse and self.touch_controls_enabled):
+                continue
+            if is_mouse and bool(getattr(event, "touch", False)):
+                # SDL emits a matching finger event for synthesized touch mice.
+                continue
+            if is_finger:
+                self.touch_controls_enabled = True
+                contact = int(event.finger_id)
+                phase = {
+                    pygame.FINGERDOWN: "down",
+                    pygame.FINGERMOTION: "move",
+                    pygame.FINGERUP: "up",
+                }[event.type]
+            else:
+                contact = -1
+                if event.type == pygame.MOUSEBUTTONDOWN and int(getattr(event, "button", 0)) == 1:
+                    phase = "down"
+                elif event.type == pygame.MOUSEBUTTONUP and int(getattr(event, "button", 0)) == 1:
+                    phase = "up"
+                elif event.type == pygame.MOUSEMOTION and contact in self._touch_roles:
+                    phase = "move"
+                else:
+                    continue
+
+            if phase == "up":
+                self._touch_points.pop(contact, None)
+                self._touch_roles.pop(contact, None)
+                continue
+
+            point = self._touch_logical_position(event)
+            if point is None:
+                continue
+            if phase == "down":
+                if TOUCH_PAUSE_RECT.collidepoint(point):
+                    return True
+                if self._touch_circle_hit(point, TOUCH_DASH_CENTER, TOUCH_DASH_RADIUS + 8):
+                    role = "dash"
+                elif self._touch_circle_hit(point, TOUCH_PULSE_CENTER, TOUCH_PULSE_RADIUS + 8):
+                    role = "pulse"
+                elif point[0] <= 180 and point[1] >= 210:
+                    role = "move"
+                else:
+                    continue
+                self._touch_roles[contact] = role
+            if contact in self._touch_roles:
+                self._touch_points[contact] = point
+        return False
+
+    def _touch_action(self) -> Action:
+        move_point = next(
+            (self._touch_points[contact] for contact, role in self._touch_roles.items() if role == "move"),
+            None,
+        )
+        move = 0
+        if move_point is not None:
+            dx = move_point[0] - TOUCH_JOYSTICK_CENTER[0]
+            dy = move_point[1] - TOUCH_JOYSTICK_CENTER[1]
+            if math.hypot(dx, dy) >= 9.0:
+                sector = int(round(math.atan2(dy, dx) / (math.pi / 4.0))) % 8
+                move = (3, 4, 5, 6, 7, 8, 1, 2)[sector]
+        roles = set(self._touch_roles.values())
+        return Action(move=move, dash="dash" in roles, pulse="pulse" in roles)
+
+    def _touch_visual_state(self) -> dict[str, Any]:
+        move_point = next(
+            (self._touch_points[contact] for contact, role in self._touch_roles.items() if role == "move"),
+            None,
+        )
+        roles = set(self._touch_roles.values())
+        return {"move_point": move_point, "dash": "dash" in roles, "pulse": "pulse" in roles}
+
     def _play(self, *, agent: bool) -> None:
         events = self._events()
+        if not agent and self._handle_touch_events(events):
+            self._touch_points.clear()
+            self._touch_roles.clear()
+            self.state, self.selection = "pause", 0
+            return
         for event in events:
             if event.type != pygame.KEYDOWN:
                 continue
@@ -475,6 +650,21 @@ class GameApp:
                     self._agent_action = self.policy.act(self.sim)
                 measured = (time.perf_counter() - started) * 1000.0
                 self._agent_latency_ms = float(getattr(self.learned_policy, "last_latency_ms", measured)) if self.learned_policy is not None else measured
+                if bool(getattr(self.learned_policy, "waiting_for_action", False)):
+                    # Browser inference is asynchronous. Preserve exact
+                    # checkpoint behavior by holding simulation time at the
+                    # policy boundary instead of inventing a neutral action or
+                    # prefetching from a stale mid-repeat state.
+                    self.renderer.draw(
+                        lab_stats={
+                            "policy": self.policy_name,
+                            "action": "SYNCING EXACT STATE",
+                            "latency_ms": self._agent_latency_ms,
+                            "hidden": "--",
+                        },
+                        compact_hud=self.touch_controls_enabled,
+                    )
+                    return
                 self._telemetry["policy_decisions"] += 1
                 self._telemetry["policy_latencies_ms"].append(round(self._agent_latency_ms, 4))
             action = Action.decode(self._agent_action)
@@ -494,7 +684,13 @@ class GameApp:
                 (-1, 0): 7,
                 (-1, -1): 8,
             }
-            action = Action(move_lookup[(horizontal, vertical)], bool(keys[self._key("dash")]), bool(keys[self._key("pulse")]))
+            touch_action = self._touch_action()
+            keyboard_move = move_lookup[(horizontal, vertical)]
+            action = Action(
+                keyboard_move or touch_action.move,
+                bool(keys[self._key("dash")]) or touch_action.dash,
+                bool(keys[self._key("pulse")]) or touch_action.pulse,
+            )
         self._telemetry["actions"] += 1
         self._telemetry["action_counts"][action.encode()] += 1
         self._telemetry["idle_ticks"] += int(action.move == 0)
@@ -518,7 +714,9 @@ class GameApp:
                 "hidden": hidden_text,
             }
             if agent
-            else None
+            else None,
+            touch_controls=self._touch_visual_state() if self.touch_controls_enabled and not agent else None,
+            compact_hud=self.touch_controls_enabled,
         )
         if self.sim.terminated or self.sim.truncated:
             self._debrief_agent = agent
@@ -772,7 +970,7 @@ class GameApp:
             f"TUTORIAL HINTS  {self._on_off(access['tutorial_hints'])}",
             "BACK",
         ]
-        choice = self._menu_events(self._events(), len(items))
+        choice = self._menu_events(self._events(), len(items), compact=True)
         if choice == "back" or (choice == "confirm" and self.selection == 9):
             target = self._settings_return_state
             self.state, self.selection = target, (0 if target == "pause" else 1)
@@ -843,7 +1041,17 @@ class GameApp:
                 self.audio.menu_confirm()
                 break
         else:
-            choice = self._menu_events(events, len(CONTROL_ACTIONS) + 2)
+            all_items = [f"{label:<15} {self._key_label(action)}" for action, label in CONTROL_ACTIONS]
+            all_items += ["RESTORE DEFAULTS", "BACK"]
+            window_size = 10
+            window_start = max(0, min(self.selection - window_size // 2, len(all_items) - window_size))
+            choice = self._menu_events(
+                events,
+                len(all_items),
+                compact=True,
+                pointer_count=window_size,
+                pointer_offset=window_start,
+            )
             if choice == "back" or (choice == "confirm" and self.selection == len(CONTROL_ACTIONS) + 1):
                 self.state, self.selection = "settings", 2
             elif choice == "confirm" and self.selection == len(CONTROL_ACTIONS):

@@ -35,7 +35,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "color_safe": False,
         "reduced_motion": False,
         "reduced_flashes": True,
-        "sound_captions": True,
+        "sound_captions": False,
         "hud_scale": 1.0,
         "timer_assist": False,
         "timer_warnings": True,

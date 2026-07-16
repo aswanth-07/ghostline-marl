@@ -475,6 +475,10 @@ def stage(*, model: Path | None = None, include_ort: bool = True) -> dict[str, o
         "matched-runs.mjs",
         "policy-bridge.mjs",
         "ghostline.css",
+        "manrope-latin-wght-normal.woff2",
+        "jetbrains-mono-latin-wght-normal.woff2",
+        "manrope-OFL-1.1.txt",
+        "jetbrains-mono-OFL-1.1.txt",
     ):
         shutil.copy2(ROOT / "web" / "static" / source, static / source)
     _stage_pygbag_runtime(static)

@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 
-def test_recording_preserves_logical_canvas_without_macroblock_rescale(
+def test_recording_captures_native_720p_presentation_without_macroblock_rescale(
     tmp_path: Path, monkeypatch
 ) -> None:
     import ghostline.recording as recording
@@ -25,10 +25,17 @@ def test_recording_preserves_logical_canvas_without_macroblock_rescale(
         def __init__(self, _sim, *, visible: bool) -> None:
             assert not visible
 
-        def draw(self, *, return_array: bool, lab_stats: dict[str, str]):
+        def draw(
+            self,
+            *,
+            return_array: bool,
+            output_size: tuple[int, int],
+            lab_stats: dict[str, str | float],
+        ):
             assert return_array
+            assert output_size == (1280, 720)
             labels.append(lab_stats["policy"])
-            return np.zeros((360, 640, 3), dtype=np.uint8)
+            return np.zeros((720, 1280, 3), dtype=np.uint8)
 
         def close(self) -> None:
             pass
@@ -54,6 +61,7 @@ def test_recording_preserves_logical_canvas_without_macroblock_rescale(
     recording.record(model=None, tier=1, seed=0, output=tmp_path / "demo.mp4", fps=1)
 
     assert writer_options["macro_block_size"] == 2
-    assert written_shapes == [(360, 640, 3), (360, 640, 3)]
+    assert written_shapes == [(720, 1280, 3), (720, 1280, 3)]
     assert labels == ["SCRIPTED BASELINE", "SCRIPTED BASELINE"]
     assert recording.RECURRENT_POLICY_LABEL == "GRU BC+DAGGER"
+    assert recording.RECORDING_SIZE == (1280, 720)

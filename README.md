@@ -2,7 +2,7 @@
 
 Ghostline is a procedural 2D stealth-infiltration game and reinforcement-learning benchmark. Steal enough data to satisfy a contract, manage an escalating trace signature, and extract before security closes the route.
 
-The keyboard game, Agent Lab, recurrent policy, evaluation tools, and replay recorder all use the same deterministic 60 Hz headless simulation.
+Keyboard, cursor, and touch play, Agent Lab, the recurrent policy, evaluation tools, and the replay recorder all use the same deterministic 60 Hz headless simulation and semantic action contract.
 
 ## Measured neural result
 
@@ -20,7 +20,9 @@ and low-rate consolidation. The result is bound to checkpoint
 | 5 - Lockdown | 95% | 495/500 (99.0%) | 97.68-99.57% | 0.560 | 27.86 s |
 | 6 - Ghostline | 85% | 448/500 (89.6%) | 86.62-91.98% | 1.222 | 31.07 s |
 
-[Watch the 30-second tier-6 agent demo](videos/ghostline-demo.mp4). The full
+[Watch the 39-second, native-720p tier-6 agent demo](videos/ghostline-demo.mp4). It records
+the bundled champion on tier 6, seed `2,000,000`; desktop Agent Lab and the web
+release expose an exact replay of that same contract. The full
 [JSON](benchmarks/neural/champion-final-8m-500.json),
 [aggregate CSV](benchmarks/neural/champion-final-8m-500.csv), and
 [episode CSV](benchmarks/neural/champion-final-8m-500.episodes.csv) include
@@ -31,7 +33,7 @@ trace, time, path efficiency, optional data, and inference latency.
 
 ![Ghostline gameplay with smooth occlusion-correct security cones, fully readable furniture, patrol grades, exposure status, terminal linking, and directional warnings](assets/screenshots/gameplay-stealth-v3.png)
 
-The shipping view uses a 640×360 logical canvas with exact nearest-neighbour scaling. The world is never washed out by square exploration tiles: camera and guard sight appears as smooth 65-ray, occlusion-correct cones, with dashed electronic scans and notched human-sight boundaries. Suspicion becomes a segmented color-plus-shape meter before confirmed pursuit. Runner and guard locomotion retains all eight travel directions with dedicated four-frame diagonal cycles, while Standard, Interceptor, and Elite patrol badges make the tiered threat curve readable.
+The world is authored on a 640×360 logical canvas and presented at 1280×720 or 1920×1080 with native-resolution text and UI; the recorded showcase now uses the same 1280×720 composition instead of enlarging a 360p capture. The world is never washed out by square exploration tiles: camera and guard sight appears as smooth 65-ray, occlusion-correct cones, with dashed electronic scans and notched human-sight boundaries. Facility transponders keep security actors readable after direct sight is broken, matching the same public entity state available to the policy. Suspicion becomes a segmented color-plus-shape meter before confirmed pursuit. Runner and guard locomotion retains all eight travel directions with dedicated four-frame diagonal cycles, while Standard, Interceptor, and Elite patrol badges make the tiered threat curve readable.
 
 ![Eight-direction runner and guard locomotion QA matrix](assets/screenshots/locomotion-v2.png)
 
