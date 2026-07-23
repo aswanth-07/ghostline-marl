@@ -105,8 +105,9 @@ temporary locks on graph-redundant doors; and telegraphed nonlethal suppressor
 rounds on tiers 5-6. A shared security policy is used when a compatible
 `models/ghostline-security.pt` exists. Otherwise the game uses a deterministic
 tactical fallback built from the same local observations and action masks.
-This research track is playable and test-covered, but it has no published
-trained-policy result yet and does not alter the frozen Env-v2 evidence above.
+The bundled recurrent security policy batches the full operative team into one
+actor call at each 5 Hz tactical decision. Its measured held-out result is
+reported below; it does not alter the frozen Env-v2 runner evidence above.
 
 ## Agent Lab and public environment
 
@@ -146,23 +147,32 @@ Copy-Item models/ghostline-policy.fp32.parity.json benchmarks/neural/champion-on
 python scripts/build_web.py --model models/ghostline-policy.onnx
 ```
 
-Adaptive-security MAPPO uses disjoint 10M/11M/12M train/validation/final seed
-namespaces and a separate fail-closed checkpoint fingerprint:
+Adaptive-security MAPPO uses disjoint 10M training, 11M validation, and one-way
+12M+ final-test slices plus a separate fail-closed checkpoint fingerprint:
 
 ```powershell
 python -m pip install --constraint requirements.lock -e ".[marl]"
-ghostline train-security --hours 72 --envs 8 --tiers 3,4,5,6 --runner-model models/ghostline-policy.pt
+ghostline train-security --hours 72 --envs 8 --tiers 3,4,5,6 --runner-model models/ghostline-policy.pt --bc-warmup-steps 10000
+ghostline train-security --init-model artifacts/security-bc/champion.pt --bc-warmup-steps 0 --no-resume --hours 72
 ghostline evaluate-security --model artifacts/security-mappo/champion.pt --episodes-per-tier 100
 ```
 
-The CPU and CUDA smoke paths are implemented and tested. Training defaults to
+The CPU and CUDA paths are implemented and tested. Training defaults to
 the frozen published Env-v2 runner as its provenance-bound opponent; pass
 `--scripted-runner` only for the explicit easier baseline. Validation selection
-uses worst-tier security stop rate, then tier-six stop rate, damage, detections,
-and delay. Evaluation writes JSON, aggregate CSV, and per-episode CSV with 95%
-Wilson intervals. The 72-hour CUDA campaign and
-held-out final report remain pending; until they complete, Adaptive Contracts
-must not be presented as a learned adversarial-policy result.
+uses worst-tier security stop rate, then tier-six stop rate, mean all-tier stop
+rate, damage, detections, and delay. Evaluation writes JSON,
+aggregate CSV, and per-episode CSV with 95%
+Wilson intervals. An entropy-regularized observation-only tactical warm-up and
+discount-matched, component-accounted team shaping prevent the sparse terminal
+objective from degenerating into idle behavior. Validation then directs 70% of
+new episodes to the weakest tier while preserving 30% all-tier replay; pass
+`--uniform-curriculum` only for the explicit ablation. The selected mixed-opponent
+policy was chosen from two disjoint validation windows and then achieved `4/0/8/16%` tier 3-6
+containment on the untouched 13M final slice (25 contracts per tier). This is a
+measured optional-adversary result, not a solved-tier claim; tier 4 remains at
+zero stops. Lightweight player/web builds retain the tactical fallback when the
+PyTorch security runtime is unavailable.
 The evidence protocol is documented in
 [`benchmarks/security/README.md`](benchmarks/security/README.md).
 
@@ -207,6 +217,7 @@ python -m pytest -q
 python scripts/fuzz_ghostline_levels.py --seeds 10000
 python scripts/benchmark_ghostline.py --decisions 10000 --tier 6 --workers 22 --minimum-decisions-per-second 3000 --output benchmarks/system/headless-throughput.json
 python scripts/verify_release_evidence.py
+python scripts/verify_security_release_evidence.py
 python -m build
 python scripts/verify_source_archive.py
 python scripts/verify_clean_install.py
@@ -224,7 +235,7 @@ for the exact packaged bytes and source-checkpoint SHA-256.
 build inspection. CI also launches the packaged executable with a headless
 simulation-and-policy smoke test before publishing the artifact.
 
-`verify_release_evidence.py` is the read-only release authority. It independently
+`verify_release_evidence.py` is the read-only runner release authority. It independently
 checks the 3,000 canonical final episodes and Wilson intervals, the consumed 8M
 slice and all three output hashes, the exact checkpoint/ONNX/parity chain, the
 tracked tier-6 throughput run, and `videos/ghostline-demo.mp4`. It cannot run or
@@ -236,6 +247,11 @@ only then does the workflow create a GitHub Release containing both bundles,
 the wheel, source archive, checkpoint, deployment ONNX, model card, final
 JSON/CSV evidence, parity/throughput audits, and demo video. Manual workflow
 dispatch performs the same gates and builds but never publishes a release.
+
+`verify_security_release_evidence.py` separately binds the bundled security
+checkpoint to its two validation slices, failed 12M candidate, untouched 13M
+final slice, frozen runner opponent, aggregate metrics, Wilson intervals, and
+CSV copies.
 
 The original 5,000 decisions/s simulator target is not claimed by the current
 live-telemetry build. The tracked WSL2 run reaches 3,194 aggregate decisions/s

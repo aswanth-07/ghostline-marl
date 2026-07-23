@@ -7,12 +7,13 @@ import hashlib
 import math
 from pathlib import Path
 import time
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import numpy as np
 import torch
 from torch import nn
 
+from ghostline.config_v3 import MAX_SECURITY_TARGETS
 from ghostline.security_env import GhostlineSecurityParallelEnv
 from ghostline.runner_opponents import FrozenV2RunnerOpponent
 from ghostline.security_baselines import tactical_security_action
@@ -66,13 +67,14 @@ def _wilson_interval(successes: int, total: int, z: float = 1.959963984540054) -
     return max(0.0, center - margin), min(1.0, center + margin)
 
 
-def _selection_key(report: dict[str, Any]) -> tuple[float, float, float, float, float]:
+def _selection_key(report: dict[str, Any]) -> tuple[float, float, float, float, float, float]:
     tiers = report["tiers"]
     summaries = list(tiers.values())
     tier_six = tiers.get("6", summaries[-1])
     return (
         float(report["worst_tier_security_stop_rate"]),
         float(tier_six["security_stop_rate"]),
+        sum(float(item["security_stop_rate"]) for item in summaries) / len(summaries),
         sum(float(item["mean_damage"]) for item in summaries) / len(summaries),
         sum(float(item["mean_detections"]) for item in summaries) / len(summaries),
         sum(float(item["mean_duration_seconds"]) for item in summaries) / len(summaries),
@@ -86,6 +88,16 @@ def parse_security_tiers(value: str | Iterable[int]) -> tuple[int, ...]:
     if len(set(tiers)) != len(tiers):
         raise ValueError("security tiers must not contain duplicates")
     return tiers
+
+
+def _adaptive_tier_probabilities(report: dict[str, Any], tiers: tuple[int, ...]) -> np.ndarray:
+    """Allocate 70% replay to the current weakest held-out tier set."""
+
+    rates = np.asarray([float(report["tiers"][str(tier)]["security_stop_rate"]) for tier in tiers])
+    weakest = np.isclose(rates, rates.min(), atol=1e-9)
+    probabilities = np.full(len(tiers), 0.30 / len(tiers), dtype=np.float64)
+    probabilities[weakest] += 0.70 / max(1, int(weakest.sum()))
+    return probabilities / probabilities.sum()
 
 
 def _padded_observations(
@@ -131,6 +143,31 @@ def _sample_actions(
     )
 
 
+@torch.no_grad()
+def _batched_security_actions(
+    policy: SharedSecurityActorCritic,
+    observations: dict[str, dict[str, np.ndarray]],
+    hidden: torch.Tensor | None,
+    *,
+    deterministic: bool,
+    device: torch.device,
+) -> tuple[dict[str, np.ndarray], torch.Tensor]:
+    """Evaluate every active operative in one actor forward pass."""
+
+    agents = list(observations)
+    batched = {
+        key: torch.as_tensor(np.stack([observations[agent][key] for agent in agents]), device=device)
+        for key in ACTOR_OBS_KEYS
+    }
+    logits, next_hidden = policy.forward_actor(batched, hidden)
+    if deterministic:
+        factors = [torch.argmax(head, dim=-1) for head in logits]
+    else:
+        factors = [torch.distributions.Categorical(logits=head).sample() for head in logits]
+    decisions = torch.stack(factors, dim=-1).cpu().numpy().astype(np.int64)
+    return {agent: decisions[index] for index, agent in enumerate(agents)}, next_hidden
+
+
 def _training_checkpoint(
     policy: SharedSecurityActorCritic,
     optimizer: torch.optim.Optimizer,
@@ -142,6 +179,7 @@ def _training_checkpoint(
     best_worst_tier: float,
     best_selection_key: tuple[float, ...],
     tiers: tuple[int, ...],
+    tier_probabilities: np.ndarray,
     args: dict[str, Any],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -158,10 +196,90 @@ def _training_checkpoint(
             "best_worst_tier": float(best_worst_tier),
             "best_selection_key": tuple(float(value) for value in best_selection_key),
             "tiers": tiers,
+            "tier_probabilities": tuple(float(value) for value in tier_probabilities),
             "training_args": args,
         },
         path,
     )
+
+
+def _tactical_behavior_warmup(
+    policy: SharedSecurityActorCritic,
+    optimizer: torch.optim.Optimizer,
+    envs: list[GhostlineSecurityParallelEnv],
+    observations: list[dict[str, dict[str, np.ndarray]]],
+    *,
+    target_steps: int,
+    epochs: int,
+    batch_size: int,
+    entropy_coefficient: float,
+    device: torch.device,
+    next_tier: Callable[[], int],
+    next_seed: Callable[[], int],
+    rng: np.random.Generator,
+) -> tuple[list[dict[str, dict[str, np.ndarray]]], dict[str, float | int]]:
+    """Imitate the audited tactical baseline before adversarial fine-tuning."""
+
+    storage: dict[str, list[np.ndarray]] = {key: [] for key in ACTOR_OBS_KEYS}
+    action_storage: list[np.ndarray] = []
+    episodes = runner_successes = 0
+    policy.eval()
+    while len(action_storage) < target_steps:
+        next_records: list[dict[str, dict[str, np.ndarray]]] = []
+        for env_index, env in enumerate(envs):
+            records = observations[env_index]
+            actions: dict[str, np.ndarray] = {}
+            for agent, observation in records.items():
+                action = tactical_security_action(observation, env.agent_name_mapping[agent])
+                actions[agent] = action
+                if len(action_storage) < target_steps:
+                    for key in ACTOR_OBS_KEYS:
+                        storage[key].append(observation[key].copy())
+                    action_storage.append(action.copy())
+            stepped, _, terminations, truncations, _ = env.step(actions)
+            ended = any(terminations.values()) or any(truncations.values())
+            if ended:
+                episodes += 1
+                runner_successes += int(env.sim.extracted)
+                tier = next_tier()
+                episode_seed = next_seed()
+                stepped, _ = env.reset(seed=episode_seed, options={"tier": tier})
+            next_records.append(stepped)
+        observations = next_records
+
+    dataset = {key: np.stack(values) for key, values in storage.items()}
+    actions = np.stack(action_storage)
+    final_loss = final_accuracy = final_entropy = 0.0
+    policy.train()
+    for _ in range(epochs):
+        for indices in np.array_split(rng.permutation(len(actions)), math.ceil(len(actions) / batch_size)):
+            if len(indices) == 0:
+                continue
+            tensors = {key: torch.as_tensor(value[indices], device=device) for key, value in dataset.items()}
+            expected = torch.as_tensor(actions[indices], device=device)
+            logits, _ = policy.forward_actor(tensors)
+            log_probability, entropy = factorized_log_prob(logits, expected)
+            loss = -log_probability.mean() - entropy_coefficient * entropy.mean()
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            nn.utils.clip_grad_norm_(policy.parameters(), 0.5)
+            optimizer.step()
+            with torch.no_grad():
+                predicted = torch.stack([torch.argmax(head, dim=-1) for head in logits], dim=-1)
+                final_accuracy = float((predicted == expected).all(dim=-1).float().mean())
+            final_loss = float(loss.detach())
+            final_entropy = float(entropy.mean().detach())
+    return observations, {
+        "samples": len(actions),
+        "epochs": int(epochs),
+        "batch_size": int(batch_size),
+        "final_loss": final_loss,
+        "final_exact_action_accuracy": final_accuracy,
+        "final_entropy": final_entropy,
+        "entropy_coefficient": float(entropy_coefficient),
+        "episodes": episodes,
+        "runner_success_rate": runner_successes / max(1, episodes),
+    }
 
 
 def evaluate_security_policy(
@@ -191,22 +309,24 @@ def evaluate_security_policy(
             runner = FrozenV2RunnerOpponent(runner_policy) if runner_policy is not None else None
             env = GhostlineSecurityParallelEnv(tier=tier, seed=seed, runner=runner)
             observations, _ = env.reset(seed=seed)
-            hidden: dict[str, torch.Tensor | None] = {agent: None for agent in env.agents}
+            hidden_tensor: torch.Tensor | None = None
             while env.agents:
-                actions: dict[str, np.ndarray] = {}
-                for agent in env.agents:
-                    if policy is None:
-                        actions[agent] = tactical_security_action(
+                if policy is None:
+                    actions = {
+                        agent: tactical_security_action(
                             observations[agent],
                             env.agent_name_mapping[agent],
                         )
-                    else:
-                        actions[agent], hidden[agent] = policy.act(
-                            observations[agent],
-                            hidden[agent],
-                            deterministic=deterministic,
-                            device=device,
-                        )
+                        for agent in env.agents
+                    }
+                else:
+                    actions, hidden_tensor = _batched_security_actions(
+                        policy,
+                        observations,
+                        hidden_tensor,
+                        deterministic=deterministic,
+                        device=device,
+                    )
                 observations, _, terminations, truncations, infos = env.step(actions)
                 if any(terminations.values()) or any(truncations.values()):
                     break
@@ -282,12 +402,26 @@ def train_security(
     resume: bool = True,
     dry_run: bool = False,
     runner_checkpoint: Path | None = None,
+    init_checkpoint: Path | None = None,
+    scripted_opponent_fraction: float = 0.0,
+    bc_warmup_steps: int = 0,
+    bc_warmup_epochs: int = 2,
+    bc_warmup_entropy: float = 0.05,
+    adaptive_curriculum: bool = True,
 ) -> Path:
     selected_tiers = parse_security_tiers(tiers)
     if env_count < 1 or rollout < 2 or epochs < 1:
         raise ValueError("env_count >= 1, rollout >= 2, and epochs >= 1 are required")
     if hours <= 0.0 and max_steps <= 0:
         raise ValueError("hours or max_steps must allow at least one rollout")
+    if learning_rate <= 0.0 or not 0.0 < gamma <= 1.0 or not 0.0 <= gae_lambda <= 1.0:
+        raise ValueError("learning_rate must be positive and gamma/gae_lambda must be in (0, 1]/[0, 1]")
+    if entropy_coefficient < 0.0 or bc_warmup_entropy < 0.0:
+        raise ValueError("entropy coefficients cannot be negative")
+    if not 0.0 <= scripted_opponent_fraction <= 1.0:
+        raise ValueError("scripted_opponent_fraction must be between zero and one")
+    if bc_warmup_steps < 0 or bc_warmup_epochs < 1:
+        raise ValueError("bc_warmup_steps >= 0 and bc_warmup_epochs >= 1 are required")
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     latest_path = output / "latest.pt"
@@ -304,6 +438,12 @@ def train_security(
             "hours": hours,
             "max_steps": max_steps,
             "runner_checkpoint": str(runner_checkpoint) if runner_checkpoint is not None else None,
+            "init_checkpoint": str(init_checkpoint) if init_checkpoint is not None else None,
+            "scripted_opponent_fraction": float(scripted_opponent_fraction),
+            "bc_warmup_steps": int(bc_warmup_steps),
+            "bc_warmup_epochs": int(bc_warmup_epochs),
+            "bc_warmup_entropy": float(bc_warmup_entropy),
+            "adaptive_curriculum": bool(adaptive_curriculum),
         }
         (output / "dry-run.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         return output / "dry-run.json"
@@ -320,11 +460,24 @@ def train_security(
         frozen_runner_policy = load_policy(runner_checkpoint, device="cpu")
         runner_label = f"env-v2:{_sha256(runner_checkpoint)}"
     policy = SharedSecurityActorCritic(recurrent_size=recurrent_size).to(training_device)
+    init_label = None
+    if init_checkpoint is not None:
+        init_checkpoint = Path(init_checkpoint)
+        if not init_checkpoint.is_file():
+            raise FileNotFoundError(f"security initialization checkpoint is missing: {init_checkpoint}")
+        initialized = load_security_policy(init_checkpoint, device=training_device)
+        if initialized.recurrent_size != recurrent_size:
+            raise RuntimeError("security initialization recurrent size does not match")
+        policy.load_state_dict(initialized.state_dict(), strict=True)
+        init_label = f"{init_checkpoint}:{_sha256(init_checkpoint)}"
     optimizer = torch.optim.Adam(policy.parameters(), lr=learning_rate, eps=1e-5)
     steps = updates = seed_cursor = 0
     best_worst_tier = -math.inf
-    best_selection_key: tuple[float, ...] = (-math.inf,) * 5
+    best_selection_key: tuple[float, ...] = (-math.inf,) * 6
+    tier_probabilities = np.full(len(selected_tiers), 1.0 / len(selected_tiers), dtype=np.float64)
     if resume and latest_path.exists():
+        if init_checkpoint is not None:
+            raise RuntimeError("cannot combine a resume checkpoint with --init-model")
         payload = torch.load(latest_path, map_location=training_device, weights_only=False)
         if payload.get("environment_fingerprint") != security_environment_fingerprint():
             raise RuntimeError("security resume checkpoint uses a stale environment contract")
@@ -335,6 +488,12 @@ def train_security(
         prior_runner = payload.get("training_args", {}).get("runner_opponent")
         if prior_runner != runner_label:
             raise RuntimeError("security resume runner opponent does not match")
+        prior_adaptive = bool(payload.get("training_args", {}).get("adaptive_curriculum", False))
+        if prior_adaptive != adaptive_curriculum:
+            raise RuntimeError("security resume curriculum mode does not match")
+        prior_scripted_fraction = float(payload.get("training_args", {}).get("scripted_opponent_fraction", 0.0))
+        if not math.isclose(prior_scripted_fraction, scripted_opponent_fraction):
+            raise RuntimeError("security resume opponent curriculum does not match")
         policy.load_state_dict(payload["model"], strict=True)
         optimizer.load_state_dict(payload["optimizer"])
         steps = int(payload.get("steps", 0))
@@ -342,13 +501,15 @@ def train_security(
         seed_cursor = int(payload.get("seed_cursor", 0))
         best_worst_tier = float(payload.get("best_worst_tier", -math.inf))
         restored_key = tuple(float(value) for value in payload.get("best_selection_key", (best_worst_tier,)))
-        best_selection_key = (restored_key + (-math.inf,) * 5)[:5]
+        best_selection_key = (restored_key + (-math.inf,) * 6)[:6]
+        restored_probabilities = np.asarray(payload.get("tier_probabilities", tier_probabilities), dtype=np.float64)
+        if restored_probabilities.shape != tier_probabilities.shape or not np.isclose(restored_probabilities.sum(), 1.0):
+            raise RuntimeError("security resume tier probabilities are invalid")
+        tier_probabilities = restored_probabilities
 
     rng = np.random.default_rng(seed + seed_cursor)
     def next_tier() -> int:
-        # Replay every earlier tier evenly; later targeted curricula can alter
-        # sampling without changing the final evaluation distribution.
-        return int(rng.choice(selected_tiers))
+        return int(rng.choice(selected_tiers, p=tier_probabilities))
 
     def next_seed() -> int:
         nonlocal seed_cursor
@@ -356,21 +517,47 @@ def train_security(
         seed_cursor += 1
         return value
 
+    def next_runner() -> FrozenV2RunnerOpponent | None:
+        if frozen_runner_policy is None or rng.random() < scripted_opponent_fraction:
+            return None
+        return FrozenV2RunnerOpponent(frozen_runner_policy)
+
     envs: list[GhostlineSecurityParallelEnv] = []
     current_observations: list[dict[str, dict[str, np.ndarray]]] = []
     for _ in range(env_count):
         tier = next_tier()
         episode_seed = next_seed()
-        runner = FrozenV2RunnerOpponent(frozen_runner_policy) if frozen_runner_policy is not None else None
+        runner = next_runner()
         env = GhostlineSecurityParallelEnv(tier=tier, seed=episode_seed, runner=runner)
         observation, _ = env.reset(seed=episode_seed, options={"tier": tier})
         envs.append(env)
         current_observations.append(observation)
+    started = time.monotonic()
+    if steps == 0 and bc_warmup_steps > 0:
+        warmup_target = min(int(bc_warmup_steps), max_steps) if max_steps > 0 else int(bc_warmup_steps)
+        current_observations, warmup_report = _tactical_behavior_warmup(
+            policy,
+            optimizer,
+            envs,
+            current_observations,
+            target_steps=warmup_target,
+            epochs=bc_warmup_epochs,
+            batch_size=256,
+            entropy_coefficient=bc_warmup_entropy,
+            device=training_device,
+            next_tier=next_tier,
+            next_seed=next_seed,
+            rng=rng,
+        )
+        steps += warmup_target
+        (output / "behavior-warmup.json").write_text(
+            json.dumps(warmup_report, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     current_padded, current_active = _padded_observations(envs, current_observations)
     current_states = np.stack([env.state() for env in envs])
     current_starts = np.ones((env_count, MAX_OPERATIVES), dtype=bool)
     hidden = torch.zeros(1, env_count * MAX_OPERATIVES, recurrent_size, device=training_device)
-    started = time.monotonic()
     deadline = started + hours * 3600.0
     next_validation = max(validation_interval, steps + validation_interval)
     args_record = {
@@ -387,6 +574,12 @@ def train_security(
         "entropy_coefficient": entropy_coefficient,
         "seed": seed,
         "runner_opponent": runner_label,
+        "init_checkpoint": init_label,
+        "scripted_opponent_fraction": float(scripted_opponent_fraction),
+        "bc_warmup_steps": int(bc_warmup_steps),
+        "bc_warmup_epochs": int(bc_warmup_epochs),
+        "bc_warmup_entropy": float(bc_warmup_entropy),
+        "adaptive_curriculum": bool(adaptive_curriculum),
     }
 
     try:
@@ -402,6 +595,8 @@ def train_security(
             reward_buffer: list[np.ndarray] = []
             done_buffer: list[np.ndarray] = []
             episodes_finished = runner_successes = 0
+            reward_component_sums: dict[str, float] = {}
+            reward_component_count = 0
 
             policy.eval()
             for _ in range(rollout):
@@ -427,8 +622,14 @@ def train_security(
                         agent: sampled_np[env_index, env.agent_name_mapping[agent]]
                         for agent in env.agents
                     }
-                    observations, team_rewards, terminations, truncations, _ = env.step(actions)
+                    observations, team_rewards, terminations, truncations, infos = env.step(actions)
                     rewards[env_index] = float(next(iter(team_rewards.values())))
+                    if infos:
+                        components = next(iter(infos.values())).get("reward_components", {})
+                        for name, value in components.items():
+                            if name != "total":
+                                reward_component_sums[name] = reward_component_sums.get(name, 0.0) + float(value)
+                        reward_component_count += 1
                     ended = any(terminations.values()) or any(truncations.values())
                     dones[env_index] = ended
                     if ended:
@@ -436,6 +637,8 @@ def train_security(
                         runner_successes += int(env.sim.extracted)
                         tier = next_tier()
                         episode_seed = next_seed()
+                        selected_runner = next_runner()
+                        env.runner = env._scripted_runner.act if selected_runner is None else selected_runner
                         observations, _ = env.reset(seed=episode_seed, options={"tier": tier})
                         next_starts[env_index] = True
                     next_records.append(observations)
@@ -519,6 +722,14 @@ def train_security(
                 final_clip_fraction = float(_masked_mean(((ratio - 1.0).abs() > clip_ratio).float(), active_tensor).detach())
             updates += 1
             elapsed = max(1e-6, time.monotonic() - started)
+            sampled_actions = np.stack(action_buffer)
+            active_actions = np.stack(active_buffer).astype(bool)
+            action_histograms = {
+                name: np.bincount(sampled_actions[..., index][active_actions], minlength=size).tolist()
+                for index, (name, size) in enumerate(
+                    (("intent", 8), ("target", MAX_SECURITY_TARGETS), ("message", 5), ("ability", 2))
+                )
+            }
             record = {
                 "update": updates,
                 "steps": steps,
@@ -530,6 +741,15 @@ def train_security(
                 "mean_team_reward": float(rewards_np.mean()),
                 "episodes_finished": episodes_finished,
                 "runner_success_rate": runner_successes / max(1, episodes_finished),
+                "action_histograms": action_histograms,
+                "mean_reward_components": {
+                    name: value / max(1, reward_component_count)
+                    for name, value in sorted(reward_component_sums.items())
+                },
+                "tier_probabilities": {
+                    str(tier): float(probability)
+                    for tier, probability in zip(selected_tiers, tier_probabilities, strict=True)
+                },
             }
             with metrics_path.open("a", encoding="utf-8", newline="\n") as stream:
                 stream.write(json.dumps(record, sort_keys=True) + "\n")
@@ -543,6 +763,7 @@ def train_security(
                 best_worst_tier=best_worst_tier,
                 best_selection_key=best_selection_key,
                 tiers=selected_tiers,
+                tier_probabilities=tier_probabilities,
                 args=args_record,
             )
 
@@ -562,6 +783,16 @@ def train_security(
                     encoding="utf-8",
                 )
                 selection_key = _selection_key(report)
+                save_security_policy(
+                    policy,
+                    output / f"policy-{steps:012d}.pt",
+                    steps=steps,
+                    updates=updates,
+                    runner_opponent=runner_label,
+                    selection_key=selection_key,
+                    validation=report["tiers"],
+                    purpose="immutable_validation_checkpoint",
+                )
                 if selection_key > best_selection_key:
                     best_selection_key = selection_key
                     best_worst_tier = selection_key[0]
@@ -574,6 +805,8 @@ def train_security(
                         selection_key=selection_key,
                         validation=report["tiers"],
                     )
+                if adaptive_curriculum:
+                    tier_probabilities = _adaptive_tier_probabilities(report, selected_tiers)
                 next_validation = steps + validation_interval
     finally:
         for env in envs:
@@ -618,6 +851,7 @@ def evaluate_security_checkpoint(
         runner_policy=runner_policy,
         runner_label=runner_label,
     )
+    report["security_checkpoint_sha256"] = _sha256(Path(model)) if model is not None else None
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

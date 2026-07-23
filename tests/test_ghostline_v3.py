@@ -11,9 +11,16 @@ from pettingzoo.test import parallel_api_test
 import ghostline
 from ghostline.cli import build_parser
 from ghostline.env_v3 import GhostlineEnvV3
-from ghostline.marl_train import evaluate_security_checkpoint, train_security
-from ghostline.security_env import GhostlineSecurityParallelEnv
+from ghostline.marl_train import (
+    _adaptive_tier_probabilities,
+    _batched_security_actions,
+    _selection_key,
+    evaluate_security_checkpoint,
+    train_security,
+)
+from ghostline.security_env import GhostlineSecurityParallelEnv, _capped_radio_credit
 from ghostline.security_baselines import tactical_security_action
+from ghostline.security_controller import AdaptiveSecurityController
 from ghostline.security_model import SharedSecurityActorCritic, load_security_policy, save_security_policy
 from ghostline.simulation import norm
 from ghostline.simulation_v3 import GhostlineSimulationV3
@@ -220,6 +227,129 @@ def test_security_parallel_api_and_parameter_shared_recurrent_policy(tmp_path) -
     env.close()
 
 
+def test_batched_security_evaluation_matches_individual_deterministic_actions() -> None:
+    env = GhostlineSecurityParallelEnv(tier=6, seed=20_000_044)
+    observations, _ = env.reset(seed=20_000_044)
+    policy = SharedSecurityActorCritic(recurrent_size=256)
+    individual = {
+        agent: policy.act(observation, deterministic=True)[0]
+        for agent, observation in observations.items()
+    }
+    batched, hidden = _batched_security_actions(
+        policy,
+        observations,
+        None,
+        deterministic=True,
+        device=torch.device("cpu"),
+    )
+    assert hidden.shape == (1, len(observations), 256)
+    assert all(np.array_equal(individual[agent], batched[agent]) for agent in observations)
+    env.close()
+
+
+def test_human_game_security_controller_batches_the_shared_policy() -> None:
+    env = GhostlineSecurityParallelEnv(tier=6, seed=20_000_045)
+    observations, _ = env.reset(seed=20_000_045)
+    policy = SharedSecurityActorCritic(recurrent_size=256)
+    individual = {
+        agent: policy.act(observation, deterministic=True)[0]
+        for agent, observation in observations.items()
+    }
+    controller = object.__new__(AdaptiveSecurityController)
+    controller.policy = policy
+    controller._batch_hidden = None
+    controller._batch_agents = ()
+
+    batched = controller._policy_actions(observations)
+
+    assert controller._batch_hidden.shape == (1, len(observations), 256)
+    assert all(np.array_equal(individual[agent], batched[agent]) for agent in observations)
+    env.close()
+
+
+def test_security_reward_components_sum_exactly() -> None:
+    env = GhostlineSecurityParallelEnv(tier=6, seed=20_000_042)
+    observations, _ = env.reset(seed=20_000_042)
+    actions = {
+        agent: tactical_security_action(observation, env.agent_name_mapping[agent])
+        for agent, observation in observations.items()
+    }
+    _, rewards, _, _, infos = env.step(actions)
+    for agent, reward in rewards.items():
+        components = infos[agent]["reward_components"]
+        assert components["total"] == pytest.approx(reward)
+        assert sum(value for key, value in components.items() if key != "total") == pytest.approx(reward)
+    env.close()
+
+
+def test_security_radio_shaping_cannot_be_farmed_by_repeated_messages() -> None:
+    assert _capped_radio_credit(0, 4, 5) == pytest.approx(0.02)
+    assert _capped_radio_credit(4, 40, 5) == 0.0
+    rewards = [_capped_radio_credit(before, after, 5) for before, after in ((0, 4), (4, 8), (8, 12))]
+    assert sum(rewards) == pytest.approx(0.02)
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    (
+        ("bc_warmup_steps", -1),
+        ("bc_warmup_epochs", 0),
+        ("bc_warmup_entropy", -0.1),
+        ("scripted_opponent_fraction", -0.1),
+        ("scripted_opponent_fraction", 1.1),
+    ),
+)
+def test_security_training_rejects_invalid_warmup_arguments(tmp_path, argument, value) -> None:
+    kwargs = {argument: value}
+    with pytest.raises(ValueError):
+        train_security(
+            output=tmp_path / argument,
+            hours=0.01,
+            max_steps=20,
+            env_count=1,
+            rollout=3,
+            epochs=1,
+            tiers="6",
+            recurrent_size=256,
+            validation_interval=0,
+            resume=False,
+            device="cpu",
+            **kwargs,
+        )
+
+
+def test_security_curriculum_targets_weakest_tiers_without_forgetting_replay() -> None:
+    report = {
+        "tiers": {
+            "3": {"security_stop_rate": 0.2},
+            "4": {"security_stop_rate": 0.0},
+            "5": {"security_stop_rate": 0.0},
+            "6": {"security_stop_rate": 0.1},
+        }
+    }
+    probabilities = _adaptive_tier_probabilities(report, (3, 4, 5, 6))
+    assert probabilities.sum() == pytest.approx(1.0)
+    assert probabilities.tolist() == pytest.approx([0.075, 0.425, 0.425, 0.075])
+
+
+def test_security_selection_preserves_real_stops_before_damage_tiebreak() -> None:
+    def report(rates, damages):
+        tiers = {
+            str(tier): {
+                "security_stop_rate": rate,
+                "mean_damage": damage,
+                "mean_detections": 1.0,
+                "mean_duration_seconds": 10.0,
+            }
+            for tier, rate, damage in zip((3, 4, 5, 6), rates, damages, strict=True)
+        }
+        return {"tiers": tiers, "worst_tier_security_stop_rate": min(rates)}
+
+    useful = report((0.1, 0.1, 0.0, 0.0), (0.1, 0.1, 0.1, 0.1))
+    noisy = report((0.0, 0.0, 0.0, 0.0), (1.0, 1.0, 1.0, 1.0))
+    assert _selection_key(useful) > _selection_key(noisy)
+
+
 def test_tactical_security_baseline_is_masked_and_shared_with_game_controller() -> None:
     env = GhostlineSecurityParallelEnv(tier=6, seed=20_000_043)
     observations, _ = env.reset(seed=20_000_043)
@@ -248,9 +378,34 @@ def test_security_mappo_cpu_smoke_run(tmp_path) -> None:
         validation_interval=0,
         resume=False,
         device="cpu",
+        bc_warmup_steps=8,
+        bc_warmup_epochs=1,
     )
     assert champion.exists()
     assert load_security_policy(champion).recurrent_size == 256
+    assert (tmp_path / "security-smoke" / "behavior-warmup.json").is_file()
+
+
+def test_security_mappo_can_start_from_compatible_policy(tmp_path) -> None:
+    initialization = tmp_path / "initial-security.pt"
+    save_security_policy(SharedSecurityActorCritic(recurrent_size=256), initialization, purpose="test-init")
+    champion = train_security(
+        output=tmp_path / "initialized-smoke",
+        hours=0.01,
+        max_steps=12,
+        env_count=1,
+        rollout=3,
+        epochs=1,
+        tiers="6",
+        recurrent_size=256,
+        validation_interval=0,
+        resume=False,
+        device="cpu",
+        init_checkpoint=initialization,
+    )
+    assert champion.exists()
+    payload = torch.load(tmp_path / "initialized-smoke" / "latest.pt", map_location="cpu", weights_only=False)
+    assert str(initialization) in payload["training_args"]["init_checkpoint"]
 
 
 def test_security_resume_fails_closed_when_opponent_contract_changes(tmp_path) -> None:

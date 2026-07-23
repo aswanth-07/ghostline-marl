@@ -25,7 +25,14 @@ def security_environment_fingerprint() -> str:
 
     root = Path(__file__).resolve().parent
     digest = hashlib.sha256()
-    for name in ("config_v3.py", "types_v3.py", "simulation_v3.py", "security_env.py", "security_model.py"):
+    for name in (
+        "config_v3.py",
+        "types_v3.py",
+        "simulation_v3.py",
+        "security_baselines.py",
+        "security_env.py",
+        "security_model.py",
+    ):
         path = root / name
         digest.update(name.encode("utf-8"))
         digest.update(path.read_bytes())

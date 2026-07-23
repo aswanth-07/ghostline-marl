@@ -80,7 +80,8 @@ Training and evaluation results must remain in this project directory.
 ```powershell
 python -m pip install --constraint requirements.lock -e ".[marl]"
 ghostline train-security --hours 72 --envs 8 --rollout 64 --tiers 3,4,5,6 --runner-model models/ghostline-policy.pt
-ghostline evaluate-security --model artifacts/security-mappo/champion.pt --episodes-per-tier 100 --seed-start 12000000 --output benchmarks/security/final-test.json
+ghostline evaluate-security --model models/ghostline-security.pt --episodes-per-tier 25 --seed-start 13000000 --output benchmarks/security/adaptive-security-final-13m-25.json
+python scripts/verify_security_release_evidence.py
 ```
 
 Use `--max-steps 20 --envs 1 --rollout 3 --epochs 1 --device cpu` for a

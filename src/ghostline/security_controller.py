@@ -27,6 +27,8 @@ class AdaptiveSecurityController:
         self.policy = None
         self.adapter = None
         self.hidden: dict[str, Any] = {}
+        self._batch_hidden = None
+        self._batch_agents: tuple[str, ...] = ()
         self.policy_name = "TACTICAL RULE TEAM"
         self.last_latency_ms = 0.0
         self.decisions = 0
@@ -53,6 +55,8 @@ class AdaptiveSecurityController:
         self.sim = sim
         self.sim.external_security = True
         self.hidden = {f"guard_{guard.guard_id}": None for guard in sim.level.guards}
+        self._batch_hidden = None
+        self._batch_agents = ()
         self.last_orders = {}
         self.last_latency_ms = 0.0
         self.decisions = 0
@@ -80,12 +84,8 @@ class AdaptiveSecurityController:
             for agent, observation in observations.items():
                 if self.policy is None:
                     actions[agent] = self._rule_action(observation, int(agent.rsplit("_", 1)[1]))
-                else:
-                    actions[agent], self.hidden[agent] = self.policy.act(
-                        observation,
-                        self.hidden.get(agent),
-                        deterministic=True,
-                    )
+            if self.policy is not None:
+                actions = self._policy_actions(observations)
             orders, _ = self.adapter.orders_from_actions(actions, observations=observations)
         self.last_orders = orders
         self.sim.set_security_orders(orders)
@@ -94,6 +94,35 @@ class AdaptiveSecurityController:
 
     def _rule_action(self, observation: dict[str, np.ndarray], guard_id: int) -> np.ndarray:
         return tactical_security_action(observation, guard_id)
+
+    def _policy_actions(
+        self,
+        observations: dict[str, dict[str, np.ndarray]],
+    ) -> dict[str, np.ndarray]:
+        """Evaluate the shared actor once for the full active security team."""
+
+        torch = importlib.import_module("torch")
+        agents = tuple(observations)
+        if agents != self._batch_agents:
+            self._batch_hidden = None
+            self._batch_agents = agents
+        if not agents:
+            return {}
+        device = next(self.policy.parameters()).device
+        batched = {
+            key: torch.as_tensor(
+                np.stack([observations[agent][key] for agent in agents]),
+                device=device,
+            )
+            for key in observations[agents[0]]
+        }
+        with torch.no_grad():
+            logits, self._batch_hidden = self.policy.forward_actor(batched, self._batch_hidden)
+            decisions = torch.stack(
+                [torch.argmax(head, dim=-1) for head in logits],
+                dim=-1,
+            ).cpu().numpy().astype(np.int64)
+        return {agent: decisions[index] for index, agent in enumerate(agents)}
 
     def _direct_fallback_orders(self) -> dict[int, SecurityOrder]:
         orders: dict[int, SecurityOrder] = {}

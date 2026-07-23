@@ -19,6 +19,13 @@ from ghostline.types_v3 import GuardRole, RadioMessage, RunnerActionV3, Security
 RunnerController = Callable[[GhostlineSimulationV3], int]
 
 
+def _capped_radio_credit(before: int, after: int, team_size: int) -> float:
+    """Credit only the first information broadcast to each possible teammate."""
+
+    cap = max(0, int(team_size) - 1)
+    return 0.005 * max(0, min(int(after), cap) - min(int(before), cap))
+
+
 class GhostlineSecurityParallelEnv(ParallelEnv):
     """Simultaneous, partially observed operative-control benchmark."""
 
@@ -66,6 +73,7 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         self._last_runner_action = 0
         self._last_seed = self.initial_seed
         self._invalid_actions = 0
+        self._last_reward_components: dict[str, float] = {}
         self._current_observations: dict[str, dict[str, np.ndarray]] = {}
         self._plane_signature: tuple[Any, ...] | None = None
         self._plane_cache: np.ndarray | None = None
@@ -96,6 +104,7 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         self._target_cache.clear()
         self._last_runner_action = 0
         self._invalid_actions = 0
+        self._last_reward_components = {}
         self._plane_signature = None
         self._plane_cache = None
         observations = {agent: self._observation(agent) for agent in self.agents}
@@ -118,6 +127,7 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         before_detections = self.sim.detections
         before_data = self.sim.data
         before_radio = sum(state.radio_assists for state in self.sim.operative_states.values())
+        before_potential = self._security_potential()
         orders, invalid = self.orders_from_actions(actions, observations=self._current_observations)
         self._invalid_actions += invalid
         self.sim.set_security_orders(orders)
@@ -128,17 +138,25 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
             if self.sim.terminated or self.sim.truncated:
                 break
 
-        reward = 3.0 * max(0, self.sim.damage_taken - before_damage)
-        reward += 0.30 * max(0, self.sim.detections - before_detections)
-        reward -= 0.75 * max(0, self.sim.data - before_data)
-        reward += 0.02
-        reward += 0.01 * max(0, sum(state.radio_assists for state in self.sim.operative_states.values()) - before_radio)
-        reward -= 0.02 * invalid
-        reward -= self._formation_penalty()
-        if self.sim.extracted:
-            reward -= 20.0
-        elif self.sim.terminated or self.sim.truncated:
-            reward += 20.0
+        terminal = bool(self.sim.terminated or self.sim.truncated)
+        after_potential = 0.0 if terminal else self._security_potential()
+        after_radio = sum(state.radio_assists for state in self.sim.operative_states.values())
+        reward_components = {
+            "damage": 5.0 * max(0, self.sim.damage_taken - before_damage),
+            "detection": 0.08 * max(0, self.sim.detections - before_detections),
+            "runner_data": -0.50 * max(0, self.sim.data - before_data),
+            "survival": 0.01,
+            "radio_assist": _capped_radio_credit(before_radio, after_radio, len(active_agents)),
+            "invalid_action": -0.02 * invalid,
+            "formation": -self._formation_penalty(),
+            "potential": 0.995 * after_potential - before_potential,
+            "terminal": -20.0 if self.sim.extracted else 20.0 if terminal else 0.0,
+        }
+        # Discount-matched potential shaping supplies pursuit/containment signal
+        # without changing the optimal terminal objective.
+        reward = float(sum(reward_components.values()))
+        reward_components["total"] = reward
+        self._last_reward_components = reward_components
 
         terminated = bool(self.sim.terminated)
         truncated = bool(self.sim.truncated)
@@ -156,6 +174,21 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
             observations = {agent: self._observation(agent) for agent in active_agents}
         self._current_observations = observations
         return observations, rewards, terminations, truncations, infos
+
+    def _security_potential(self) -> float:
+        diagonal = math.hypot(self.sim.level.world_width, self.sim.level.world_height)
+        nearest = min((norm(guard.position - self.sim.player) for guard in self.sim.level.guards), default=diagonal)
+        proximity = 1.0 - min(1.0, nearest / max(1.0, diagonal))
+        awareness = max((guard.awareness for guard in self.sim.level.guards), default=0.0)
+        partial_link = self.sim.active_hack_progress
+        mission_progress = min(1.0, (self.sim.data + partial_link) / max(1.0, self.sim.level.quota))
+        return (
+            1.50 * self.sim.damage_taken
+            + 0.50 * proximity
+            + 0.35 * awareness
+            + 0.25 * self.sim.trace / 100.0
+            - 2.00 * mission_progress
+        )
 
     def orders_from_actions(
         self,
@@ -531,6 +564,7 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
             "runner_damage": self.sim.damage_taken,
             "detections": self.sim.detections,
             "invalid_actions": self._invalid_actions,
+            "reward_components": dict(self._last_reward_components),
         }
 
     def render(self):

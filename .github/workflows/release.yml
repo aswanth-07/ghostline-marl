@@ -36,19 +36,23 @@ jobs:
           --output "$RUNNER_TEMP/ghostline-throughput-smoke.json"
       - name: Verify frozen champion and portfolio evidence
         run: python scripts/verify_release_evidence.py
+      - name: Verify adaptive-security checkpoint and held-out evidence
+        run: python scripts/verify_security_release_evidence.py
       - uses: actions/upload-artifact@v7
         with:
           name: Ghostline-Portfolio-Evidence
           path: |
             models/ghostline-policy.pt
             models/ghostline-policy.onnx
+            models/ghostline-security.pt
             models/model-card.md
             benchmarks/final-test-slices.json
-            benchmarks/neural/champion-final-7m-500.json
-            benchmarks/neural/champion-final-7m-500.csv
-            benchmarks/neural/champion-final-7m-500.episodes.csv
+            benchmarks/neural/champion-final-8m-500.json
+            benchmarks/neural/champion-final-8m-500.csv
+            benchmarks/neural/champion-final-8m-500.episodes.csv
             benchmarks/neural/champion-onnx-parity.json
             benchmarks/system/headless-throughput.json
+            benchmarks/security/**
             videos/ghostline-demo.mp4
           if-no-files-found: error
       - name: Build Python distributions
@@ -154,13 +158,15 @@ jobs:
             release-assets/Ghostline-Web.zip \
             release-assets/Ghostline-Portfolio-Evidence/models/ghostline-policy.pt \
             release-assets/Ghostline-Portfolio-Evidence/models/ghostline-policy.onnx \
+            release-assets/Ghostline-Portfolio-Evidence/models/ghostline-security.pt \
             release-assets/Ghostline-Portfolio-Evidence/models/model-card.md \
             release-assets/Ghostline-Portfolio-Evidence/benchmarks/final-test-slices.json \
-            release-assets/Ghostline-Portfolio-Evidence/benchmarks/neural/champion-final-7m-500.json \
-            release-assets/Ghostline-Portfolio-Evidence/benchmarks/neural/champion-final-7m-500.csv \
-            release-assets/Ghostline-Portfolio-Evidence/benchmarks/neural/champion-final-7m-500.episodes.csv \
+            release-assets/Ghostline-Portfolio-Evidence/benchmarks/neural/champion-final-8m-500.json \
+            release-assets/Ghostline-Portfolio-Evidence/benchmarks/neural/champion-final-8m-500.csv \
+            release-assets/Ghostline-Portfolio-Evidence/benchmarks/neural/champion-final-8m-500.episodes.csv \
             release-assets/Ghostline-Portfolio-Evidence/benchmarks/neural/champion-onnx-parity.json \
             release-assets/Ghostline-Portfolio-Evidence/benchmarks/system/headless-throughput.json \
+            release-assets/Ghostline-Portfolio-Evidence/benchmarks/security/* \
             release-assets/Ghostline-Portfolio-Evidence/videos/ghostline-demo.mp4 \
             --verify-tag \
             --generate-notes \

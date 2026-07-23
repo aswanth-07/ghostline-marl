@@ -40,8 +40,11 @@ def tactical_security_action(
             intent = SecurityIntent.HOLD
             ability = int(observation["ability_mask"][1] > 0)
         elif role == GuardRole.INTERCEPTOR:
-            intent = SecurityIntent.FLANK_LEFT if guard_id % 2 == 0 else SecurityIntent.FLANK_RIGHT
-            target = 6 if intent == SecurityIntent.FLANK_LEFT else 7
+            # Interceptors turn current contact into route denial. INTERCEPT
+            # still moves toward the public contact target, but also asks the
+            # simulation to lock the nearest graph-redundant security door.
+            intent = SecurityIntent.INTERCEPT
+            message = RadioMessage.REQUEST_INTERCEPT
         else:
             intent = SecurityIntent.PURSUE
     elif quota_met and observation["target_mask"][4]:
@@ -49,9 +52,21 @@ def tactical_security_action(
         target = 4
         message = RadioMessage.REQUEST_INTERCEPT
     elif confidence > 0.02:
-        intent = SecurityIntent.SEARCH if confidence < 0.35 else SecurityIntent.INVESTIGATE
+        intent = (
+            SecurityIntent.INTERCEPT
+            if role == GuardRole.INTERCEPTOR and observation["intent_mask"][int(SecurityIntent.INTERCEPT)]
+            else SecurityIntent.SEARCH
+            if confidence < 0.35
+            else SecurityIntent.INVESTIGATE
+        )
         target = 1 if observation["target_mask"][1] else 2
-        message = RadioMessage.SUSPECTED_ROUTE
+        message = RadioMessage.REQUEST_INTERCEPT if intent == SecurityIntent.INTERCEPT else RadioMessage.SUSPECTED_ROUTE
+    elif observation["target_mask"][3]:
+        # Facility security knows its own unfinished terminals. Proactive
+        # terminal coverage is fair, legible, and avoids idle random patrols.
+        intent = SecurityIntent.INVESTIGATE
+        target = 3
+        message = RadioMessage.REGROUP if role == GuardRole.INTERCEPTOR else RadioMessage.NONE
     return np.asarray(
         (
             _first_valid(observation["intent_mask"], int(intent)),

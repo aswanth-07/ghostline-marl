@@ -450,6 +450,11 @@ def test_workflows_use_locked_installs_and_release_smoke() -> None:
     assert "needs: release-gate" in release
     assert "scripts/fuzz_ghostline_levels.py --seeds 10000" in release
     assert "scripts/verify_release_evidence.py" in release
+    assert "scripts/verify_security_release_evidence.py" in release
+    assert "models/ghostline-security.pt" in release
+    assert "benchmarks/neural/champion-final-8m-500.json" in release
+    assert "champion-final-7m-500" not in release
+    assert "benchmarks/security/**" in release
     assert "scripts/verify_source_archive.py" in release
     assert "scripts/verify_source_archive.py --release" in release
     assert "--release-smoke-test" in release

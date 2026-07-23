@@ -72,6 +72,7 @@ def verify(wheel: Path) -> dict[str, object]:
                 "assets/visual/ghostline-environment-atlas-v1.png",
                 "assets/visual/ghostline-character-security-atlas-v1.png",
                 "assets/visual/ghostline-diagonal-locomotion-v2.png",
+                "models/ghostline-security.pt",
             )
             for relative in runtime_assets:
                 with runtime_asset_path(relative) as asset:

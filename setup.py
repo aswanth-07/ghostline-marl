@@ -48,6 +48,7 @@ def _runtime_assets() -> list[tuple[Path, Path]]:
         selected.append((source, Path(value)))
     selected.append((ROOT / "LICENSE", Path("LICENSE")))
     selected.append((ROOT / "THIRD_PARTY_NOTICES.md", Path("THIRD_PARTY_NOTICES.md")))
+    selected.append((ROOT / "models" / "ghostline-security.pt", Path("models/ghostline-security.pt")))
     return selected
 
 

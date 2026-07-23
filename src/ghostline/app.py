@@ -1305,7 +1305,7 @@ class GameApp:
             title="CREDITS",
             subtitle="Ghostline // procedural infiltration and RL benchmark",
             body=[
-                "DESIGN, ENGINEERING, SIMULATION  //  PROJECT AUTHOR + CODEX",
+                "DESIGN, ENGINEERING, SIMULATION  //  A ASWANTH RAJ",
                 "VISUAL SYSTEM  //  ORIGINAL PROCEDURAL PIXEL ART + MANUAL QA",
                 "AUDIO  //  ORIGINAL RUNTIME SYNTHESIS",
                 "RL STACK  //  GYMNASIUM + TORCHRL + ONNX RUNTIME",

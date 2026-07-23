@@ -17,6 +17,21 @@ matched-seed human cohort has not yet been collected.
 - Heads: separate 256-unit policy/value decoders plus goal-bearing and visible-danger auxiliaries.
 - Learning: pure in-project PyTorch behavior cloning from the observation-only teacher, four DAgger recovery rounds, and low-rate consolidation. PPO/GAE/RND are implemented and tested, but the current release checkpoint does not claim a PPO improvement.
 
+## Optional adaptive-security policy
+
+Env-v3 also bundles a distinct 256-unit parameter-shared GRU policy for up to
+five security operatives. Actors receive only local/perception-gated records;
+the fixed 64-value global state is used by the centralized critic during
+training only. Strategic observation-only imitation is followed by recurrent
+MAPPO with adaptive weakest-tier replay and a 50% scripted-opponent curriculum.
+The frozen checkpoint hash is
+`c7d717d16b6a60c580e3d909043bf9dd107a6a1c6cf009dd77d3c0804308c839`.
+On the untouched 13M final slice it stopped the Env-v2 neural runner on
+`4/0/8/16%` of tier 3-6 contracts (25 per tier). This is an optional adversarial
+research result; tier 4 remains unsolved, and lightweight builds fall back to
+the same deterministic observation-only tactical controller when PyTorch is
+not included.
+
 ## Data and fairness
 
 No human demonstrations, human trajectories, hidden generator state, or privileged critic state are used. The automated teacher receives the same public v2 observation and action mask as the neural policy. Live facility telemetry is deliberately shared with both the human HUD and policy; physical detection remains occlusion-based. Training seeds are below 1,000,000, validation uses 1,000,000-1,049,999, and final evaluation begins at 2,000,000. All attempted final-test slices are immutable: 2M-7M are historical evidence, and the tracked 8M slice was consumed exactly once by the selected current-fingerprint neural champion. Its report and artifact hashes are bound in [`benchmarks/final-test-slices.json`](../benchmarks/final-test-slices.json).

@@ -1,6 +1,6 @@
 ---
 title: Ghostline Training
-updated: 2026-07-23
+updated: 2026-07-24
 status: active
 ---
 
@@ -8,8 +8,8 @@ status: active
 
 ## Adaptive-security MAPPO status
 
-The Env-v3 adversarial-security track is implemented but not yet a measured
-release result. `GhostlineSecurityParallel-v0` exposes simultaneous semantic
+The Env-v3 adversarial-security track now has a measured release result.
+`GhostlineSecurityParallel-v0` exposes simultaneous semantic
 operative actions through PettingZoo. A parameter-shared local-grid/set/ego
 encoder feeds a 256-unit GRU and separate intent, target, radio, and ability
 heads. Execution is decentralized. A distinct MLP critic consumes the 64-value
@@ -18,22 +18,73 @@ global team state only during training.
 `marl_train.py` implements recurrent rollout state, episode-boundary resets,
 team GAE, factorized masked log probabilities, clipped MAPPO objectives,
 central-value clipping, entropy regularization, gradient clipping, resumable
-fingerprinted checkpoints, worst-tier validation selection, and disjoint
-10M/11M/12M seed namespaces. The frozen published Env-v2 champion is the
+fingerprinted checkpoints, worst-tier validation selection, and disjoint 10M
+training, 11M validation, and one-way 12M+ final-test slices. The frozen
+published Env-v2 champion is the
 default training opponent and its SHA-256 is recorded in every resume contract;
 changing it fails closed. Worst-tier selection breaks ties by tier-six stop
-rate, damage, detections, and delay. Evaluation emits JSON plus aggregate and
+rate, mean all-tier stop rate, damage, detections, and delay. Evaluation emits JSON plus aggregate and
 per-episode CSV with Wilson intervals. A real CPU optimizer/checkpoint smoke run
 is part of the test suite, and a CUDA calibration verified the optimizer and
-checkpoint path. The planned 72-hour CUDA run is still pending, so the game
-uses a deterministic local-observation tactical fallback when no trained
-security checkpoint is bundled. No learned-security performance claim is
-valid until the held-out report is written.
+checkpoint path.
+
+Security optimization begins with online, observation-only imitation of the
+same deterministic tactical controller shipped as the no-model fallback. The
+warm-up is deliberately entropy-regularized so it supplies useful pursuit and
+radio coordination without collapsing recovery exploration. MAPPO then uses
+an exact, named reward ledger: terminal containment, damage, detection, denied
+data, survival pressure, one-time radio assists, invalid actions, formation spacing, and
+discount-matched potential shaping. The potential combines team proximity,
+awareness, trace, mission progress, and damage and is zeroed at termination;
+this preserves the terminal objective while making early pursuit learnable.
+Every operative receives the same team reward and its `info` record exposes
+components whose sum is tested against the emitted reward.
+
+After each validation gate, the adaptive sampler assigns 70% of new episodes
+to the weakest held-out tier (split across ties) and retains 30% uniform replay
+across every selected tier. The probability vector is checkpointed and logged,
+so resuming reproduces the curriculum instead of silently returning to uniform
+sampling. Rollout diagnostics also include factorized action histograms and
+mean reward components for detecting policy collapse or reward exploitation.
+Radio shaping is capped after the first possible teammate broadcasts, so a
+policy cannot earn unbounded reward by retransmitting unchanged information.
+Every held-out gate writes an immutable step-numbered policy checkpoint in
+addition to the mutable latest/champion pointers, preventing later regressions
+or changed tie-break logic from destroying a useful earlier policy.
+The tactical-teacher source is part of the security environment fingerprint;
+changing its role logic invalidates older warm-ups and resume checkpoints even
+when simulation and observation tensor shapes remain unchanged.
+Evaluation and human Adaptive Contracts batch all active operative observations
+into one recurrent actor forward pass per tactical decision. This preserves
+decentralized inputs and per-agent recurrent state while avoiding five serial
+neural calls per decision.
+
+The selected 256-unit policy was initialized from the strategic teacher, then
+trained with 50% easier scripted opponents while every selection window remained
+exclusive to the frozen neural runner. Two disjoint validation measurements
+were used for selection; neither solved every tier.
+The untouched 13M final slice measured `4/0/8/16%` stop rates across tiers 3-6
+(25 contracts per tier), versus the teacher's 2% mean and the learned policy's
+7% mean. Tier 4 remained at zero stops and is explicitly unresolved. The full
+report, Wilson intervals, failed 12M predecessor, and checkpoint hash are under
+`benchmarks/security/`. Lightweight distributions without PyTorch continue to
+use the deterministic observation-only fallback.
 
 ```text
-ghostline train-security --hours 72 --envs 8 --rollout 64 --tiers 3,4,5,6 --runner-model models/ghostline-policy.pt
-ghostline evaluate-security --model artifacts/security-mappo/champion.pt --episodes-per-tier 100 --seed-start 12000000
+ghostline train-security --hours 72 --envs 8 --rollout 64 --tiers 3,4,5,6 --runner-model models/ghostline-policy.pt --bc-warmup-steps 10000
+ghostline train-security --init-model artifacts/security-bc/champion.pt --bc-warmup-steps 0 --no-resume --hours 72
+ghostline train-security --init-model artifacts/security-bc/champion.pt --scripted-opponent-fraction 0.5 --bc-warmup-steps 0 --no-resume --hours 72
+ghostline evaluate-security --model models/ghostline-security.pt --episodes-per-tier 25 --seed-start 13000000
+python scripts/verify_security_release_evidence.py
 ```
+
+`--init-model` starts a fresh optimizer from a fingerprint-compatible security
+policy and records its path plus SHA-256. It is the explicit BC-to-MAPPO stage
+boundary; it cannot be combined with an existing resume checkpoint.
+`--scripted-opponent-fraction` supplies easier terminal-win episodes during
+training while checkpoint selection continues to use only the frozen neural
+runner. The fraction is recorded in the resume contract; changing it requires a
+fresh run.
 
 ## Current neural release result
 

@@ -7,6 +7,7 @@ models/*
 !models/.gitkeep
 !models/ghostline-policy.pt
 !models/ghostline-policy.onnx
+!models/ghostline-security.pt
 !models/model-card.md
 # Export scratch graphs and model-side parity copies remain local.  The
 # canonical parity evidence is tracked under benchmarks/neural/.

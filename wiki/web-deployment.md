@@ -196,7 +196,7 @@ of an unnecessary wheel without changing observations or simulation behavior.
 
 ## Chrome-only QA
 
-Do not use the Codex in-app Browser for this project. Start the local build server in one terminal:
+Use Google Chrome for interactive release QA. Start the local build server in one terminal:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\build_web.py --serve --model models\ghostline-policy.onnx

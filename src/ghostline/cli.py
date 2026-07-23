@@ -43,9 +43,20 @@ def build_parser() -> argparse.ArgumentParser:
     train_security.add_argument("--tiers", default="3,4,5,6")
     train_security.add_argument("--recurrent-size", type=int, choices=(256, 384), default=256)
     train_security.add_argument("--learning-rate", type=float, default=3e-4)
+    train_security.add_argument("--entropy-coefficient", type=float, default=0.01)
     train_security.add_argument("--device")
     train_security.add_argument("--validation-interval", type=int, default=100_000)
     train_security.add_argument("--validation-episodes", type=int, default=20)
+    train_security.add_argument("--bc-warmup-steps", type=int, default=10_000)
+    train_security.add_argument("--bc-warmup-epochs", type=int, default=2)
+    train_security.add_argument("--bc-warmup-entropy", type=float, default=0.05)
+    train_security.add_argument("--uniform-curriculum", action="store_true")
+    train_security.add_argument(
+        "--scripted-opponent-fraction",
+        type=float,
+        default=0.0,
+        help="fraction of training episodes using the easier scripted runner; validation always uses --runner-model",
+    )
     train_security.add_argument("--no-resume", action="store_true")
     train_security.add_argument("--dry-run", action="store_true")
     train_security.add_argument(
@@ -53,6 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("models/ghostline-policy.pt"),
         help="frozen Env-v2 opponent checkpoint",
+    )
+    train_security.add_argument(
+        "--init-model",
+        type=Path,
+        help="initialize a fresh optimizer from a compatible security policy checkpoint",
     )
     train_security.add_argument("--scripted-runner", action="store_true")
     evaluate = subparsers.add_parser(
@@ -256,12 +272,19 @@ def main() -> None:
                 tiers=args.tiers,
                 recurrent_size=args.recurrent_size,
                 learning_rate=args.learning_rate,
+                entropy_coefficient=args.entropy_coefficient,
                 device=args.device,
                 validation_interval=args.validation_interval,
                 validation_episodes=args.validation_episodes,
+                bc_warmup_steps=args.bc_warmup_steps,
+                bc_warmup_epochs=args.bc_warmup_epochs,
+                bc_warmup_entropy=args.bc_warmup_entropy,
+                adaptive_curriculum=not args.uniform_curriculum,
                 resume=not args.no_resume,
                 dry_run=args.dry_run,
                 runner_checkpoint=None if args.scripted_runner else args.runner_model,
+                init_checkpoint=args.init_model,
+                scripted_opponent_fraction=args.scripted_opponent_fraction,
             )
         )
         return
