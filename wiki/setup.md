@@ -1,6 +1,6 @@
 ---
 title: Ghostline Setup and Release
-updated: 2026-07-13
+updated: 2026-07-23
 status: active
 ---
 
@@ -22,6 +22,11 @@ ghostline play
 
 The base install deliberately has no PyTorch, ONNX Runtime, recording codec, or
 packager dependency. It supports human play and `GhostlineEnv-v2` headlessly.
+It also supports rule-controlled Adaptive Contracts and `GhostlineEnv-v3`:
+
+```powershell
+ghostline play --adaptive --tier 6 --directive ghost
+```
 
 ## Agent Lab and development
 
@@ -69,6 +74,19 @@ ghostline train --hours 24 --experiment ghostline-universal --init-checkpoint PA
 Checkpoint paths may change as experiments are selected; use `ghostline
 imitate --help` and `ghostline train --help` for the current command contract.
 Training and evaluation results must remain in this project directory.
+
+## Adaptive-security training
+
+```powershell
+python -m pip install --constraint requirements.lock -e ".[marl]"
+ghostline train-security --hours 72 --envs 8 --rollout 64 --tiers 3,4,5,6 --runner-model models/ghostline-policy.pt
+ghostline evaluate-security --model artifacts/security-mappo/champion.pt --episodes-per-tier 100 --seed-start 12000000 --output benchmarks/security/final-test.json
+```
+
+Use `--max-steps 20 --envs 1 --rollout 3 --epochs 1 --device cpu` for a
+pipeline smoke. The production campaign should use CUDA, retain the automatic
+11M validation reports, and open the 12M final namespace only after selecting
+and freezing a champion.
 
 ## Recording, ONNX export, and Windows package
 

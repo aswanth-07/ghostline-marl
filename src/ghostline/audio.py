@@ -191,6 +191,13 @@ class AudioDirector:
             "extracted": "extract",
             "failure": "failure",
             "drone_deployed": "alert",
+            "decoy_deployed": "dash",
+            "door_warning": "alert",
+            "door_locked": "lockdown",
+            "door_forced_open": "pulse",
+            "suppressor_aim": "alert",
+            "suppressor_fire": "damage",
+            "projectile_impact": "damage",
         }
         for event in events:
             key = mapping.get(event.kind)

@@ -13,6 +13,8 @@ def build_parser() -> argparse.ArgumentParser:
     play = subparsers.add_parser("play", help="Launch the game")
     play.add_argument("--tier", type=int, choices=range(1, 7))
     play.add_argument("--seed", type=int)
+    play.add_argument("--adaptive", action="store_true", help="use optional Env-v3 coordinated security")
+    play.add_argument("--directive", choices=("standard", "ghost", "speed", "greed"), default="standard")
     lab = subparsers.add_parser("lab", help="Launch Agent Lab")
     lab.add_argument("--tier", type=int, choices=range(1, 7), default=6)
     lab.add_argument("--seed", type=int)
@@ -28,6 +30,31 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--initial-curriculum-tier", type=int, choices=range(1, 7), default=1)
     train.add_argument("--no-resume", action="store_true")
     train.add_argument("--dry-run", action="store_true")
+    train_security = subparsers.add_parser(
+        "train-security",
+        help="Train the parameter-shared recurrent adaptive-security team",
+    )
+    train_security.add_argument("--output", type=Path, default=Path("artifacts/security-mappo"))
+    train_security.add_argument("--hours", type=float, default=72.0)
+    train_security.add_argument("--max-steps", type=int, default=0)
+    train_security.add_argument("--envs", type=int, default=8)
+    train_security.add_argument("--rollout", type=int, default=64)
+    train_security.add_argument("--epochs", type=int, default=4)
+    train_security.add_argument("--tiers", default="3,4,5,6")
+    train_security.add_argument("--recurrent-size", type=int, choices=(256, 384), default=256)
+    train_security.add_argument("--learning-rate", type=float, default=3e-4)
+    train_security.add_argument("--device")
+    train_security.add_argument("--validation-interval", type=int, default=100_000)
+    train_security.add_argument("--validation-episodes", type=int, default=20)
+    train_security.add_argument("--no-resume", action="store_true")
+    train_security.add_argument("--dry-run", action="store_true")
+    train_security.add_argument(
+        "--runner-model",
+        type=Path,
+        default=Path("models/ghostline-policy.pt"),
+        help="frozen Env-v2 opponent checkpoint",
+    )
+    train_security.add_argument("--scripted-runner", action="store_true")
     evaluate = subparsers.add_parser(
         "evaluate",
         help="Consume one explicitly reserved final-test slice exactly once",
@@ -53,6 +80,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=Path("benchmarks/neural/champion-final-8m-500.json"),
+    )
+    evaluate_security = subparsers.add_parser(
+        "evaluate-security",
+        help="Evaluate adaptive security on a disjoint held-out seed range",
+    )
+    evaluate_security.add_argument("--model", type=Path)
+    evaluate_security.add_argument("--tiers", default="3,4,5,6")
+    evaluate_security.add_argument("--episodes-per-tier", type=int, default=100)
+    evaluate_security.add_argument("--seed-start", type=int, default=12_000_000)
+    evaluate_security.add_argument("--device")
+    evaluate_security.add_argument("--runner-model", type=Path, default=Path("models/ghostline-policy.pt"))
+    evaluate_security.add_argument("--scripted-runner", action="store_true")
+    evaluate_security.add_argument(
+        "--output",
+        type=Path,
+        default=Path("benchmarks/security/final-test.json"),
     )
     imitate = subparsers.add_parser("imitate", help="Collect fair-teacher data, behavior-clone, or run DAgger")
     imitate_commands = imitate.add_subparsers(dest="imitation_command", required=True)
@@ -172,7 +215,15 @@ def main() -> None:
         from ghostline.app import GameApp
 
         mode = "menu" if command == "menu" else command
-        raise SystemExit(GameApp(initial_tier=getattr(args, "tier", None), seed=getattr(args, "seed", None), mode=mode).run())
+        raise SystemExit(
+            GameApp(
+                initial_tier=getattr(args, "tier", None),
+                seed=getattr(args, "seed", None),
+                mode=mode,
+                adaptive=bool(getattr(args, "adaptive", False)),
+                directive=getattr(args, "directive", "standard"),
+            ).run()
+        )
     if command == "train":
         from ghostline.training import launch_training
 
@@ -191,6 +242,29 @@ def main() -> None:
                 dry_run=args.dry_run,
             )
         )
+    if command == "train-security":
+        from ghostline.marl_train import train_security
+
+        print(
+            train_security(
+                output=args.output,
+                hours=args.hours,
+                max_steps=args.max_steps,
+                env_count=args.envs,
+                rollout=args.rollout,
+                epochs=args.epochs,
+                tiers=args.tiers,
+                recurrent_size=args.recurrent_size,
+                learning_rate=args.learning_rate,
+                device=args.device,
+                validation_interval=args.validation_interval,
+                validation_episodes=args.validation_episodes,
+                resume=not args.no_resume,
+                dry_run=args.dry_run,
+                runner_checkpoint=None if args.scripted_runner else args.runner_model,
+            )
+        )
+        return
     if command == "evaluate":
         from ghostline.evaluation import evaluate
 
@@ -203,6 +277,21 @@ def main() -> None:
             workers=args.workers,
             seed_start=args.seed_start,
             slice_manifest=args.slice_manifest,
+        )
+        return
+    if command == "evaluate-security":
+        from ghostline.marl_train import evaluate_security_checkpoint
+
+        print(
+            evaluate_security_checkpoint(
+                model=args.model,
+                output=args.output,
+                tiers=args.tiers,
+                episodes_per_tier=args.episodes_per_tier,
+                seed_start=args.seed_start,
+                device=args.device,
+                runner_checkpoint=None if args.scripted_runner else args.runner_model,
+            )
         )
         return
     if command == "imitate":

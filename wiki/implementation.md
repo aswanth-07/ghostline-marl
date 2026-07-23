@@ -1,6 +1,6 @@
 ---
 title: Ghostline Implementation
-updated: 2026-07-14
+updated: 2026-07-23
 status: active
 ---
 
@@ -14,8 +14,28 @@ Ghostline is a clean break from the legacy `neon_arena` package.
 - `generation.py`: modular room graph, authored furniture arrangements, security placement, tile collision, and validation.
 - `presentation.py` and `app.py`: scrolling 640x360 pixel world canvas, native-resolution typography, cinematic menus, camera, lighting, props, HUD, minimap, effects, accessibility, run telemetry, and game flow.
 - `env.py`, `model.py`, and the training pipeline: versioned Gymnasium contract, entity-aware recurrent policy, action masking, rewards, curriculum, imitation learning, and PPO integration.
+- `simulation_v3.py` and `env_v3.py`: additive Adaptive Contracts mechanics and the `GhostlineEnv-v3` player contract; Env-v2 source and checkpoints remain untouched.
+- `security_env.py`, `security_model.py`, and `marl_train.py`: PettingZoo parallel security benchmark, decentralized shared recurrent actor, centralized training critic, recurrent MAPPO, held-out evaluation, and fail-closed checkpoints.
 
 Simulation and generation do not import Pygame. Human and agent controllers both produce `Action(move, dash, pulse)`. Replays are deterministic from seed, tier, and action sequence.
+
+Env-v3 extends the semantic action to `RunnerActionV3(move, dash, pulse,
+decoy)` without changing Env-v2. Adaptive security chooses a semantic intent,
+one of eight locally described tactical targets, a discrete radio message, and
+a role-gated ability at 5 Hz. Deterministic base navigation, collision, sight,
+and animation remain the motor layer. The actor never receives the centralized
+state used by the MAPPO critic.
+
+## Adaptive Contracts fairness contract
+
+- Adaptive play is optional and never replaces the classic campaign or the published runner benchmark.
+- Acoustic decoys have limited charges, a two-second lifetime, deterministic placement, and perception-gated noise pulses.
+- Only one security door can lock at a time. Every eligible door is a redundant room-graph edge, warns for 0.65 seconds, remains locked for 3.5 seconds, and can be pulse-overridden for five seconds. Occupied doors never close.
+- Tier-5/6 Suppressors use a 0.70-second visible aim telegraph, line-of-sight and range checks, friendly-fire blocking, a cooldown, and a nonlethal integrity projectile. They do not receive a hitscan weapon.
+- Pulse still disables electronics and now also jams learned radio messages and forces nearby adaptive locks open.
+- External tactical waypoints are clamped and deterministically projected onto a valid navigation cell before they reach the shared guard pathfinder. Flank offsets cannot escape the generated world or crash a boundary rollout.
+- Standard, Ghost, Speed, and Greed directives are deterministic. The speed par is derived once from the seed's minimum quota-satisfying Euclidean route, link time, and a fixed interaction allowance.
+- Desktop and web launchers expose Adaptive mode and directives. The web blocks the frozen Env-v2 runner policy from taking over a live Env-v3 contract instead of silently feeding it an incompatible observation.
 
 ## Fairness and interaction contract
 
@@ -68,6 +88,21 @@ The default Watch Agent entries use one curated passing contract per tier from t
 - Facility occupancy, doors, known terminal locations, and extraction geometry match the always-visible minimap; the separate explored channel remains a route-memory and reward signal. Pulse count is normalized across the literal zero-to-four charge range with no clipping.
 - Objective vector: phase, goal dx/dy, route distance, next-waypoint dx/dy, link progress, and target value.
 - Terminal telemetry: success/reason, tier/seed, quota/data, duration, trace, detections, guard/drone damage attribution, pulse use, path distance, action histogram, idle decisions, efficiency, and exact reward components.
+
+The optional public additions are `GhostlineEnv-v3` and
+`GhostlineSecurityParallel-v0`. Env-v3 has 72 masked runner actions and adds a
+six-value directive record, three local-grid channels, three entity fields,
+one projectile ray field, and decoy state. The parallel security environment
+uses up to five parameter-sharing operatives, factorized `MultiDiscrete([8,
+8, 5, 2])` actions, local actor observations, and a fixed 64-value centralized
+critic state. Security training seeds start at 10M, validation at 11M, and
+final test at 12M so no Env-v2 release slice is reused.
+
+The security observation builder caches the six facility-wide spatial planes
+once per topology or objective change and crops them for each operative. Action
+validation reuses the exact observation that produced the action. This removes
+duplicate map work without sharing hidden runner state or changing a public
+observation value.
 
 Training-only lessons simplify mechanics in seven reverse-curriculum stages; final validation never applies those modifications. Human play writes a corresponding local telemetry schema for the later locked matched-seed benchmark.
 

@@ -1,10 +1,39 @@
 ---
 title: Ghostline Training
-updated: 2026-07-14
+updated: 2026-07-23
 status: active
 ---
 
 # Training
+
+## Adaptive-security MAPPO status
+
+The Env-v3 adversarial-security track is implemented but not yet a measured
+release result. `GhostlineSecurityParallel-v0` exposes simultaneous semantic
+operative actions through PettingZoo. A parameter-shared local-grid/set/ego
+encoder feeds a 256-unit GRU and separate intent, target, radio, and ability
+heads. Execution is decentralized. A distinct MLP critic consumes the 64-value
+global team state only during training.
+
+`marl_train.py` implements recurrent rollout state, episode-boundary resets,
+team GAE, factorized masked log probabilities, clipped MAPPO objectives,
+central-value clipping, entropy regularization, gradient clipping, resumable
+fingerprinted checkpoints, worst-tier validation selection, and disjoint
+10M/11M/12M seed namespaces. The frozen published Env-v2 champion is the
+default training opponent and its SHA-256 is recorded in every resume contract;
+changing it fails closed. Worst-tier selection breaks ties by tier-six stop
+rate, damage, detections, and delay. Evaluation emits JSON plus aggregate and
+per-episode CSV with Wilson intervals. A real CPU optimizer/checkpoint smoke run
+is part of the test suite, and a CUDA calibration verified the optimizer and
+checkpoint path. The planned 72-hour CUDA run is still pending, so the game
+uses a deterministic local-observation tactical fallback when no trained
+security checkpoint is bundled. No learned-security performance claim is
+valid until the held-out report is written.
+
+```text
+ghostline train-security --hours 72 --envs 8 --rollout 64 --tiers 3,4,5,6 --runner-model models/ghostline-policy.pt
+ghostline evaluate-security --model artifacts/security-mappo/champion.pt --episodes-per-tier 100 --seed-start 12000000
+```
 
 ## Current neural release result
 

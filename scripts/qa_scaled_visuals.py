@@ -110,6 +110,29 @@ def _configure_gameplay(sim: GhostlineSimulation) -> None:
             attack_windup=0.34,
         )
     ]
+    if hasattr(sim, "security_doors"):
+        from ghostline.types_v3 import Decoy, ShockProjectile
+
+        if sim.security_doors:
+            sim.security_doors[0].lock_remaining = 3.0
+            sim._refresh_navigation_blocks()
+        decoy_position = sim.player + np.asarray((-48.0, 36.0), dtype=np.float32)
+        if not sim._can_occupy(decoy_position, 5.0):
+            decoy_position = sim.player.copy()
+        sim.decoys = [Decoy(9002, decoy_position, 1.4, 0.2)]
+        projectile_position = sim.player + np.asarray((74.0, -18.0), dtype=np.float32)
+        sim.projectiles = [
+            ShockProjectile(
+                9003,
+                projectile_position,
+                np.asarray((-220.0, 28.0), dtype=np.float32),
+                sim.level.guards[-1].guard_id,
+                0.8,
+            )
+        ]
+        suppressor = sim.operative_states[sim.level.guards[-1].guard_id]
+        suppressor.aim_progress = 0.52
+        suppressor.aim_target = sim.player.copy()
 
 
 def _title(renderer: GhostlineRenderer) -> None:
@@ -435,10 +458,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("artifacts/visual-qa/scaled-final"))
     parser.add_argument("--benchmark-frames", type=int, default=180)
+    parser.add_argument("--adaptive", action="store_true", help="stage Env-v3 doors, decoy, and projectile cues")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
 
-    sim = GhostlineSimulation(seed=2_000_123, tier=6)
+    if args.adaptive:
+        from ghostline.simulation_v3 import GhostlineSimulationV3
+
+        sim = GhostlineSimulationV3(seed=2_000_123, tier=6, directive="ghost")
+    else:
+        sim = GhostlineSimulation(seed=2_000_123, tier=6)
     _configure_gameplay(sim)
     # SDL's dummy video backend still exercises the shipping visible renderer,
     # including its post-scale native typography pass.
@@ -457,6 +486,7 @@ def main() -> int:
         "logical_size": list(LOGICAL_SIZE),
         "release_sizes": [list(size) for size in RELEASE_SIZES],
         "capture_count": len(captures),
+        "adaptive": bool(args.adaptive),
         "all_native_text_scaled": all(
             capture["native_text_runs"] > 0
             and capture["native_text_pixels"] > 0

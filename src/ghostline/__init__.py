@@ -15,6 +15,8 @@ def register_env() -> None:
         gym.register("GhostlineEnv-v1", entry_point="ghostline.env:GhostlineEnvV1")
     if "GhostlineEnv-v2" not in gym.registry:
         gym.register("GhostlineEnv-v2", entry_point="ghostline.env:GhostlineEnv")
+    if "GhostlineEnv-v3" not in gym.registry:
+        gym.register("GhostlineEnv-v3", entry_point="ghostline.env_v3:GhostlineEnvV3")
 
 
 if sys.platform != "emscripten":

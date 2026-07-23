@@ -56,6 +56,13 @@ def verify(wheel: Path) -> dict[str, object]:
             assert observation["action_mask"].shape == (36,)
             env.step(0)
             env.close()
+            adaptive = gym.make("GhostlineEnv-v3", tier=6, seed=10102, directive="ghost")
+            adaptive_observation, adaptive_info = adaptive.reset(seed=10102)
+            assert adaptive_observation["action_mask"].shape == (72,)
+            assert adaptive_observation["directive"].shape == (6,)
+            assert adaptive_info["contract"] == "GhostlineEnv-v3"
+            adaptive.step(0)
+            adaptive.close()
 
             from ghostline.resources import runtime_asset_path
             runtime_assets = (
@@ -83,6 +90,8 @@ def verify(wheel: Path) -> dict[str, object]:
             os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
             from ghostline.presentation import GhostlineRenderer
             from ghostline.simulation import GhostlineSimulation
+            from ghostline.security_controller import AdaptiveSecurityController
+            from ghostline.simulation_v3 import GhostlineSimulationV3
             renderer = GhostlineRenderer(GhostlineSimulation(seed=10101, tier=1), visible=False)
             assert not hasattr(renderer, "_key_art")
             assert renderer._environment_atlas is not None
@@ -91,6 +100,13 @@ def verify(wheel: Path) -> dict[str, object]:
             frame = renderer.draw(return_array=True)
             assert frame.shape == (360, 640, 3)
             renderer.close()
+            adaptive_sim = GhostlineSimulationV3(seed=10102, tier=6, external_security=True)
+            security = AdaptiveSecurityController(adaptive_sim)
+            assert security.policy is None
+            assert security.adapter is None  # PettingZoo is intentionally outside the base wheel.
+            security.update(force=True)
+            assert security.last_orders
+            security.close()
 
             scripts = {
                 item.name: item.value
@@ -100,7 +116,7 @@ def verify(wheel: Path) -> dict[str, object]:
             assert scripts == {"ghostline": "ghostline.cli:main"}
             print(json.dumps({
                 "ghostline_version": ghostline.__version__,
-                "environment": "GhostlineEnv-v2",
+                "environments": ["GhostlineEnv-v2", "GhostlineEnv-v3"],
                 "pygame_deferred_until_asset_probe": pygame_was_deferred,
                 "torch_available": util.find_spec("torch") is not None,
                 "onnxruntime_available": util.find_spec("onnxruntime") is not None,

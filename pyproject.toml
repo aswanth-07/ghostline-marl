@@ -39,12 +39,20 @@ dev = [
   "imageio-ffmpeg==0.6.0",
   "onnx==1.22.0",
   "onnxruntime==1.27.0",
+  "pettingzoo==1.26.1",
   "pip-tools==7.5.3",
   "pytest==9.1.1",
   "tensorboard==2.21.0",
   "torch==2.13.0",
 ]
 train = [
+  "pettingzoo==1.26.1",
+  "tensorboard==2.21.0",
+  "torch==2.13.0",
+  "tqdm==4.68.4",
+]
+marl = [
+  "pettingzoo==1.26.1",
   "tensorboard==2.21.0",
   "torch==2.13.0",
   "tqdm==4.68.4",

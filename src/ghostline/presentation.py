@@ -34,6 +34,8 @@ TOUCH_DASH_CENTER = (574, 255)
 TOUCH_DASH_RADIUS = 27
 TOUCH_PULSE_CENTER = (516, 255)
 TOUCH_PULSE_RADIUS = 23
+TOUCH_DECOY_CENTER = (548, 318)
+TOUCH_DECOY_RADIUS = 22
 TOUCH_PAUSE_RECT = pygame.Rect(592, 82, 38, 25)
 WINDOW_SIZE = (1280, 720)
 
@@ -509,6 +511,12 @@ class GhostlineRenderer:
             "drone_deployed": ("[ROTOR] Response drone inbound", VIOLET),
             "drone_warning": ("[NETWORK] Response drone threshold near", VIOLET),
             "guard_clear": ("[SECURITY] Search cleared", GREEN),
+            "decoy_deployed": ("[DECOY] Acoustic lure deployed", CYAN),
+            "door_warning": ("[NETWORK] Security door is locking", AMBER),
+            "door_locked": ("[LOCK] Route sealed temporarily", VIOLET),
+            "door_forced_open": ("[PULSE] Security lock overridden", CYAN),
+            "suppressor_aim": ("[WARNING] Suppressor is lining up a shot", VIOLET),
+            "suppressor_fire": ("[PROJECTILE] Shock round fired", VIOLET),
         }
         for event in events:
             position = np.asarray(event.position, dtype=np.float32)
@@ -548,6 +556,13 @@ class GhostlineRenderer:
                 "drone_deployed": VIOLET,
                 "drone_warning": VIOLET,
                 "guard_clear": GREEN,
+                "decoy_deployed": CYAN,
+                "door_warning": AMBER,
+                "door_locked": VIOLET,
+                "door_forced_open": CYAN,
+                "suppressor_aim": VIOLET,
+                "suppressor_fire": VIOLET,
+                "projectile_impact": VIOLET,
             }.get(event.kind)
             if color is None:
                 continue
@@ -592,6 +607,7 @@ class GhostlineRenderer:
         self._draw_walls()
         self._draw_props()
         self._draw_objectives()
+        self._draw_adaptive_mechanics()
         self._draw_security()
         self._draw_player()
         self._draw_particles()
@@ -1044,6 +1060,59 @@ class GhostlineRenderer:
                 pressure=pressure,
             )
         self.logical.blit(layer, (0, 0))
+
+    def _draw_adaptive_mechanics(self) -> None:
+        """Render Env-v3 mechanics without coupling presentation to its types."""
+
+        for door in getattr(self.sim, "security_doors", ()):
+            if not (door.locked or door.warning_remaining > 0.0):
+                continue
+            position = np.asarray(
+                ((door.tile[0] + 0.5) * TILE_SIZE, (door.tile[1] + 0.5) * TILE_SIZE),
+                dtype=np.float32,
+            )
+            sx, sy = self._world(position)
+            warning = door.warning_remaining > 0.0 and not door.locked
+            color = AMBER if warning else VIOLET
+            pygame.draw.rect(self.logical, (4, 8, 13), (sx - 13, sy - 5, 26, 10), border_radius=2)
+            pygame.draw.rect(self.logical, color, (sx - 13, sy - 5, 26, 10), 2, border_radius=2)
+            if warning:
+                phase = 0.5 if self.reduced_flashes else 0.5 + 0.5 * math.sin(self._time * 12.0)
+                pygame.draw.circle(self.logical, (*AMBER, int(30 + 70 * phase)), (sx, sy), 19, 2)
+                self._text("LOCKING", sx - 22, sy - 18, self.font_small, AMBER)
+            else:
+                for offset in (-7, 0, 7):
+                    pygame.draw.line(self.logical, VIOLET, (sx + offset, sy - 4), (sx + offset, sy + 4), 1)
+
+        for decoy in getattr(self.sim, "decoys", ()):
+            sx, sy = self._world(decoy.position)
+            remaining = float(np.clip(decoy.lifetime / 2.0, 0.0, 1.0))
+            radius = 10 if self.reduced_motion else 8 + int((1.0 - remaining) * 16)
+            pygame.draw.circle(self.logical, CYAN, (sx, sy), 4)
+            pygame.draw.circle(self.logical, (*CYAN, int(40 + 80 * remaining)), (sx, sy), radius, 2)
+            pygame.draw.line(self.logical, INK, (sx - 3, sy), (sx + 3, sy), 1)
+
+        for guard in self.sim.level.guards:
+            state = getattr(self.sim, "operative_states", {}).get(guard.guard_id)
+            if state is None or state.aim_progress <= 0.0 or state.aim_target is None:
+                continue
+            start = self._world(guard.position)
+            end = self._world(state.aim_target)
+            progress = float(np.clip(state.aim_progress / 0.7, 0.0, 1.0))
+            pygame.draw.line(self.logical, (*VIOLET, 115), start, end, 1)
+            marker = (
+                int(round(start[0] + (end[0] - start[0]) * progress)),
+                int(round(start[1] + (end[1] - start[1]) * progress)),
+            )
+            pygame.draw.circle(self.logical, VIOLET, marker, 3, 1)
+            self._text("AIM", start[0] - 8, start[1] - 24, self.font_small, VIOLET)
+
+        for projectile in getattr(self.sim, "projectiles", ()):
+            sx, sy = self._world(projectile.position)
+            direction = projectile.velocity / max(1e-6, norm(projectile.velocity))
+            tail = (int(sx - direction[0] * 12), int(sy - direction[1] * 12))
+            pygame.draw.line(self.logical, VIOLET, tail, (sx, sy), 3)
+            pygame.draw.circle(self.logical, INK, (sx, sy), 2)
 
     @staticmethod
     def _vision_color(pressure: float) -> tuple[int, int, int]:
@@ -1927,9 +1996,16 @@ class GhostlineRenderer:
             pygame.draw.polygon(self.logical, clock_color, ((clock_x - 11, 18), (clock_x - 3, 18), (clock_x - 7, 10)), 2)
             pygame.draw.rect(self.logical, clock_color, (clock_x - 12, 8, 92, 52), 1, border_radius=3)
         self._text(f"{seconds // 60:02d}:{seconds % 60:02d}", clock_x, 15, self.font_large, clock_color)
-        self._text(f"PULSE {self.sim.pulse_charges}", clock_x + 3, 42, hud_small, CYAN if self.sim.pulse_charges else MUTED)
+        utility = f"PULSE {self.sim.pulse_charges}"
+        if hasattr(self.sim, "decoy_charges"):
+            utility += f"  DECOY {self.sim.decoy_charges}"
+        self._text(utility, clock_x + 3, 42, hud_small, CYAN if self.sim.pulse_charges or getattr(self.sim, "decoy_charges", 0) else MUTED)
         alert_text = ("CLEAR", "WATCH", "ALERT", "HUNT", "LOCKDOWN")[self.sim.alert_tier]
-        self._text(alert_text, clock_x + 62, 44, self.font_small, RED if self.sim.alert_tier >= 2 else MUTED)
+        if hasattr(self.sim, "decoy_charges"):
+            alert_x, alert_y = clock_x + 3, 53
+        else:
+            alert_x, alert_y = clock_x + 62, 44
+        self._text(alert_text, alert_x, alert_y, self.font_small, RED if self.sim.alert_tier >= 2 else MUTED)
 
         if self.sim.active_hack_progress > 0.0:
             self._bar(225, 324, 190, 8, self.sim.active_hack_progress, AMBER, "LINKING")
@@ -2003,6 +2079,14 @@ class GhostlineRenderer:
             hud_small,
             VIOLET if self.sim.pulse_charges else MUTED,
         )
+        if hasattr(self.sim, "decoy_charges"):
+            self._text(
+                f"DECOY {self.sim.decoy_charges}",
+                326,
+                31,
+                hud_small,
+                CYAN if self.sim.decoy_charges else MUTED,
+            )
 
         seconds = int(math.ceil(self.sim.remaining_seconds))
         clock_color = RED if seconds < 25 else INK
@@ -2147,6 +2231,11 @@ class GhostlineRenderer:
         for center, radius, label, active, color in (
             (TOUCH_DASH_CENTER, TOUCH_DASH_RADIUS, "DASH", bool(state.get("dash")), CYAN),
             (TOUCH_PULSE_CENTER, TOUCH_PULSE_RADIUS, "PULSE", bool(state.get("pulse")), VIOLET),
+            *(
+                ((TOUCH_DECOY_CENTER, TOUCH_DECOY_RADIUS, "DECOY", bool(state.get("decoy")), CYAN),)
+                if state.get("show_decoy")
+                else ()
+            ),
         ):
             pygame.draw.circle(overlay, (*color, 112 if active else 42), center, radius)
             pygame.draw.circle(overlay, (*color, 225 if active else 150), center, radius, 2)
