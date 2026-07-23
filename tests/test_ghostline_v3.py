@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -21,7 +23,12 @@ from ghostline.marl_train import (
 from ghostline.security_env import GhostlineSecurityParallelEnv, _capped_radio_credit
 from ghostline.security_baselines import tactical_security_action
 from ghostline.security_controller import AdaptiveSecurityController
-from ghostline.security_model import SharedSecurityActorCritic, load_security_policy, save_security_policy
+from ghostline.security_model import (
+    SharedSecurityActorCritic,
+    _canonical_security_source_digest,
+    load_security_policy,
+    save_security_policy,
+)
 from ghostline.simulation import norm
 from ghostline.simulation_v3 import GhostlineSimulationV3
 from ghostline.types import Action, GuardMode
@@ -225,6 +232,26 @@ def test_security_parallel_api_and_parameter_shared_recurrent_policy(tmp_path) -
     restored_action, _ = restored.act(observations["guard_0"])
     assert np.array_equal(action, restored_action)
     env.close()
+
+
+def test_security_fingerprint_payload_is_checkout_line_ending_invariant(tmp_path) -> None:
+    source = Path(__file__).resolve().parents[1] / "src" / "ghostline"
+    lf_root = tmp_path / "lf"
+    crlf_root = tmp_path / "crlf"
+    lf_root.mkdir()
+    crlf_root.mkdir()
+    for name in (
+        "config_v3.py",
+        "types_v3.py",
+        "simulation_v3.py",
+        "security_baselines.py",
+        "security_env.py",
+    ):
+        payload = (source / name).read_bytes().replace(b"\r\n", b"\n")
+        (lf_root / name).write_bytes(payload)
+        (crlf_root / name).write_bytes(payload.replace(b"\n", b"\r\n"))
+
+    assert _canonical_security_source_digest(lf_root) == _canonical_security_source_digest(crlf_root)
 
 
 def test_batched_security_evaluation_matches_individual_deterministic_actions() -> None:

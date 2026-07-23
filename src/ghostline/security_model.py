@@ -13,17 +13,15 @@ SECURITY_OBSERVATION_CONTRACT = "GhostlineSecurityParallel-v0"
 SECURITY_ACTION_FACTORS = ("intent", "target", "message", "ability")
 SECURITY_ACTION_SIZES = (8, 8, 5, 2)
 SECURITY_MASK_KEYS = ("intent_mask", "target_mask", "message_mask", "ability_mask")
+SECURITY_MODEL_CONTRACT_VERSION = "shared-security-actor-critic-v1"
+_RELEASE_CANONICAL_SOURCE_SHA256 = "2525da27f6983965f9abf9e54ae934f4e915d6008d8cd7abca0145fa96d7c96c"
+_RELEASE_ENVIRONMENT_FINGERPRINT = "96275bac09bd6fb321510e1bd23d0e025d157b4cdeeb919aded9bb38b850721b"
 
 
-def security_environment_fingerprint() -> str:
-    """Fingerprint the exact public security-training contract.
+def _canonical_security_source_digest(root: Path | None = None) -> str:
+    """Hash the mechanics contract with checkout-independent line endings."""
 
-    The v2 player checkpoint has its own immutable fingerprint.  Keeping this
-    one separate makes it impossible to accidentally load a runner policy as a
-    security controller, or to resume MAPPO after a silent mechanics change.
-    """
-
-    root = Path(__file__).resolve().parent
+    root = Path(__file__).resolve().parent if root is None else Path(root)
     digest = hashlib.sha256()
     for name in (
         "config_v3.py",
@@ -31,12 +29,30 @@ def security_environment_fingerprint() -> str:
         "simulation_v3.py",
         "security_baselines.py",
         "security_env.py",
-        "security_model.py",
     ):
         path = root / name
         digest.update(name.encode("utf-8"))
-        digest.update(path.read_bytes())
+        digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
+    digest.update(f"security-model-contract:{SECURITY_MODEL_CONTRACT_VERSION}".encode("utf-8"))
     return digest.hexdigest()
+
+
+def security_environment_fingerprint() -> str:
+    """Return the exact, cross-platform public security contract identity.
+
+    The first released checkpoint used a raw-source fingerprint on an LF
+    checkout. The canonical payload anchor below maps that exact environment
+    back to its audited identity on LF and CRLF systems. Any mechanics,
+    observation, reward, tactical-teacher, or explicit model-contract change
+    falls through to a new digest and invalidates stale checkpoints.
+    """
+
+    canonical = _canonical_security_source_digest()
+    return (
+        _RELEASE_ENVIRONMENT_FINGERPRINT
+        if canonical == _RELEASE_CANONICAL_SOURCE_SHA256
+        else canonical
+    )
 
 
 class MaskedSecuritySetEncoder(nn.Module):

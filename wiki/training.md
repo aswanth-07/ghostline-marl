@@ -54,6 +54,9 @@ or changed tie-break logic from destroying a useful earlier policy.
 The tactical-teacher source is part of the security environment fingerprint;
 changing its role logic invalidates older warm-ups and resume checkpoints even
 when simulation and observation tensor shapes remain unchanged.
+The fingerprint canonicalizes source line endings and uses an explicit
+shared-actor contract version, so the same checkpoint identity loads on Linux
+and Windows while real contract changes still fail closed.
 Evaluation and human Adaptive Contracts batch all active operative observations
 into one recurrent actor forward pass per tactical decision. This preserves
 decentralized inputs and per-agent recurrent state while avoiding five serial
