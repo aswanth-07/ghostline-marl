@@ -443,6 +443,7 @@ def test_workflows_use_locked_installs_and_release_smoke() -> None:
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     assert "--constraint requirements.lock" in ci
+    assert "branches: [main]" in ci
     assert "scripts/verify_clean_install.py" in ci
     assert "scripts/verify_source_archive.py" in ci
     assert "actions/checkout@v7" in ci and "actions/setup-python@v6" in ci
