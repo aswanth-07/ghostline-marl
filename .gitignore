@@ -21,6 +21,7 @@ build/
 dist/
 *.spec
 scratch/
+tmp/
 *_output.txt
 progression.json
 .venv-py*/
