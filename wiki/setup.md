@@ -10,6 +10,11 @@ Python 3.13 is the locked release baseline. CI also checks the base runtime on
 Python 3.12 and 3.14. Commands below use `requirements.lock` as a constraints
 file so editable installs resolve to the reviewed direct and transitive pins.
 
+`.venv` is the only supported local environment. An untracked `.venv-py311`
+directory also exists on the current machine; it is stale, unsupported, and
+outside the CI matrix. It lacks `pettingzoo`, so it cannot even collect
+`tests/test_ghostline_v3.py`. Do not verify against it. Deleting it is safe.
+
 ## Human game
 
 ```powershell
