@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 import math
 import sys
@@ -388,6 +389,7 @@ class GhostlineRenderer:
             self._font_design_sizes[id(regular)] = int(round(13 * scale))
         self._native_text_commands: list[NativeTextCommand] = []
         self._native_font_cache: dict[int, pygame.font.Font] = {}
+        self._native_glyph_cache: OrderedDict[tuple[str, int, tuple[int, int, int]], pygame.Surface] = OrderedDict()
         self._capture_output_size: tuple[int, int] | None = None
         self._clock = pygame.time.Clock()
         self._time = 0.0
@@ -628,7 +630,7 @@ class GhostlineRenderer:
         touch_controls: dict[str, Any] | None = None,
         compact_hud: bool = False,
     ) -> np.ndarray | bool:
-        dt = min(0.05, self._clock.tick(60) / 1000.0) if self.visible else 1.0 / 60.0
+        dt = min(0.05, self._frame_delta()) if self.visible else 1.0 / 60.0
         self._time += dt
         self._update_camera(dt)
         self._update_particles(dt)
@@ -670,14 +672,14 @@ class GhostlineRenderer:
         body: list[str] | None = None,
         footer: str = "",
         panel: list[str] | None = None,
-        panel_title: str = "LIVE DOSSIER",
+        panel_title: str = "",
         badge: str = "",
         compact: bool = False,
         compact_body: bool = False,
         return_array: bool = False,
         output_size: tuple[int, int] | None = None,
     ) -> np.ndarray | bool:
-        self._time += self._clock.tick(60) / 1000.0
+        self._time += self._frame_delta()
         self._capture_output_size = output_size if return_array else None
         self._native_text_commands.clear()
         self.logical.fill(BG)
@@ -726,6 +728,8 @@ class GhostlineRenderer:
                 self._text(item, 59, y, self.font, BG if active else INK)
                 y += spacing
         if panel:
+            if not panel_title:
+                raise ValueError("panel_title is required when panel copy is supplied")
             panel_lines = [
                 wrapped
                 for line in panel
@@ -750,6 +754,20 @@ class GhostlineRenderer:
             self._text(footer, 42, 332, self.font_small, MUTED)
         self._apply_accessibility_filter()
         return self._present(return_array=return_array, output_size=output_size)
+
+    def _frame_delta(self) -> float:
+        """Pace desktop frames accurately without blocking the browser loop.
+
+        SDL's sleep-based ``Clock.tick`` consistently delivered roughly 50-56
+        frames per second on the Windows release path even when rendering had
+        enough headroom. ``tick_busy_loop`` uses a short precision wait and
+        keeps desktop simulation ticks aligned with real 60 Hz time. Emscripten
+        must remain cooperative, so the browser continues using ``tick`` and
+        yields through ``GameApp.run_async``.
+        """
+
+        limiter = self._clock.tick if sys.platform == "emscripten" else self._clock.tick_busy_loop
+        return limiter(60) / 1000.0
 
     @staticmethod
     def menu_item_rect(index: int, *, compact: bool = False) -> pygame.Rect:
@@ -799,11 +817,18 @@ class GhostlineRenderer:
             return frame
         target_size = self.window.get_size()
         scaled_size = _presentation_scaled_size(target_size)
-        scaled = pygame.transform.scale(self.logical, scaled_size)
-        self._draw_native_text(scaled, scaled_size)
-        self.window.fill((1, 3, 5))
-        destination = ((target_size[0] - scaled_size[0]) // 2, (target_size[1] - scaled_size[1]) // 2)
-        self.window.blit(scaled, destination)
+        if scaled_size == target_size:
+            # The release resolutions and web framebuffer are already 16:9.
+            # Scale directly into the display surface instead of allocating,
+            # clearing, and copying a second multi-megabyte surface every frame.
+            pygame.transform.scale(self.logical, scaled_size, self.window)
+            self._draw_native_text(self.window, scaled_size)
+        else:
+            scaled = pygame.transform.scale(self.logical, scaled_size)
+            self._draw_native_text(scaled, scaled_size)
+            self.window.fill((1, 3, 5))
+            destination = ((target_size[0] - scaled_size[0]) // 2, (target_size[1] - scaled_size[1]) // 2)
+            self.window.blit(scaled, destination)
         pygame.display.flip()
         self._capture_output_size = None
         return True
@@ -2040,7 +2065,10 @@ class GhostlineRenderer:
             self._draw_touch_hud(hud_small, hud_font)
             return
         expanded = self.hud_scale > 1.0
-        int_x = 128 if expanded else 106
+        phase = "EXTRACT" if self.sim.quota_met else "ACQUIRE"
+        objective_text = f"{phase} {self.sim.data}/{self.sim.level.quota}"
+        objective_right = 18 + hud_font.size(objective_text)[0]
+        int_x = max(128 if expanded else 106, objective_right + 10)
         trace_x = 228 if expanded else 172
         trace_width = 120 if expanded else 102
         clock_x = 379 if expanded else 295
@@ -2049,9 +2077,11 @@ class GhostlineRenderer:
             utility += f"  DECOY {self.sim.decoy_charges}"
         alert_text = ("CLEAR", "WATCH", "ALERT", "HUNT", "LOCKDOWN")[self.sim.alert_tier]
         if hasattr(self.sim, "decoy_charges"):
-            alert_x, alert_y = clock_x + 3, 53
+            alert_x = clock_x + 3
+            alert_y = 42 + hud_small.get_height() + 2
         else:
-            alert_x, alert_y = clock_x + 62, 44
+            alert_x = clock_x + 3 + hud_small.size(utility)[0] + 10
+            alert_y = 42
         # Measure the plate from its own content.  The earlier fixed 276/350
         # widths ended before the clock, so the mission timer, pulse charges,
         # and alert tier were drawn straight onto world art at every HUD scale,
@@ -2061,7 +2091,8 @@ class GhostlineRenderer:
             clock_x + 3 + hud_small.size(utility)[0],
             alert_x + self.font_small.size(alert_text)[0],
         )
-        panel_left, panel_top, panel_height = 10, 6, 60
+        panel_left, panel_top = 10, 6
+        panel_height = max(60, alert_y + self.font_small.get_height() + 1 - panel_top)
         panel_width = content_right + 6 - panel_left
         # Published so the regression can assert the invariant directly: every
         # status-cluster glyph stays inside its own backing plate.
@@ -2081,9 +2112,8 @@ class GhostlineRenderer:
         # The phase word is the objective state the player actually acts on;
         # a bare ``DATA`` label repeated the quota fraction beside it. This also
         # gives the desktop and touch bands one shared objective vocabulary.
-        phase = "EXTRACT" if self.sim.quota_met else "ACQUIRE"
         self._text(
-            f"{phase} {self.sim.data}/{self.sim.level.quota}",
+            objective_text,
             18,
             30 if expanded else 29,
             hud_font,
@@ -2399,7 +2429,16 @@ class GhostlineRenderer:
             if font is None:
                 font = pygame.font.SysFont("consolas", size, bold=True)
                 self._native_font_cache[size] = font
-            glyph = font.render(command.text, True, self._accessible_color(command.color))
+            color = self._accessible_color(command.color)
+            cache_key = (command.text, size, color)
+            glyph = self._native_glyph_cache.get(cache_key)
+            if glyph is None:
+                glyph = font.render(command.text, True, color)
+                self._native_glyph_cache[cache_key] = glyph
+                if len(self._native_glyph_cache) > 512:
+                    self._native_glyph_cache.popitem(last=False)
+            else:
+                self._native_glyph_cache.move_to_end(cache_key)
             target.blit(glyph, (int(round(command.x * scale_x)), int(round(command.y * scale_y))))
 
     def _text(self, text: str, x: float, y: float, font: pygame.font.Font, color: tuple[int, int, int]) -> None:

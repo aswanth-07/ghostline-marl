@@ -1,6 +1,6 @@
 ---
 title: Ghostline Assets
-updated: 2026-07-16
+updated: 2026-07-26
 status: active
 ---
 
@@ -64,6 +64,14 @@ Minimap room fills are presentation-only and separate from `config.ROLE_COLORS`,
 `scripts/qa_scaled_visuals.py` freezes representative title, briefing, Field Manual, pause, debrief, settings, Accessibility, Agent Lab selection/live, and tier-6 gameplay frames, then presents each through the shipping renderer at 1280x720 and 1920x1080. The world layer remains nearest-neighbour pixel art; the script now requires a non-zero post-scale text difference and native glyph runs in every scene, proving that menus, HUD, captions, and telemetry are rerasterized at output resolution rather than enlarging 640x360 glyph pixels. The earlier 2026-07-13 v4 matrix under `artifacts/visual-qa/flat-vision-grades-v4/` remains the pre-native-text exact-scaling baseline. Reviewed gameplay and locomotion captures are tracked under `assets/screenshots/`; visible-window and Chrome checks remain separate release gates.
 
 The 2026-07-26 interface-defect pass is under `artifacts/qa/ui-fixes/`. Its 20-scene matrix passes the native-text gate at both release sizes and measures 54.47 FPS at 1280x720 and 49.53 FPS at 1920x1080 in the conservative hidden-window compositor benchmark. That is a machine baseline, not a regression: the same benchmark on the immediately preceding revision of this workstation measured 56.89 and 49.57 FPS, so the gap against the 2026-07-16 figures below belongs to the measurement machine. The harness scenes were also resynchronized with the live menus; they had drifted into stale duplicated copy, which is why the tracked screenshots never exposed the Field Manual clipping the release build actually had.
+
+The Codex follow-up is under `artifacts/qa/codex-review-final/` and
+`artifacts/qa/codex-review-final-adaptive/`. It fixes precise desktop pacing,
+reuses native glyph surfaces, and scales directly into native 16:9 display
+surfaces. The same conservative full render/present benchmark now measures
+61.87/61.44 FPS for classic 720p/1080p and 60.56/61.21 FPS for adaptive
+720p/1080p. Both 20-scene matrices pass native-text, crop, and integer-scale
+checks.
 
 The 2026-07-16 interface pass is under `artifacts/qa/ui-refresh/` and `artifacts/qa/video-refresh/`. It verifies the portfolio-aligned black/cyan/magenta interface, compact Agent Lab tile below the minimap, uncluttered guard awareness language, protected objective/detection lanes, native 720p recording, and current persistent security telemetry. The 20-scene scale matrix passed with native text at both release sizes and measured 60.30 FPS at 1280x720 and 56.24 FPS at 1920x1080 in the conservative hidden-window compositor benchmark. The earlier frozen-gameplay matrices remain useful historical baselines.
 

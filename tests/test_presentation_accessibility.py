@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import numpy as np
+import pytest
 
 from ghostline.progression import (
     DEFAULT_BINDINGS,
@@ -431,6 +432,7 @@ def test_menu_dossier_wraps_long_accessibility_copy_inside_panel(monkeypatch) ->
     monkeypatch.setattr(renderer, "_text", tracked_text)
     renderer.draw_screen(
         title="ACCESSIBILITY",
+        panel_title="WHAT THESE DO",
         panel=[
             "TIMER ASSIST adds 35% to human contract windows and is recorded in telemetry.",
             "REDUCED MOTION disables shake, trails, and moving UI art.",
@@ -959,6 +961,8 @@ def test_hud_status_plate_backs_every_status_glyph_at_each_scale(monkeypatch) ->
 
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
     monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+    import pygame
+
     from ghostline.presentation import GhostlineRenderer
 
     sim = GhostlineSimulation(seed=2_000_004, tier=6)
@@ -990,10 +994,21 @@ def test_hud_status_plate_backs_every_status_glyph_at_each_scale(monkeypatch) ->
         assert plate.right < 529, "the status plate must not reach the minimap"
         assert any(text.startswith("ACQUIRE") for text, *_ in cluster)
         assert any(text.startswith("TRACE 71") for text, *_ in cluster)
+
+        def text_rect(call):
+            text, x, y, font = call
+            return pygame.Rect(x, y, *font.size(text))
+
+        objective = next(call for call in cluster if call[0].startswith("ACQUIRE"))
+        integrity = next(call for call in cluster if call[0] == "INTEGRITY")
+        utility = next(call for call in cluster if call[0].startswith("PULSE"))
+        alert = next(call for call in cluster if call[0] == "ALERT")
+        assert not text_rect(objective).colliderect(text_rect(integrity))
+        assert not text_rect(utility).colliderect(text_rect(alert))
     renderer.close()
 
 
-def test_every_menu_panel_renders_all_of_its_copy(monkeypatch) -> None:
+def test_field_manual_panel_renders_all_of_its_copy(monkeypatch) -> None:
     """No real screen may silently drop legend lines.
 
     The Field Manual panel previously wrapped to 17 lines against a 13-line safe
@@ -1030,6 +1045,109 @@ def test_every_menu_panel_renders_all_of_its_copy(monkeypatch) -> None:
     for cue in ("camera", "guard", "elite", "suppressor", "pulse", "dash", "lock"):
         assert cue in joined, f"{cue} legend entry was lost"
     renderer.close()
+
+
+def test_panel_copy_requires_a_specific_title(monkeypatch) -> None:
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+    from ghostline.presentation import GhostlineRenderer
+
+    renderer = GhostlineRenderer(GhostlineSimulation(seed=7, tier=1), visible=False)
+    with pytest.raises(ValueError, match="panel_title"):
+        renderer.draw_screen(title="UNTITLED PANEL", panel=["This copy needs a semantic heading."])
+    renderer.close()
+
+
+def test_credits_panel_has_a_specific_title(monkeypatch) -> None:
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+    from ghostline.app import GameApp
+    from ghostline.presentation import GhostlineRenderer
+
+    renderer = GhostlineRenderer(GhostlineSimulation(seed=7, tier=1), visible=False)
+    app = GameApp.__new__(GameApp)
+    app.renderer = renderer
+    app.settings = {"bindings": dict(DEFAULT_BINDINGS)}
+    app.state, app.selection = "credits", 0
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(renderer, "draw_screen", lambda **kwargs: captured.update(kwargs))
+    monkeypatch.setattr(app, "_events", lambda: [])
+
+    app._credits()
+
+    assert captured["panel_title"] == "ENGINEERING PRINCIPLES"
+    assert captured["panel"][0] == "Held-out procedural evaluation"
+    renderer.close()
+
+
+def test_adaptive_hud_stacks_alert_below_decoy_utility_without_overlap(monkeypatch) -> None:
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+    import pygame
+
+    from ghostline.presentation import GhostlineRenderer
+
+    sim = GhostlineSimulation(seed=2_000_004, tier=6)
+    sim.trace = 100.0
+    sim.decoy_charges = 2
+    renderer = GhostlineRenderer(sim, visible=False)
+    renderer.apply_accessibility({"hud_scale": 1.5})
+    calls: list[tuple[str, int, int, object]] = []
+    original_text = renderer._text
+
+    def tracked_text(text, x, y, font, color):
+        calls.append((str(text), int(x), int(y), font))
+        original_text(text, x, y, font, color)
+
+    monkeypatch.setattr(renderer, "_text", tracked_text)
+    monkeypatch.setattr(renderer, "_draw_minimap", lambda: None)
+    renderer._draw_hud(None)
+
+    def text_rect(call):
+        text, x, y, font = call
+        return pygame.Rect(x, y, *font.size(text))
+
+    utility = next(call for call in calls if call[0].startswith("PULSE"))
+    alert = next(call for call in calls if call[0] == "LOCKDOWN")
+    assert not text_rect(utility).colliderect(text_rect(alert))
+    assert renderer._hud_panel_rect.contains(text_rect(utility))
+    assert renderer._hud_panel_rect.contains(text_rect(alert))
+    assert renderer._hud_panel_rect.right < 529
+    assert renderer._hud_panel_rect.bottom <= 70
+    renderer.close()
+
+
+def test_frame_pacing_is_precise_on_desktop_and_cooperative_on_web(monkeypatch) -> None:
+    from ghostline import presentation
+    from ghostline.presentation import GhostlineRenderer
+
+    class FakeClock:
+        def __init__(self) -> None:
+            self.tick_calls: list[int] = []
+            self.busy_calls: list[int] = []
+
+        def tick(self, rate: int) -> int:
+            self.tick_calls.append(rate)
+            return 17
+
+        def tick_busy_loop(self, rate: int) -> int:
+            self.busy_calls.append(rate)
+            return 16
+
+    renderer = GhostlineRenderer.__new__(GhostlineRenderer)
+    desktop_clock = FakeClock()
+    renderer._clock = desktop_clock
+    monkeypatch.setattr(presentation.sys, "platform", "win32")
+    assert renderer._frame_delta() == 0.016
+    assert desktop_clock.busy_calls == [60]
+    assert desktop_clock.tick_calls == []
+
+    web_clock = FakeClock()
+    renderer._clock = web_clock
+    monkeypatch.setattr(presentation.sys, "platform", "emscripten")
+    assert renderer._frame_delta() == 0.017
+    assert web_clock.tick_calls == [60]
+    assert web_clock.busy_calls == []
 
 
 def test_panel_copy_keeps_caller_column_alignment(monkeypatch) -> None:
