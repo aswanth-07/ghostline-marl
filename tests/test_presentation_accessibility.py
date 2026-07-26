@@ -949,6 +949,228 @@ def test_diagonal_locomotion_preserves_direction_and_animates_integer_frames(mon
     renderer.close()
 
 
+def test_hud_status_plate_backs_every_status_glyph_at_each_scale(monkeypatch) -> None:
+    """The clock, pulse charges, and alert tier must never sit on bare world art.
+
+    The plate used to be a fixed 276/350 px width that ended before the clock,
+    so the whole timer cluster was drawn straight onto the facility at every HUD
+    scale.  The plate is now measured from its own content.
+    """
+
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+    from ghostline.presentation import GhostlineRenderer
+
+    sim = GhostlineSimulation(seed=2_000_004, tier=6)
+    sim.trace = 71.0
+    renderer = GhostlineRenderer(sim, visible=False)
+    for scale in (1.0, 1.25, 1.5):
+        renderer.apply_accessibility({"hud_scale": scale})
+        calls: list[tuple[str, int, int, object]] = []
+        original_text = renderer._text
+
+        def tracked_text(text, x, y, font, color, _calls=calls):
+            _calls.append((str(text), int(x), int(y), font))
+            original_text(text, x, y, font, color)
+
+        monkeypatch.setattr(renderer, "_text", tracked_text)
+        renderer._draw_hud(None)
+        monkeypatch.setattr(renderer, "_text", original_text)
+
+        plate = renderer._hud_panel_rect
+        # Only the top-left status cluster belongs to this plate; the minimap
+        # card (x >= 529) and the context-hint lane (y > 300) are separate.
+        cluster = [call for call in calls if call[2] < 70 and call[1] < 500]
+        assert cluster, f"no status glyphs recorded at scale {scale}"
+        for text, x, y, font in cluster:
+            width, height = font.size(text)
+            assert plate.collidepoint(x, y), f"{text!r} starts outside the plate at scale {scale}"
+            assert x + width <= plate.right, f"{text!r} overflows the plate at scale {scale}"
+            assert y + height <= plate.bottom, f"{text!r} drops below the plate at scale {scale}"
+        assert plate.right < 529, "the status plate must not reach the minimap"
+        assert any(text.startswith("ACQUIRE") for text, *_ in cluster)
+        assert any(text.startswith("TRACE 71") for text, *_ in cluster)
+    renderer.close()
+
+
+def test_every_menu_panel_renders_all_of_its_copy(monkeypatch) -> None:
+    """No real screen may silently drop legend lines.
+
+    The Field Manual panel previously wrapped to 17 lines against a 13-line safe
+    area, so the suppressor-telegraph entry -- the only in-game explanation of
+    that cue -- was never drawn at all.
+    """
+
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+    from ghostline.app import GameApp
+    from ghostline.presentation import PANEL_LINE_CAPACITY, GhostlineRenderer
+
+    renderer = GhostlineRenderer(GhostlineSimulation(seed=7, tier=1), visible=False)
+    app = GameApp.__new__(GameApp)
+    app.renderer = renderer
+    app.settings = {"bindings": dict(DEFAULT_BINDINGS)}
+    app.state, app.selection = "howto", 0
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(renderer, "draw_screen", lambda **kwargs: captured.update(kwargs))
+    monkeypatch.setattr(app, "_events", lambda: [])
+
+    app._how_to()
+    panel = captured["panel"]
+    assert isinstance(panel, list)
+    wrapped = [
+        line
+        for entry in panel
+        for line in renderer._wrap_text(entry, renderer.font_small, 208)
+    ]
+    assert len(wrapped) <= PANEL_LINE_CAPACITY, f"{len(wrapped)} lines exceed {PANEL_LINE_CAPACITY}"
+    assert captured["panel_title"] == "READ THE SECURITY LAYER"
+    # Every documented cue survives the tightened copy.
+    joined = " ".join(panel).lower()
+    for cue in ("camera", "guard", "elite", "suppressor", "pulse", "dash", "lock"):
+        assert cue in joined, f"{cue} legend entry was lost"
+    renderer.close()
+
+
+def test_panel_copy_keeps_caller_column_alignment(monkeypatch) -> None:
+    """A fitting line is returned untouched.
+
+    ``_wrap_text`` split and rejoined on single spaces even when no wrap was
+    needed, so every aligned label/value row rendered as ``CLEARANCE 6/6``.
+    """
+
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+    from ghostline.presentation import GhostlineRenderer
+
+    renderer = GhostlineRenderer(GhostlineSimulation(seed=7, tier=1), visible=False)
+    aligned = "CLEARANCE       6/6"
+    assert renderer._wrap_text(aligned, renderer.font_small, 208) == [aligned]
+    # Overlong copy still wraps rather than clipping.
+    long_line = "TIMER ASSIST adds 35% to human contract windows and is recorded in telemetry."
+    wrapped = renderer._wrap_text(long_line, renderer.font_small, 208)
+    assert len(wrapped) > 1
+    assert all(renderer.font_small.size(line)[0] <= 208 for line in wrapped)
+    renderer.close()
+
+
+def test_danger_and_electronics_stay_distinct_in_every_colour_mode(monkeypatch) -> None:
+    """Confirmed danger and electronics must not collapse into one hue.
+
+    RED and VIOLET previously differed only in their blue channel, and Color-Safe
+    then remapped RED onto that same magenta.  High Contrast also never reached
+    any glyph, because native text is composited after the world pixel filter.
+    """
+
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+    from ghostline.presentation import GREEN, RED, VIOLET, GhostlineRenderer
+
+    def separation(first, second) -> int:
+        return sum(abs(a - b) for a, b in zip(first, second))
+
+    renderer = GhostlineRenderer(GhostlineSimulation(seed=7, tier=1), visible=False)
+    assert separation(RED, VIOLET) > 150
+
+    for modes in ({}, {"color_safe": True}, {"high_contrast": True}, {"color_safe": True, "high_contrast": True}):
+        renderer.apply_accessibility(modes)
+        danger = renderer._accessible_color(RED)
+        electronic = renderer._accessible_color(VIOLET)
+        assert separation(danger, electronic) > 90, f"danger vs electronics collapsed under {modes}"
+
+    # Color-Safe remaps danger and success; High Contrast expands text luminance
+    # exactly like the world layer it has to match.
+    renderer.apply_accessibility({"color_safe": True})
+    assert renderer._accessible_color(RED) != RED
+    assert renderer._accessible_color(GREEN) != GREEN
+    renderer.apply_accessibility({"high_contrast": True})
+    assert renderer._accessible_color(RED) != RED
+    renderer.apply_accessibility({})
+    assert renderer._accessible_color(RED) == RED
+    renderer.close()
+
+
+def test_minimap_marks_the_single_routed_objective(monkeypatch) -> None:
+    """The map must show which terminal the HUD route hint is committed to."""
+
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+    import pygame
+
+    from ghostline.presentation import AMBER, BG, GhostlineRenderer
+
+    sim = GhostlineSimulation(seed=2_000_004, tier=6)
+    renderer = GhostlineRenderer(sim, visible=False)
+    objective = sim.objective_terminal()
+    assert objective is not None
+    assert len([t for t in sim.level.terminals if not t.completed]) > 1
+
+    renderer.logical.fill(BG)
+    renderer._draw_minimap()
+    pixels = pygame.surfarray.array3d(renderer.logical)
+    minimap = pixels[529:629, 9:65]
+    amber_cells = int(np.count_nonzero(np.all(minimap == np.asarray(AMBER), axis=-1)))
+    other_cells = int(np.count_nonzero(np.all(minimap == np.asarray((150, 122, 74)), axis=-1)))
+    # The routed terminal is a bright ringed marker; the rest stay dim.
+    assert amber_cells > other_cells
+    assert other_cells > 0
+    renderer.close()
+
+
+def test_volume_adjust_clamps_while_confirm_still_cycles() -> None:
+    """Lowering a volume must not require a trip through silence."""
+
+    from ghostline.app import GameApp
+
+    app = GameApp.__new__(GameApp)
+    app.settings = {"audio": {"enabled": True, "master": 1.0, "music": 0.5, "sfx": 0.0}}
+    app._persist_settings = lambda: None
+
+    app._adjust_volume("master", 0.1)
+    assert app.settings["audio"]["master"] == 1.0
+    app._adjust_volume("master", -0.1)
+    assert app.settings["audio"]["master"] == 0.9
+    app._adjust_volume("sfx", -0.1)
+    assert app.settings["audio"]["sfx"] == 0.0
+    app._adjust_volume("sfx", 0.1)
+    assert app.settings["audio"]["sfx"] == 0.1
+    # Confirm keeps its documented wrap-around cycle for keyboard-only players.
+    app.settings["audio"]["music"] = 1.0
+    app._cycle_volume("music")
+    assert app.settings["audio"]["music"] == 0.0
+
+
+def test_link_countdown_replaces_the_duplicate_bottom_progress_bar(monkeypatch) -> None:
+    """One moving link cue, on the ring the player is standing inside."""
+
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+    from ghostline.presentation import GhostlineRenderer
+
+    sim = GhostlineSimulation(seed=2_000_004, tier=6)
+    terminal = sim.level.terminals[0]
+    sim.player[:] = terminal.position
+    terminal.progress = terminal.hack_seconds * 0.5
+    renderer = GhostlineRenderer(sim, visible=False)
+    renderer.camera = sim.player.copy()
+    labels: list[str] = []
+    monkeypatch.setattr(renderer, "_text", lambda text, *_a, **_k: labels.append(str(text)))
+
+    renderer._draw_objectives()
+    remaining = terminal.hack_seconds - terminal.progress
+    assert f"LINK {remaining:.1f}s" in labels
+
+    # With a live handshake the HUD used to add a second bottom-centre LINKING
+    # bar 200 px away from the ring that already showed the same progress.
+    sim._active_hack = 0
+    assert sim.active_hack_progress > 0.0
+    labels.clear()
+    monkeypatch.setattr(renderer, "_draw_minimap", lambda: None)
+    renderer._draw_hud(None)
+    assert "LINKING" not in labels
+    renderer.close()
+
+
 def test_debrief_keeps_earned_badge_names_on_atomic_lines(monkeypatch) -> None:
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
     monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")

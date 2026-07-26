@@ -88,6 +88,11 @@ def _configure_gameplay(sim: GhostlineSimulation) -> None:
         guard.position = first_guard_position
         guard.mode = GuardMode.CHASE
         guard.awareness = 0.87
+        # A live chase always carries the remaining persistence countdown that
+        # the simulation sets on entry.  Leaving it at the 0.0 default made the
+        # frozen frame read "EVADE 0.0s" and look like a stalled game timer,
+        # when the runtime label was correct all along.
+        guard.mode_seconds = 1.8
         guard.facing = float(np.arctan2(sim.player[1] - guard.position[1], sim.player[0] - guard.position[0]))
         guard.attack_windup = 0.28
     if len(sim.level.guards) > 1:
@@ -142,8 +147,8 @@ def _title(renderer: GhostlineRenderer) -> None:
         items=["PLAY CONTRACTS", "AGENT LAB", "HOW TO PLAY", "SETTINGS", "CREDITS", "QUIT"],
         selected=0,
         badge="PROCEDURAL STEALTH // RL SHOWCASE",
+        panel_title="OPERATIVE STATUS",
         panel=[
-            "OPERATIVE STATUS",
             "CLEARANCE       6/6",
             "CONTRACTS WON   6/6",
             "RUNTIME POLICY  RECURRENT ONNX",
@@ -162,8 +167,8 @@ def _settings(renderer: GhostlineRenderer) -> None:
         subtitle="Saved instantly to your local Ghostline profile.",
         items=["AUDIO MIX", "ACCESSIBILITY", "CONTROLS", "DISPLAY", "BACK"],
         selected=1,
+        panel_title="ACCESS PROFILE",
         panel=[
-            "ACCESS PROFILE",
             "CAPTIONS       ON",
             "HIGH CONTRAST  OFF",
             "COLOR-SAFE     OFF",
@@ -189,8 +194,8 @@ def _briefing(renderer: GhostlineRenderer) -> None:
             "WINDOW  3:45",
         ],
         badge="CONTRACT // 06",
+        panel_title="FIELD PROTOCOL",
         panel=[
-            "FIELD PROTOCOL",
             "AMBER   DATA TERMINAL",
             "GREEN   EXTRACTION RELAY",
             "CONE    ACTIVE SIGHTLINE",
@@ -219,14 +224,21 @@ def _field_manual(renderer: GhostlineRenderer) -> None:
             "Meet quota, then reach the blue/green extraction relay.",
         ],
         compact_body=True,
+        panel_title="READ THE SECURITY LAYER",
         panel=[
-            "READ THE SECURITY LAYER",
-            "Faint amber marks the real sight envelope.",
+            "Faint amber: real sight envelope.",
             "Square + dashed beam: camera.",
-            "Triangle + edge notches: guard.",
-            "I / II / III: Standard / Interceptor / Elite patrol.",
-            "Segments fill before detection; walls reset pressure.",
-            "Pulse disables electronics; dash makes noise.",
+            "Triangle + notched edges: guard.",
+            "I/II/III: Standard, Interceptor,",
+            "   Elite patrol grade.",
+            "Dim LAST mark: last seen position.",
+            "Segments fill before detection;",
+            "   walls reset that pressure.",
+            "Pulse disables electronics.",
+            "Dash makes noise.",
+            "Violet aim line: suppressor round.",
+            "Adaptive locks warn before closing",
+            "   and never take the only route.",
         ],
         footer="ESC OR ENTER  BACK",
         return_array=True,
@@ -239,8 +251,8 @@ def _pause(renderer: GhostlineRenderer) -> None:
         subtitle="Simulation held at a deterministic tick boundary.",
         items=["RESUME", "RESTART CONTRACT", "FIELD MANUAL", "SETTINGS", "ABORT TO MENU"],
         selected=0,
+        panel_title="LIVE CONTRACT",
         panel=[
-            "LIVE CONTRACT",
             "TIER 6 // GHOSTLINE",
             "DATA 0/8",
             "INTEGRITY 3/3",
@@ -269,8 +281,8 @@ def _debrief(renderer: GhostlineRenderer) -> None:
         ],
         compact_body=True,
         badge="OPERATIVE RUN",
+        panel_title="BENCHMARK RECORD",
         panel=[
-            "BENCHMARK RECORD",
             "CONTROLLER  HUMAN",
             "DISTANCE    2218.4px",
             "IDLE          2.1%",
@@ -300,6 +312,7 @@ def _accessibility(renderer: GhostlineRenderer) -> None:
         ],
         selected=6,
         compact=True,
+        panel_title="WHAT THESE DO",
         panel=[
             "TIMER ASSIST adds 35% to human contract windows and is recorded in telemetry.",
             "REDUCED MOTION disables shake, trails, and moving UI art.",
@@ -325,6 +338,7 @@ def _agent_lab(renderer: GhostlineRenderer) -> None:
         ],
         selected=5,
         badge="RECURRENT ONNX POLICY",
+        panel_title="AGENT REPLAY",
         panel=[
             "EVALUATION SEED  2000123",
             "PUBLIC SENSORS // NO HIDDEN STATE",

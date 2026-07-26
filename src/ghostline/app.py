@@ -389,8 +389,8 @@ class GameApp:
             items=items,
             selected=self.selection,
             badge="PROCEDURAL STEALTH // RL SHOWCASE",
+            panel_title="OPERATIVE STATUS",
             panel=[
-                "OPERATIVE STATUS",
                 f"CLEARANCE       {self.progression['highest_unlocked_tier']}/6",
                 f"CONTRACTS WON   {cleared}/6",
                 f"RUNTIME POLICY  {self.policy_name}",
@@ -421,8 +421,8 @@ class GameApp:
             subtitle=("ADAPTIVE SECURITY // CHOOSE A TIER" if self.adaptive_mode else f"CLEARANCE {unlocked}/6"),
             items=items,
             selected=self.selection,
+            panel_title=f"TIER {spec.number} // {spec.name.upper()}",
             panel=[
-                f"TIER {spec.number} // {spec.name.upper()}",
                 f"FACILITY   {spec.room_columns}x{spec.room_rows} MODULES",
                 f"QUOTA      {spec.quota} DATA",
                 f"SECURITY   {spec.cameras} CAM / {spec.guards} GUARD",
@@ -463,8 +463,8 @@ class GameApp:
             items=items,
             selected=self.selection,
             badge="ENV-v3 // OPTIONAL MODE",
+            panel_title=f"{chosen.name} DIRECTIVE",
             panel=[
-                chosen.name,
                 descriptions[chosen],
                 "",
                 "NEW FIELD SYSTEMS",
@@ -503,6 +503,7 @@ class GameApp:
             items=items,
             selected=self.selection,
             badge=self.policy_name,
+            panel_title="AGENT REPLAY",
             panel=[f"{seed_label}  {self.lab_seed}", "PUBLIC SENSORS // NO HIDDEN STATE", "LEFT/RIGHT ±1", "SHIFT + LEFT/RIGHT ±100", "", *panel],
             footer=f"{self._key_label('confirm')}  WATCH     LEFT/RIGHT  SEED     {self._key_label('back')}  BACK",
         )
@@ -551,8 +552,8 @@ class GameApp:
                 *adaptive_lines,
             ],
             badge=("ADAPTIVE // ENV-v3" if self.adaptive_mode else f"CONTRACT // {self.selected_tier:02d}"),
+            panel_title="FIELD PROTOCOL",
             panel=[
-                "FIELD PROTOCOL",
                 "AMBER   DATA TERMINAL",
                 "GREEN   EXTRACTION RELAY",
                 "CONE    ACTIVE SIGHTLINE",
@@ -961,6 +962,7 @@ class GameApp:
             ),
             items=items,
             selected=self.selection,
+            panel_title="LIVE CONTRACT",
             panel=[
                 f"DATA       {self.sim.data}/{self.sim.level.quota}",
                 f"TRACE      {self.sim.trace:04.1f}",
@@ -1038,8 +1040,8 @@ class GameApp:
             ),
             body=body,
             badge="AGENT RUN" if self._debrief_agent else "OPERATIVE RUN",
+            panel_title="BENCHMARK RECORD",
             panel=[
-                "BENCHMARK RECORD",
                 f"CONTROLLER  {'AGENT' if self._debrief_agent else 'HUMAN'}",
                 f"DISTANCE    {self.sim.distance_travelled:7.1f}px",
                 f"IDLE        {float(self._telemetry.get('idle_fraction', 0)) * 100:5.1f}%",
@@ -1076,17 +1078,25 @@ class GameApp:
                 "Meet quota, then reach the blue/green extraction relay.",
             ],
             compact_body=True,
+            # This legend is the only in-game explanation of the security cues,
+            # so every entry has to fit the panel's safe area.  The previous copy
+            # wrapped to 17 lines against a 13-line panel and silently dropped
+            # the suppressor telegraph entirely.
+            panel_title="READ THE SECURITY LAYER",
             panel=[
-                "READ THE SECURITY LAYER",
-                "Faint amber marks the real sight envelope.",
+                "Faint amber: real sight envelope.",
                 "Square + dashed beam: camera.",
-                "Triangle + edge notches: guard.",
-                "I / II / III: Standard / Interceptor / Elite patrol.",
-                "Dim LAST markers freeze at the last position you actually saw.",
-                "Segments fill before detection; walls reset pressure.",
-                "Pulse disables electronics; dash makes noise.",
-                "Adaptive locks warn first and never remove the only route.",
-                "Violet aim lines telegraph suppressor shock rounds.",
+                "Triangle + notched edges: guard.",
+                "I/II/III: Standard, Interceptor,",
+                "   Elite patrol grade.",
+                "Dim LAST mark: last seen position.",
+                "Segments fill before detection;",
+                "   walls reset that pressure.",
+                "Pulse disables electronics.",
+                "Dash makes noise.",
+                "Violet aim line: suppressor round.",
+                "Adaptive locks warn before closing",
+                "   and never take the only route.",
             ],
             footer=f"{self._key_label('back')} OR {self._key_label('confirm')}  BACK",
         )
@@ -1105,8 +1115,8 @@ class GameApp:
             subtitle="Saved instantly to your local Ghostline profile.",
             items=items,
             selected=self.selection,
+            panel_title="ACCESS PROFILE",
             panel=[
-                "ACCESS PROFILE",
                 f"CAPTIONS       {self._on_off(self.settings['accessibility']['sound_captions'])}",
                 f"HIGH CONTRAST  {self._on_off(self.settings['accessibility']['high_contrast'])}",
                 f"COLOR-SAFE     {self._on_off(self.settings['accessibility']['color_safe'])}",
@@ -1122,8 +1132,21 @@ class GameApp:
         return "ON" if bool(value) else "OFF"
 
     def _cycle_volume(self, key: str) -> None:
+        """Step a volume up, wrapping to silence only after full scale.
+
+        Confirm remains the keyboard/pointer-only path, so it keeps cycling.
+        Left/Right adjusts without wrapping, which is what a player reaching for
+        a quieter mix actually wants: the wrap-only control forced a trip through
+        0% to lower any volume.
+        """
+
         value = float(self.settings["audio"][key])
         self.settings["audio"][key] = round((value + 0.1) % 1.1, 2)
+        self._persist_settings()
+
+    def _adjust_volume(self, key: str, step: float) -> None:
+        value = float(self.settings["audio"][key])
+        self.settings["audio"][key] = round(min(1.0, max(0.0, value + step)), 2)
         self._persist_settings()
 
     def _settings_audio(self) -> None:
@@ -1135,7 +1158,7 @@ class GameApp:
             f"SOUND EFFECTS  {int(audio['sfx'] * 100):3d}%",
             "BACK",
         ]
-        choice = self._menu_events(self._events(), len(items))
+        choice = self._menu_events(self._events(), len(items), horizontal=True)
         if choice == "back" or (choice == "confirm" and self.selection == 4):
             self.state, self.selection = "settings", 0
         elif choice == "confirm" and self.selection == 0:
@@ -1143,13 +1166,22 @@ class GameApp:
             self._persist_settings()
         elif choice == "confirm" and self.selection in (1, 2, 3):
             self._cycle_volume(("master", "music", "sfx")[self.selection - 1])
+        elif choice in ("left", "right") and self.selection in (1, 2, 3):
+            self._adjust_volume(
+                ("master", "music", "sfx")[self.selection - 1],
+                0.1 if choice == "right" else -0.1,
+            )
+        elif choice in ("left", "right") and self.selection == 0:
+            audio["enabled"] = choice == "right"
+            self._persist_settings()
         self.renderer.draw_screen(
             title="AUDIO MIX",
             subtitle="Procedural ambience responds to network pressure.",
             items=items,
             selected=self.selection,
+            panel_title="AUDIO MIX",
             panel=["MASTER controls the full mix.", "MUSIC controls ambience + tension.", "SFX controls gameplay and UI cues.", "", "Sound captions are under Accessibility."],
-            footer=f"{self._key_label('confirm')}  TOGGLE / +10%     {self._key_label('back')}  BACK",
+            footer=f"LEFT/RIGHT  ADJUST     {self._key_label('confirm')}  TOGGLE / +10%     {self._key_label('back')}  BACK",
         )
 
     def _settings_accessibility(self) -> None:
@@ -1191,6 +1223,7 @@ class GameApp:
             items=items,
             selected=self.selection,
             compact=True,
+            panel_title="WHAT THESE DO",
             panel=["TIMER ASSIST adds 35% to human contract windows and is recorded in telemetry.", "REDUCED MOTION disables shake, trails, and moving UI art.", "COLOR-SAFE remaps danger to pink and extraction to blue.", "CAPTIONS identify alerts, impacts, pulses, and terminals."],
             footer=f"{self._key_label('confirm')}  TOGGLE     {self._key_label('back')}  BACK",
         )
@@ -1219,6 +1252,7 @@ class GameApp:
             subtitle="Pixel-precise world // native-resolution interface.",
             items=items,
             selected=self.selection,
+            panel_title="PRESENTATION",
             panel=["The world keeps its authored pixel grid.", "Text is redrawn at the window's real resolution.", "16:9 sizes fill cleanly; other ratios letterbox.", "", "Reduced Motion always suppresses shake."],
             footer=f"{self._key_label('confirm')}  TOGGLE     {self._key_label('back')}  BACK",
         )
@@ -1268,6 +1302,7 @@ class GameApp:
             items=items,
             selected=visible_selection,
             compact=True,
+            panel_title="REBINDING",
             panel=["Duplicate keys are resolved by swapping bindings.", "Arrow keys remain emergency menu navigation.", "", f"ITEM       {self.selection + 1}/{len(all_items)}", f"LISTENING  {self._rebind_action.upper() if self._rebind_action else 'NO'}"],
             footer="PRESS KEY" if self._rebind_action else f"{self._key_label('confirm')}  REBIND     {self._key_label('back')}  BACK",
         )

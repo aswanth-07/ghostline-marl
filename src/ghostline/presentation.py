@@ -82,8 +82,43 @@ CYAN = (0, 229, 255)
 TEAL = (22, 157, 177)
 AMBER = (255, 203, 117)
 RED = (255, 74, 104)
-VIOLET = (255, 74, 164)
+# Electronics (drone, pulse, suppressor telegraph) must not read as confirmed
+# danger.  The previous violet differed from RED only in its blue channel
+# (104 vs 164), so every hostile cue collapsed into one pink at a glance and
+# Color-Safe then remapped RED onto that same magenta.  This blue-violet keeps
+# the documented amber-suspicion/red-danger hazard language intact while
+# restoring a third distinguishable electronic state in every colour mode.
+VIOLET = (168, 120, 255)
 GREEN = (108, 255, 177)
+
+# Color-Safe replacement pair, shared by the world pixel mask and the native
+# text path so one rule set governs both.
+COLOR_SAFE_DANGER = (255, 92, 190)
+COLOR_SAFE_SAFE = (82, 184, 255)
+
+# Minimap room fills.  ``config.ROLE_COLORS`` is tuned for full-size floor
+# tinting under world lighting: every entry sits in the 28-53 luminance band, so
+# at the minimap's ~1.8 px per tile all nine roles collapsed into one grey wash.
+# These are presentation-only and deliberately do not live in ``config.py``,
+# which is hashed into the frozen Env-v2 environment fingerprint. Each value
+# stays below the Color-Safe red/green mask thresholds so room fills read the
+# same in every colour mode, and corridors stay darkest so rooms read as rooms.
+# Right-hand menu panel geometry.  The panel starts at y=106 and must clear the
+# footer, so 218 px is its hard safe-area height and 14 px its line pitch.
+PANEL_MAX_HEIGHT = 218
+PANEL_LINE_CAPACITY = (PANEL_MAX_HEIGHT - 31) // 14
+
+MINIMAP_ROLE_COLORS = {
+    "office": (44, 62, 80),
+    "lounge": (72, 52, 78),
+    "lab": (36, 74, 74),
+    "server": (34, 48, 92),
+    "security": (86, 44, 48),
+    "vault": (84, 72, 34),
+    "utility": (54, 58, 52),
+    "corridor": (26, 31, 38),
+    "extraction": (32, 76, 58),
+}
 
 # Presentation mirrors the simulation's literal sight contract.  Keeping these
 # values named here makes it difficult for the visible warning footprint to
@@ -330,6 +365,7 @@ class GhostlineRenderer:
         self._directional_gait_cache: dict[tuple[str, int, int], pygame.Surface] = {}
         self._diagonal_locomotion_cache: dict[tuple[str, int, int, bool], pygame.Surface] = {}
         self._last_room_role = ""
+        self._hud_panel_rect = pygame.Rect(10, 6, 276, 60)
         self.font_small = pygame.font.SysFont("consolas", 10, bold=True)
         self.font = pygame.font.SysFont("consolas", 13, bold=True)
         self.font_large = pygame.font.SysFont("consolas", 26, bold=True)
@@ -634,6 +670,7 @@ class GhostlineRenderer:
         body: list[str] | None = None,
         footer: str = "",
         panel: list[str] | None = None,
+        panel_title: str = "LIVE DOSSIER",
         badge: str = "",
         compact: bool = False,
         compact_body: bool = False,
@@ -698,12 +735,16 @@ class GhostlineRenderer:
             # copy rather than letting long accessibility notes clip through
             # the panel edge, and expand vertically only as far as that safe
             # area permits.
-            panel_rect = pygame.Rect(372, 106, 238, min(218, 31 + len(panel_lines) * 14))
+            panel_rect = pygame.Rect(372, 106, 238, min(PANEL_MAX_HEIGHT, 31 + len(panel_lines) * 14))
             pygame.draw.rect(self.logical, (8, 8, 8), panel_rect, border_radius=5)
             pygame.draw.rect(self.logical, (61, 68, 78), panel_rect, 1, border_radius=5)
             pygame.draw.rect(self.logical, CYAN, (panel_rect.x, panel_rect.y, 3, panel_rect.height))
-            self._text("LIVE DOSSIER", panel_rect.x + 14, panel_rect.y + 10, self.font_small, CYAN)
-            for index, line in enumerate(panel_lines):
+            self._text(panel_title, panel_rect.x + 14, panel_rect.y + 10, self.font_small, CYAN)
+            # The panel is bounded by the footer safe area, so copy that does not
+            # fit is dropped rather than clipped mid-glyph.  PANEL_LINE_CAPACITY
+            # makes that limit explicit for callers and for the regression that
+            # keeps each real screen's legend inside it.
+            for index, line in enumerate(panel_lines[:PANEL_LINE_CAPACITY]):
                 self._text(line, panel_rect.x + 14, panel_rect.y + 29 + index * 14, self.font_small, INK if line else MUTED)
         if footer:
             self._text(footer, 42, 332, self.font_small, MUTED)
@@ -1016,7 +1057,13 @@ class GhostlineRenderer:
                     progress = min(1.0, terminal.progress / max(0.001, terminal.hack_seconds))
                     pygame.draw.arc(self.logical, CYAN, (sx - 24, sy - 24, 48, 48), -math.pi / 2, -math.pi / 2 + progress * math.tau, 3)
                 if in_range:
-                    link_label = f"LINK {terminal.hack_seconds:.1f}s"
+                    # While a link is running this counts the remaining seconds
+                    # down.  It previously restated the terminal's fixed total
+                    # for the whole handshake, which read as a frozen timer and
+                    # left the retired bottom-centre LINKING bar as the only
+                    # moving progress cue.
+                    remaining = max(0.0, terminal.hack_seconds - terminal.progress)
+                    link_label = f"LINK {remaining:.1f}s"
                     self._text(link_label, sx - self.font_small.size(link_label)[0] // 2, sy + 25, self.font_small, CYAN)
         sx, sy = self._world(self.sim.level.extraction)
         color = GREEN if self.sim.quota_met else (75, 88, 88)
@@ -1948,6 +1995,29 @@ class GhostlineRenderer:
             self._text(caption.text, x + 8, y + 3, self.font_small, INK)
             y += 18
 
+    def _accessible_color(self, color: tuple[int, int, int]) -> tuple[int, int, int]:
+        """Apply the world's Color-Safe and High Contrast rules to one colour.
+
+        Native text is composited after ``_apply_accessibility_filter`` has
+        already run on the logical surface, so glyphs never pass through that
+        pixel mask.  Both paths therefore have to share one rule set.  Before
+        this, High Contrast expanded the world while leaving every HUD glyph
+        untouched, and Color-Safe reached text only through an exact RED/GREEN
+        match that the interpolated ``_vision_color`` blends never satisfied.
+        """
+
+        red, green, blue = (int(channel) for channel in color)
+        if self.color_safe:
+            if red > 170 and red > green * 1.35 and blue < 150:
+                red, green, blue = COLOR_SAFE_DANGER
+            elif green > 140 and green > red * 1.35:
+                red, green, blue = COLOR_SAFE_SAFE
+        if self.high_contrast:
+            red, green, blue = (
+                int(np.clip((channel - 96.0) * 1.22 + 96.0, 0, 255)) for channel in (red, green, blue)
+            )
+        return red, green, blue
+
     def _apply_accessibility_filter(self) -> None:
         if not (self.high_contrast or self.color_safe):
             return
@@ -1955,8 +2025,8 @@ class GhostlineRenderer:
         if self.color_safe:
             red_mask = (pixels[:, :, 0] > 170) & (pixels[:, :, 0] > pixels[:, :, 1] * 1.35) & (pixels[:, :, 2] < 150)
             green_mask = (pixels[:, :, 1] > 140) & (pixels[:, :, 1] > pixels[:, :, 0] * 1.35)
-            pixels[red_mask] = (255, 92, 190)
-            pixels[green_mask] = (82, 184, 255)
+            pixels[red_mask] = COLOR_SAFE_DANGER
+            pixels[green_mask] = COLOR_SAFE_SAFE
         if self.high_contrast:
             lookup = np.clip((np.arange(256, dtype=np.float32) - 96.0) * 1.22 + 96.0, 0, 255).astype(np.uint8)
             pixels[:] = lookup[pixels]
@@ -1970,18 +2040,69 @@ class GhostlineRenderer:
             self._draw_touch_hud(hud_small, hud_font)
             return
         expanded = self.hud_scale > 1.0
-        panel_width = 350 if expanded else 276
-        panel_height = 58 if expanded else 49
-        panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
-        panel.fill((5, 10, 14, 220))
-        self.logical.blit(panel, (10, 9))
-        self._text(f"T{self.sim.tier}  {TIERS[self.sim.tier].name.upper()}", 18, 14, hud_small, CYAN)
-        self._text(f"DATA {self.sim.data}/{self.sim.level.quota}", 18, 30 if expanded else 29, hud_font, AMBER if not self.sim.quota_met else GREEN)
         int_x = 128 if expanded else 106
         trace_x = 228 if expanded else 172
         trace_width = 120 if expanded else 102
+        clock_x = 379 if expanded else 295
+        utility = f"PULSE {self.sim.pulse_charges}"
+        if hasattr(self.sim, "decoy_charges"):
+            utility += f"  DECOY {self.sim.decoy_charges}"
+        alert_text = ("CLEAR", "WATCH", "ALERT", "HUNT", "LOCKDOWN")[self.sim.alert_tier]
+        if hasattr(self.sim, "decoy_charges"):
+            alert_x, alert_y = clock_x + 3, 53
+        else:
+            alert_x, alert_y = clock_x + 62, 44
+        # Measure the plate from its own content.  The earlier fixed 276/350
+        # widths ended before the clock, so the mission timer, pulse charges,
+        # and alert tier were drawn straight onto world art at every HUD scale,
+        # and each new scale needed another hand-tuned coordinate pair.
+        content_right = max(
+            clock_x + 80,  # timer-warning frame
+            clock_x + 3 + hud_small.size(utility)[0],
+            alert_x + self.font_small.size(alert_text)[0],
+        )
+        panel_left, panel_top, panel_height = 10, 6, 60
+        panel_width = content_right + 6 - panel_left
+        # Published so the regression can assert the invariant directly: every
+        # status-cluster glyph stays inside its own backing plate.
+        self._hud_panel_rect = pygame.Rect(panel_left, panel_top, panel_width, panel_height)
+        panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+        panel.fill((5, 10, 14, 236))
+        self.logical.blit(panel, (panel_left, panel_top))
+        pygame.draw.rect(
+            self.logical,
+            (46, 91, 94),
+            (panel_left, panel_top, panel_width, panel_height),
+            1,
+            border_radius=4,
+        )
+        pygame.draw.rect(self.logical, CYAN, (panel_left, panel_top, 3, panel_height), border_radius=2)
+        self._text(f"T{self.sim.tier}  {TIERS[self.sim.tier].name.upper()}", 18, 14, hud_small, CYAN)
+        # The phase word is the objective state the player actually acts on;
+        # a bare ``DATA`` label repeated the quota fraction beside it. This also
+        # gives the desktop and touch bands one shared objective vocabulary.
+        phase = "EXTRACT" if self.sim.quota_met else "ACQUIRE"
+        self._text(
+            f"{phase} {self.sim.data}/{self.sim.level.quota}",
+            18,
+            30 if expanded else 29,
+            hud_font,
+            GREEN if self.sim.quota_met else AMBER,
+        )
         self._pips(int_x, 38 if expanded else 33, self.sim.integrity, 3, GREEN, label="INTEGRITY", font=hud_small)
-        self._bar(trace_x, 22, trace_width, 7, self.sim.trace / TRACE_MAX, RED if self.sim.trace > 70 else AMBER, "TRACE", font=hud_small)
+        # Trace escalates at 25/50/75, so the exact value is a decision input
+        # rather than decoration; the bar alone cannot express distance to the
+        # next step.
+        self._bar(
+            trace_x,
+            22,
+            trace_width,
+            7,
+            self.sim.trace / TRACE_MAX,
+            RED if self.sim.trace > 70 else AMBER,
+            f"TRACE {self.sim.trace:.0f}",
+            font=hud_small,
+        )
         for threshold in (25.0, 50.0, 75.0):
             tick_x = trace_x + int(round(trace_width * threshold / TRACE_MAX))
             pygame.draw.line(self.logical, (235, 237, 221), (tick_x, 21), (tick_x, 30), 1)
@@ -1990,26 +2111,19 @@ class GhostlineRenderer:
             pygame.draw.polygon(self.logical, VIOLET, ((drone_x, 19), (drone_x - 3, 15), (drone_x + 3, 15)))
         self._bar(trace_x, 48 if expanded else 42, trace_width, 5, self.sim.dash_energy / 100.0, CYAN, "DASH", font=hud_small)
         seconds = int(math.ceil(self.sim.remaining_seconds))
-        clock_x = 379 if expanded else 295
         clock_color = RED if seconds < 25 else INK
         if self.timer_warnings and seconds < 30:
             pygame.draw.polygon(self.logical, clock_color, ((clock_x - 11, 18), (clock_x - 3, 18), (clock_x - 7, 10)), 2)
             pygame.draw.rect(self.logical, clock_color, (clock_x - 12, 8, 92, 52), 1, border_radius=3)
         self._text(f"{seconds // 60:02d}:{seconds % 60:02d}", clock_x, 15, self.font_large, clock_color)
-        utility = f"PULSE {self.sim.pulse_charges}"
-        if hasattr(self.sim, "decoy_charges"):
-            utility += f"  DECOY {self.sim.decoy_charges}"
         self._text(utility, clock_x + 3, 42, hud_small, CYAN if self.sim.pulse_charges or getattr(self.sim, "decoy_charges", 0) else MUTED)
-        alert_text = ("CLEAR", "WATCH", "ALERT", "HUNT", "LOCKDOWN")[self.sim.alert_tier]
-        if hasattr(self.sim, "decoy_charges"):
-            alert_x, alert_y = clock_x + 3, 53
-        else:
-            alert_x, alert_y = clock_x + 62, 44
         self._text(alert_text, alert_x, alert_y, self.font_small, RED if self.sim.alert_tier >= 2 else MUTED)
 
-        if self.sim.active_hack_progress > 0.0:
-            self._bar(225, 324, 190, 8, self.sim.active_hack_progress, AMBER, "LINKING")
-        elif self.tutorial_hints and self.sim.context_hint:
+        # Link progress belongs at the terminal, not 200 px away at the bottom
+        # edge.  ``_draw_objectives`` already draws a proportional progress arc
+        # and a link countdown on the ring the player is standing inside, so the
+        # second bottom-centre bar only competed with the context-hint lane.
+        if self.tutorial_hints and self.sim.context_hint and self.sim.active_hack_progress <= 0.0:
             hint = self.sim.context_hint
             width = self.font_small.size(hint)[0] + 16
             pygame.draw.rect(self.logical, (6, 12, 17), (320 - width // 2, 326, width, 18), border_radius=3)
@@ -2120,19 +2234,25 @@ class GhostlineRenderer:
         sy = (height - 6) / self.sim.level.grid.shape[0]
         for room in self.sim.level.rooms:
             rect = pygame.Rect(x0 + 3 + room.x * sx, y0 + 3 + room.y * sy, max(1, room.width * sx), max(1, room.height * sy))
-            pygame.draw.rect(self.logical, ROLE_COLORS.get(room.role, (40, 45, 50)), rect)
-        px = x0 + 3 + self.sim.player[0] / TILE_SIZE * sx
-        py = y0 + 3 + self.sim.player[1] / TILE_SIZE * sy
-        pygame.draw.circle(self.logical, CYAN, (int(px), int(py)), 2)
+            pygame.draw.rect(self.logical, MINIMAP_ROLE_COLORS.get(room.role, (46, 53, 62)), rect)
         ex = x0 + 3 + self.sim.level.extraction[0] / TILE_SIZE * sx
         ey = y0 + 3 + self.sim.level.extraction[1] / TILE_SIZE * sy
-        pygame.draw.circle(self.logical, GREEN if self.sim.quota_met else MUTED, (int(ex), int(ey)), 2, 1)
+        pygame.draw.circle(self.logical, GREEN if self.sim.quota_met else MUTED, (int(ex), int(ey)), 3, 1)
+        # The simulation already commits to one sticky objective terminal and the
+        # HUD route hint follows it.  Drawing every terminal as the same amber
+        # square hid that choice, so the map could not answer the only question
+        # it is consulted for: which marker am I routed to?
+        objective = None if self.sim.quota_met else self.sim.objective_terminal()
         for terminal in self.sim.level.terminals:
             if terminal.completed:
                 continue
-            tx = x0 + 3 + terminal.position[0] / TILE_SIZE * sx
-            ty = y0 + 3 + terminal.position[1] / TILE_SIZE * sy
-            pygame.draw.rect(self.logical, AMBER, (int(tx), int(ty), 2, 2))
+            tx = int(x0 + 3 + terminal.position[0] / TILE_SIZE * sx)
+            ty = int(y0 + 3 + terminal.position[1] / TILE_SIZE * sy)
+            if objective is not None and terminal.terminal_id == objective.terminal_id:
+                pygame.draw.rect(self.logical, AMBER, (tx - 2, ty - 2, 5, 5), 1)
+                pygame.draw.rect(self.logical, AMBER, (tx, ty, 2, 2))
+            else:
+                pygame.draw.rect(self.logical, (150, 122, 74), (tx, ty, 2, 2))
         for key, memory in self._security_memory.items():
             mx = x0 + 3 + memory.position[0] / TILE_SIZE * sx
             my = y0 + 3 + memory.position[1] / TILE_SIZE * sy
@@ -2141,6 +2261,23 @@ class GhostlineRenderer:
                 pygame.draw.rect(self.logical, color, (int(mx) - 1, int(my) - 1, 3, 3), 1)
             else:
                 pygame.draw.circle(self.logical, color, (int(mx), int(my)), 1)
+        # The runner is drawn last and carries a heading tick: at this scale a
+        # bare 2 px dot was indistinguishable from the extraction ring once
+        # Color-Safe remapped both markers into the same blue.
+        px = x0 + 3 + self.sim.player[0] / TILE_SIZE * sx
+        py = y0 + 3 + self.sim.player[1] / TILE_SIZE * sy
+        heading = self.sim.heading
+        if float(norm(heading)) > 1e-3:
+            direction = heading / norm(heading)
+            pygame.draw.line(
+                self.logical,
+                CYAN,
+                (int(px), int(py)),
+                (int(px + float(direction[0]) * 5), int(py + float(direction[1]) * 5)),
+                1,
+            )
+        pygame.draw.circle(self.logical, BG, (int(px), int(py)), 3)
+        pygame.draw.circle(self.logical, CYAN, (int(px), int(py)), 2)
 
     def _bar(self, x: int, y: int, width: int, height: int, value: float, color: tuple[int, int, int], label: str, *, font: pygame.font.Font | None = None) -> None:
         self._text(label, x, y - 10, font or self.font_small, MUTED)
@@ -2262,13 +2399,7 @@ class GhostlineRenderer:
             if font is None:
                 font = pygame.font.SysFont("consolas", size, bold=True)
                 self._native_font_cache[size] = font
-            color = command.color
-            if self.color_safe:
-                if color == RED:
-                    color = (255, 92, 190)
-                elif color == GREEN:
-                    color = (82, 184, 255)
-            glyph = font.render(command.text, True, color)
+            glyph = font.render(command.text, True, self._accessible_color(command.color))
             target.blit(glyph, (int(round(command.x * scale_x)), int(round(command.y * scale_y))))
 
     def _text(self, text: str, x: float, y: float, font: pygame.font.Font, color: tuple[int, int, int]) -> None:
@@ -2281,9 +2412,17 @@ class GhostlineRenderer:
 
     @staticmethod
     def _wrap_text(text: str, font: pygame.font.Font, maximum_width: int) -> list[str]:
-        words = str(text).split()
+        value = str(text)
+        words = value.split()
         if not words:
             return [""]
+        # Return a fitting line untouched.  Splitting and rejoining on single
+        # spaces collapsed the caller's own column alignment even when no wrap
+        # was needed, so every aligned label/value row in the menu panels and
+        # debrief body rendered as ``CLEARANCE 6/6`` instead of the intended
+        # ``CLEARANCE       6/6``.
+        if font.size(value)[0] <= maximum_width:
+            return [value]
         lines: list[str] = []
         current = words[0]
         for word in words[1:]:
