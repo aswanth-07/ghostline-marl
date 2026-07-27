@@ -11,7 +11,7 @@ from ghostline.env import GhostlineEnv, potential_progress_reward
 from ghostline.generation import world_to_tile
 from ghostline.simulation import angle_vector, norm
 from ghostline.simulation_v3 import GhostlineSimulationV3
-from ghostline.types_v3 import ContractDirective, GuardRole, RunnerActionV3
+from ghostline.types_v3 import RUNNER_ACTION_COUNT_V3, ContractDirective, GuardRole, RunnerActionV3
 
 
 class GhostlineEnvV3(GhostlineEnv):
@@ -30,7 +30,7 @@ class GhostlineEnvV3(GhostlineEnv):
         self.external_security = bool(external_security)
         self._directive_par_seconds = 1.0
         super().__init__(render_mode=render_mode, seed=seed, tier=tier)
-        self.action_space = spaces.Discrete(72)
+        self.action_space = spaces.Discrete(RUNNER_ACTION_COUNT_V3)
         self.observation_space = spaces.Dict(
             {
                 "ego": spaces.Box(-1.0, 1.0, shape=(27,), dtype=np.float32),
@@ -42,7 +42,7 @@ class GhostlineEnvV3(GhostlineEnv):
                 "entities": spaces.Box(-1.0, 1.0, shape=(MAX_ENTITIES, 16), dtype=np.float32),
                 "entity_mask": spaces.Box(0, 1, shape=(MAX_ENTITIES,), dtype=np.int8),
                 "rays": spaces.Box(0.0, 1.0, shape=(RAY_COUNT, 4), dtype=np.float32),
-                "action_mask": spaces.Box(0, 1, shape=(72,), dtype=np.int8),
+                "action_mask": spaces.Box(0, 1, shape=(RUNNER_ACTION_COUNT_V3,), dtype=np.int8),
             }
         )
         self.sim = GhostlineSimulationV3(
@@ -88,7 +88,7 @@ class GhostlineEnvV3(GhostlineEnv):
         action_value = int(action)
         action_mask = self.sim.action_mask()
         clipped = int(np.clip(action_value, 0, 71))
-        invalid = not 0 <= action_value < 72 or action_mask[clipped] == 0
+        invalid = not 0 <= action_value < RUNNER_ACTION_COUNT_V3 or action_mask[clipped] == 0
         decoded = RunnerActionV3.decode(clipped)
         if invalid:
             decoded = RunnerActionV3(move=decoded.move)
@@ -247,7 +247,7 @@ class GhostlineEnvV3(GhostlineEnv):
 
     def telemetry(self) -> dict[str, Any]:
         telemetry = super().telemetry()
-        counts = np.bincount(np.asarray(self._action_history, dtype=np.int64), minlength=72)
+        counts = np.bincount(np.asarray(self._action_history, dtype=np.int64), minlength=RUNNER_ACTION_COUNT_V3)
         telemetry.update(
             {
                 "contract": "GhostlineEnv-v3",

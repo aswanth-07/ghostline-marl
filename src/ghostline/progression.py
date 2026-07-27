@@ -16,6 +16,7 @@ DEFAULT_BINDINGS: dict[str, str] = {
     "dash": "left shift",
     "pulse": "space",
     "decoy": "q",
+    "crouch": "left ctrl",
     "restart": "r",
     "pause": "escape",
     "menu_up": "up",

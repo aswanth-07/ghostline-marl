@@ -55,27 +55,39 @@ class RadioMessage(IntEnum):
     REGROUP = 4
 
 
+# 9 movement x dash x pulse x decoy x crouch.
+RUNNER_ACTION_COUNT_V3 = 144
+
+
 @dataclass(frozen=True)
 class RunnerActionV3:
-    """Env-v3 action: 9 movement x dash x pulse x decoy."""
+    """Env-v3 action: 9 movement x dash x pulse x decoy x crouch."""
 
     move: int = 0
     dash: bool = False
     pulse: bool = False
     decoy: bool = False
+    crouch: bool = False
 
     @classmethod
     def decode(cls, value: int) -> "RunnerActionV3":
-        value = int(np.clip(value, 0, 71))
+        value = int(np.clip(value, 0, RUNNER_ACTION_COUNT_V3 - 1))
         return cls(
             move=value % 9,
             dash=bool((value // 9) % 2),
             pulse=bool((value // 18) % 2),
             decoy=bool((value // 36) % 2),
+            crouch=bool((value // 72) % 2),
         )
 
     def encode(self) -> int:
-        return int(self.move) + 9 * int(self.dash) + 18 * int(self.pulse) + 36 * int(self.decoy)
+        return (
+            int(self.move)
+            + 9 * int(self.dash)
+            + 18 * int(self.pulse)
+            + 36 * int(self.decoy)
+            + 72 * int(self.crouch)
+        )
 
 
 @dataclass(frozen=True)

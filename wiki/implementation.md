@@ -28,6 +28,18 @@ state used by the MAPPO critic.
 
 ## Adaptive Contracts fairness contract
 
+- Env-v3 runners have a stealth state. `RunnerActionV3` carries a fifth `crouch`
+  bit for 144 masked actions; the original 72 codes keep their exact meaning.
+  Crouching moves at 52% speed, drops footstep noise from 118 px to 46 px, fills
+  guard awareness at 55% rate, and cools trace faster. It never makes the runner
+  invisible and it is masked out with dash, so it cannot silence a loud move.
+- Movement is audible in Env-v3. The frozen simulation only broadcast a dash
+  wave, so walking everywhere was free; footsteps now emit on a fixed cadence at
+  a stealth-dependent radius. Dashing additionally costs trace per second, which
+  is what makes a loud route expensive rather than strictly better.
+- Cover is read from the existing collision grid rather than authored volumes,
+  so every generated facility supports it without a second source of truth.
+
 - Adaptive play is optional and never replaces the classic campaign or the published runner benchmark.
 - Acoustic decoys have limited charges, a two-second lifetime, deterministic placement, and perception-gated noise pulses.
 - Only one security door can lock at a time. Every eligible door is a redundant room-graph edge, warns for 0.65 seconds, remains locked for 3.5 seconds, and can be pulse-overridden for five seconds. Occupied doors never close.

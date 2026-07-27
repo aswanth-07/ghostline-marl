@@ -42,9 +42,18 @@ from ghostline.types_v3 import (
 )
 
 
-def test_v3_action_contract_round_trips_all_72_semantic_combinations() -> None:
-    assert {RunnerActionV3.decode(value).encode() for value in range(72)} == set(range(72))
+def test_v3_action_contract_round_trips_all_144_semantic_combinations() -> None:
+    from ghostline.types_v3 import RUNNER_ACTION_COUNT_V3
+
+    assert RUNNER_ACTION_COUNT_V3 == 144
+    values = range(RUNNER_ACTION_COUNT_V3)
+    assert {RunnerActionV3.decode(value).encode() for value in values} == set(values)
     assert RunnerActionV3.decode(71) == RunnerActionV3(move=8, dash=True, pulse=True, decoy=True)
+    assert RunnerActionV3.decode(143) == RunnerActionV3(
+        move=8, dash=True, pulse=True, decoy=True, crouch=True
+    )
+    # The crouch bit is additive: every original code keeps its meaning.
+    assert all(not RunnerActionV3.decode(value).crouch for value in range(72))
 
 
 def test_adaptive_cli_defaults_bind_training_to_the_frozen_runner() -> None:
@@ -67,7 +76,7 @@ def test_v2_contract_remains_immutable_while_v3_is_registered() -> None:
     assert classic_observation["ego"].shape == (24,)
     assert classic_observation["entities"].shape == (12, 13)
     assert "directive" not in classic_info
-    assert adaptive.action_space.n == 72
+    assert adaptive.action_space.n == 144
     assert adaptive_observation["ego"].shape == (27,)
     assert adaptive_observation["entities"].shape == (12, 16)
     assert adaptive_observation["directive"].shape == (6,)
@@ -82,7 +91,7 @@ def test_v3_environment_checker_and_directive_observation() -> None:
     assert env.observation_space.contains(observation)
     assert observation["local_grid"].shape == (11, 15, 15)
     assert observation["rays"].shape == (24, 4)
-    assert observation["action_mask"].shape == (72,)
+    assert observation["action_mask"].shape == (144,)
     assert observation["directive"][2] == 1.0
     assert info["directive"] == "greed"
     check_env(env, skip_render_check=True)
@@ -633,3 +642,110 @@ def test_interception_beats_tailing_in_the_shaping_potential() -> None:
     assert trailing == 0.0, "trailing the runner must earn no containment credit"
     assert intercepting > trailing
     env.close()
+
+
+def test_crouch_trades_speed_for_silence_and_a_smaller_profile() -> None:
+    """Quiet play must be a real option, not a slower version of the same run."""
+
+    from ghostline.config_v3 import (
+        CROUCH_AWARENESS_SCALE,
+        CROUCH_FOOTSTEP_RADIUS,
+        CROUCH_SPEED_SCALE,
+        WALK_FOOTSTEP_RADIUS,
+    )
+
+    def travel(crouch: bool) -> float:
+        sim = GhostlineSimulationV3(seed=4242, tier=6)
+        start = sim.player.copy()
+        for _ in range(30):
+            sim.advance(RunnerActionV3(move=3, crouch=crouch), ticks=1)
+        return float(norm(sim.player - start))
+
+    walked, crouched = travel(False), travel(True)
+    assert crouched == pytest.approx(walked * CROUCH_SPEED_SCALE, rel=0.05)
+
+    def footstep_radii(crouch: bool) -> set[float]:
+        sim = GhostlineSimulationV3(seed=4242, tier=6)
+        seen: set[float] = set()
+        real = GhostlineSimulationV3._broadcast_noise
+
+        def capture(**kwargs):
+            seen.add(kwargs["radius"])
+            return real(sim, **kwargs)
+
+        sim._broadcast_noise = capture
+        for _ in range(120):
+            sim.advance(RunnerActionV3(move=3, crouch=crouch), ticks=1)
+        return seen
+
+    assert footstep_radii(False) == {WALK_FOOTSTEP_RADIUS}
+    assert footstep_radii(True) == {CROUCH_FOOTSTEP_RADIUS}
+    assert CROUCH_FOOTSTEP_RADIUS < WALK_FOOTSTEP_RADIUS
+    assert 0.0 < CROUCH_AWARENESS_SCALE < 1.0
+
+
+def test_crouch_slows_awareness_without_making_the_runner_invisible(monkeypatch) -> None:
+    """Patience buys safety; it never breaks the detection contract.
+
+    The underlying sight model is untouched, so this pins the actual override:
+    for the same awareness gain produced by the frozen guard update, a crouched
+    runner fills the meter more slowly but still fills it.
+    """
+
+    from ghostline.config_v3 import CROUCH_AWARENESS_SCALE
+    from ghostline.simulation import GhostlineSimulation
+
+    granted = 0.20
+
+    def fake_update(self, dt: float) -> None:
+        for guard in self.level.guards:
+            guard.awareness = min(1.0, guard.awareness + granted)
+
+    monkeypatch.setattr(GhostlineSimulation, "_update_guards", fake_update)
+
+    def awareness_after(crouch: bool) -> float:
+        sim = GhostlineSimulationV3(seed=2_000_004, tier=6)
+        for guard in sim.level.guards:
+            guard.awareness = 0.0
+        sim.crouching = crouch
+        sim._update_guards(1.0 / 60.0)
+        return float(sim.level.guards[0].awareness)
+
+    loud, quiet = awareness_after(False), awareness_after(True)
+    assert loud == pytest.approx(granted)
+    assert quiet == pytest.approx(granted * CROUCH_AWARENESS_SCALE)
+    assert quiet < loud, "crouching must slow how fast a guard fills its meter"
+    assert quiet > 0.0, "crouching must never make the runner undetectable"
+
+
+def test_dash_costs_trace_so_loud_routes_are_expensive() -> None:
+    """Loud stays viable and fast, but it escalates the network."""
+
+    def trace_after(dash: bool, crouch: bool = False) -> float:
+        sim = GhostlineSimulationV3(seed=4242, tier=6)
+        for _ in range(120):
+            sim.advance(RunnerActionV3(move=3, dash=dash, crouch=crouch), ticks=1)
+        return float(sim.trace)
+
+    assert trace_after(True) > trace_after(False)
+    # Unseen and quiet, the network actively cools back toward its floor.
+    sim = GhostlineSimulationV3(seed=4242, tier=6)
+    sim.trace = 60.0
+    for _ in range(120):
+        sim.advance(RunnerActionV3(move=3, crouch=True), ticks=1)
+    assert sim.trace < 60.0
+
+
+def test_crouch_cannot_be_combined_with_dash_in_the_action_mask() -> None:
+    """Crouch is the quiet state; it may not silence a dash."""
+
+    sim = GhostlineSimulationV3(seed=4242, tier=6)
+    mask = sim.action_mask()
+    for value, legal in enumerate(mask):
+        action = RunnerActionV3.decode(value)
+        if action.crouch and action.dash:
+            assert legal == 0
+
+    # Even if an illegal pair is forced through, the dash wins and stays loud.
+    sim.advance(RunnerActionV3(move=3, dash=True, crouch=True), ticks=6)
+    assert sim.crouching is False

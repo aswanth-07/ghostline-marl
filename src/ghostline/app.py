@@ -37,7 +37,7 @@ from ghostline.progression import (
 from ghostline.simulation import GhostlineSimulation
 from ghostline.simulation_v3 import GhostlineSimulationV3
 from ghostline.types import Action
-from ghostline.types_v3 import ContractDirective, RunnerActionV3
+from ghostline.types_v3 import RUNNER_ACTION_COUNT_V3, ContractDirective, RunnerActionV3
 
 BRIEFINGS = {
     1: ("Learn the line.", "Acquire the contract quota and leave through the green extraction relay."),
@@ -57,6 +57,7 @@ CONTROL_ACTIONS = (
     ("dash", "DASH"),
     ("pulse", "PULSE"),
     ("decoy", "NOISE DECOY"),
+    ("crouch", "CROUCH / SNEAK"),
     ("restart", "RESTART"),
     ("pause", "PAUSE / MENU"),
     ("menu_up", "MENU UP"),
@@ -636,7 +637,7 @@ class GameApp:
             ),
             "success": False,
             "actions": 0,
-            "action_counts": [0] * (72 if self.adaptive_mode and not agent else 36),
+            "action_counts": [0] * (RUNNER_ACTION_COUNT_V3 if self.adaptive_mode and not agent else 36),
             "contract": "GhostlineEnv-v3" if self.adaptive_mode and not agent else "GhostlineEnv-v2",
             "directive": self.directive.name.lower() if self.adaptive_mode and not agent else "standard",
             "policy_decisions": 0,
@@ -746,6 +747,7 @@ class GameApp:
                 dash="dash" in roles,
                 pulse="pulse" in roles,
                 decoy="decoy" in roles,
+                crouch="crouch" in roles,
             )
         return Action(move=move, dash="dash" in roles, pulse="pulse" in roles)
 
@@ -840,6 +842,7 @@ class GameApp:
                     bool(keys[self._key("dash")]) or touch_action.dash,
                     bool(keys[self._key("pulse")]) or touch_action.pulse,
                     bool(keys[self._key("decoy")]) or bool(getattr(touch_action, "decoy", False)),
+                    bool(keys[self._key("crouch")]) or bool(getattr(touch_action, "crouch", False)),
                 )
             else:
                 action = Action(
@@ -1311,7 +1314,7 @@ class GameApp:
         name = name.strip().lower()
         bindings = self.settings["bindings"]
         previous = str(bindings[action])
-        gameplay_actions = {"move_up", "move_down", "move_left", "move_right", "dash", "pulse", "restart", "pause"}
+        gameplay_actions = {"move_up", "move_down", "move_left", "move_right", "dash", "pulse", "decoy", "crouch", "restart", "pause"}
         menu_actions = {"menu_up", "menu_down", "confirm", "back"}
         group = gameplay_actions if action in gameplay_actions else menu_actions
         conflict = next((other for other, current in bindings.items() if other in group and other != action and current == name), None)

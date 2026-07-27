@@ -33,3 +33,14 @@ SECURITY_TARGET_FEATURES = 3 + SECURITY_TARGET_KINDS
 # and live link progress), five operative blocks, three door blocks, and an
 # explicit operative presence mask.
 SECURITY_CENTRAL_STATE_SIZE = 72
+
+# Stealth states. Crouching trades speed for silence and a smaller visual
+# profile; dashing stays fast and now carries a real trace cost, so both a quiet
+# and a loud route are viable and they fail in different ways.
+CROUCH_SPEED_SCALE = 0.52
+CROUCH_FOOTSTEP_RADIUS = 46.0
+CROUCH_AWARENESS_SCALE = 0.55
+CROUCH_TRACE_DECAY_BONUS = 4.4
+WALK_FOOTSTEP_RADIUS = 118.0
+DASH_TRACE_COST_PER_SECOND = 7.5
+COVER_TRACE_DECAY_BONUS = 2.6

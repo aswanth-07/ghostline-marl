@@ -7,6 +7,7 @@ import math
 import numpy as np
 
 from ghostline.config import (
+    TRACE_MAX,
     PLAYER_GUARD_AUDIBLE_DISTANCE,
     PLAYER_RADIUS,
     PLAYER_SPEED,
@@ -16,6 +17,13 @@ from ghostline.config import (
 )
 from ghostline.config_v3 import (
     DECOY_LIFETIME_SECONDS,
+    COVER_TRACE_DECAY_BONUS,
+    CROUCH_AWARENESS_SCALE,
+    CROUCH_FOOTSTEP_RADIUS,
+    CROUCH_SPEED_SCALE,
+    CROUCH_TRACE_DECAY_BONUS,
+    WALK_FOOTSTEP_RADIUS,
+    DASH_TRACE_COST_PER_SECOND,
     DECOY_NOISE_RADIUS,
     DECOY_PULSE_INTERVAL_SECONDS,
     DECOY_THROW_DISTANCE,
@@ -33,8 +41,9 @@ from ghostline.config_v3 import (
 )
 from ghostline.generation import tile_center, world_to_tile
 from ghostline.simulation import GhostlineSimulation, MOVE_DIRECTIONS, norm, unit
-from ghostline.types import Guard, GuardMode, SimEvent
+from ghostline.types import Guard, GuardMode, SimEvent, Tile
 from ghostline.types_v3 import (
+    RUNNER_ACTION_COUNT_V3,
     ContractDirective,
     Decoy,
     GuardRole,
@@ -67,6 +76,8 @@ class GhostlineSimulationV3(GhostlineSimulation):
         self.directive = ContractDirective.parse(directive)
         self.external_security = bool(external_security)
         super().__init__(seed=seed, tier=tier)
+
+    crouching: bool = False
 
     def reset(self, *, seed: int | None = None, tier: int | None = None) -> None:
         super().reset(seed=seed, tier=tier)
@@ -151,17 +162,20 @@ class GhostlineSimulationV3(GhostlineSimulation):
         return room_b in visited
 
     def action_mask(self) -> np.ndarray:
-        mask = np.ones(72, dtype=np.int8)
+        mask = np.ones(RUNNER_ACTION_COUNT_V3, dtype=np.int8)
         dash_available = self.dash_energy > 1.0
         pulse_available = self.pulse_charges > 0 and self.pulse_cooldown <= 0.0
         decoy_available = self.decoy_charges > 0 and self.decoy_cooldown <= 0.0
-        for value in range(72):
+        for value in range(RUNNER_ACTION_COUNT_V3):
             action = RunnerActionV3.decode(value)
             if action.dash and (not dash_available or action.move == 0):
                 mask[value] = 0
             if action.pulse and not pulse_available:
                 mask[value] = 0
             if action.decoy and not decoy_available:
+                mask[value] = 0
+            # Crouching is the quiet state; it cannot be combined with a dash.
+            if action.crouch and action.dash:
                 mask[value] = 0
         return mask
 
@@ -174,6 +188,11 @@ class GhostlineSimulationV3(GhostlineSimulation):
 
     def _tick(self, action: RunnerActionV3, *, allow_pulse: bool) -> None:
         dt = 1.0 / SIM_HZ
+        # Crouching is only honoured while actually sneaking: it cannot be used
+        # to cancel a dash mid-frame, which would make the loud route free.
+        self.crouching = bool(action.crouch) and not (
+            action.dash and action.move != 0 and self.dash_energy > 0.0
+        )
         self.decoy_cooldown = max(0.0, self.decoy_cooldown - dt)
         self._update_security_doors(dt)
         self._update_decoys(dt)
@@ -183,9 +202,78 @@ class GhostlineSimulationV3(GhostlineSimulation):
         if not action.decoy:
             self._decoy_latched = False
         super()._tick(action, allow_pulse=allow_pulse)
+        self._emit_footsteps(action)
         self._update_operative_state(dt)
         self._update_suppressors(dt)
         self._update_projectiles(dt)
+
+    def _emit_footsteps(self, action: RunnerActionV3) -> None:
+        """Make ordinary movement audible so quiet play is a real choice.
+
+        The frozen simulation only broadcasts a dash wave, which is why walking
+        everywhere was free. Footsteps are emitted on a fixed cadence rather
+        than every tick so the cue stays readable and the cost stays bounded.
+        """
+
+        if action.move == 0 or self._dash_latched or norm(self.velocity) < 12.0:
+            return
+        if self.elapsed_ticks % 20 != 0:
+            return
+        radius = CROUCH_FOOTSTEP_RADIUS if self.crouching else WALK_FOOTSTEP_RADIUS
+        self._broadcast_noise(radius=radius)
+        self.events.append(SimEvent("footstep", tuple(self.player), radius))
+
+    def _move_player(self, delta: np.ndarray) -> None:
+        """Crouching trades speed for silence."""
+
+        if self.crouching:
+            delta = delta * CROUCH_SPEED_SCALE
+        super()._move_player(delta)
+
+    def _broadcast_noise(self, *, radius: float) -> None:
+        """Footsteps carry a stealth-dependent radius.
+
+        The frozen simulation broadcasts one 185 px dash wave and nothing for
+        ordinary movement. Env-v3 makes movement itself audible so that quiet
+        and loud are genuinely different routes rather than the same route at
+        different speeds.
+        """
+
+        if self.crouching:
+            radius = min(radius, CROUCH_FOOTSTEP_RADIUS)
+        super()._broadcast_noise(radius=radius)
+
+    def _update_trace(self, dt: float) -> None:
+        """Loud is viable but expensive; quiet cools the network faster."""
+
+        super()._update_trace(dt)
+        if self._dash_latched:
+            self.trace = min(TRACE_MAX, self.trace + DASH_TRACE_COST_PER_SECOND * dt)
+        elif not self._was_seen:
+            relief = CROUCH_TRACE_DECAY_BONUS if self.crouching else 0.0
+            if self.in_cover:
+                relief += COVER_TRACE_DECAY_BONUS
+            if relief:
+                self.trace = max(self.trace_floor, self.trace - relief * dt)
+        self.max_trace = max(self.max_trace, self.trace)
+
+    @property
+    def in_cover(self) -> bool:
+        """True when the runner is against a blocking prop or wall.
+
+        Cover is read from the existing collision grid rather than authored
+        volumes, so every generated facility supports it without changing
+        generation or adding a second source of truth.
+        """
+
+        tx, ty = world_to_tile(self.player)
+        for offset_x, offset_y in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nx, ny = tx + offset_x, ty + offset_y
+            if not (0 <= ny < self.level.grid.shape[0] and 0 <= nx < self.level.grid.shape[1]):
+                return True
+            if (nx, ny) in self._blocked_tiles or self.level.grid[ny, nx] == Tile.WALL:
+                return True
+        return False
 
     def _activate_decoy(self, action: RunnerActionV3) -> None:
         if self.decoy_charges <= 0 or self.decoy_cooldown > 0.0:
@@ -234,9 +322,25 @@ class GhostlineSimulationV3(GhostlineSimulation):
                 guard.stimulus = source
 
     def _update_guards(self, dt: float) -> None:
+        """Apply queued security orders, then scale awareness for a crouched runner.
+
+        The sight model itself is untouched: awareness still accumulates from the
+        same cones and line of sight. A crouched runner simply fills them more
+        slowly, so patience buys real safety without ever becoming invisible.
+        """
+
         if self.external_security and self._pending_security_orders:
             self._apply_pending_orders()
+        if not self.crouching:
+            super()._update_guards(dt)
+            return
+        before = {guard.guard_id: guard.awareness for guard in self.level.guards}
         super()._update_guards(dt)
+        for guard in self.level.guards:
+            previous = before.get(guard.guard_id, 0.0)
+            gained = guard.awareness - previous
+            if gained > 0.0:
+                guard.awareness = min(1.0, previous + gained * CROUCH_AWARENESS_SCALE)
 
     def _apply_pending_orders(self) -> None:
         orders, self._pending_security_orders = self._pending_security_orders, {}
