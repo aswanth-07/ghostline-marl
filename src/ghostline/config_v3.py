@@ -44,3 +44,26 @@ CROUCH_TRACE_DECAY_BONUS = 4.4
 WALK_FOOTSTEP_RADIUS = 118.0
 DASH_TRACE_COST_PER_SECOND = 7.5
 COVER_TRACE_DECAY_BONUS = 2.6
+
+# Env-v3 stealth economy.
+#
+# Potential-based shaping (Ng, Harada & Russell 1999) is policy-invariant by
+# construction, which is exactly why it is the wrong tool for stealth here: we
+# deliberately want to move the optimum away from "race and eat the trace",
+# not merely guide search toward the same optimum. Exposure and detection are
+# therefore genuine objective terms, while route progress stays potential-based
+# because there we do want the original optimum preserved.
+#
+# A naive potential Phi = -k * trace/TRACE_MAX is also actively wrong: with a
+# constant negative potential, gamma*Phi - Phi = Phi*(gamma-1) is *positive*,
+# so sitting at maximum trace would pay a small bonus every step.
+#
+# Budgets for a successful ~370-decision tier-6 run:
+#   loud  : -3.7 exposure, -3.6 detection, no quiet bonus
+#   quiet : about -0.6 exposure, -0.2 detection, up to +2.8 quiet-data bonus
+# against a +32 positive budget (20 extraction + 12 data). The discount supplies
+# the speed pressure; these terms supply the stealth pressure.
+EXPOSURE_COST_PER_DECISION = 0.010
+DETECTION_COST = 0.06
+QUIET_DATA_BONUS = 0.35
+QUIET_TRACE_CEILING = 45.0

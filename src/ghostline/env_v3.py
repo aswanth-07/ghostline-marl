@@ -6,7 +6,21 @@ from typing import Any
 import numpy as np
 from gymnasium import spaces
 
-from ghostline.config import LOCAL_GRID_SIZE, MAX_ENTITIES, PLAYER_PERCEPTION_DISTANCE, POLICY_REPEAT, RAY_COUNT, TIERS
+from ghostline.config import (
+    LOCAL_GRID_SIZE,
+    MAX_ENTITIES,
+    PLAYER_PERCEPTION_DISTANCE,
+    POLICY_REPEAT,
+    RAY_COUNT,
+    TIERS,
+    TRACE_MAX,
+)
+from ghostline.config_v3 import (
+    DETECTION_COST,
+    EXPOSURE_COST_PER_DECISION,
+    QUIET_DATA_BONUS,
+    QUIET_TRACE_CEILING,
+)
 from ghostline.env import GhostlineEnv, potential_progress_reward
 from ghostline.generation import world_to_tile
 from ghostline.simulation import angle_vector, norm
@@ -112,9 +126,26 @@ class GhostlineEnvV3(GhostlineEnv):
         newly_explored = max(0, int(np.count_nonzero(self.sim.explored)) - before_explored)
         components["exploration"] = min(0.08, newly_explored * 0.008)
         components["trace"] = -0.006 * max(0.0, self.sim.trace - before_trace)
+        # Exposure is a continuous state cost, not shaping: carrying a hot trace
+        # is expensive every decision it persists. The old gain-only term made
+        # the entire stealth budget 4.7% of a successful run, so going loud for
+        # a whole mission cost less than 75 extra seconds of mission time.
+        components["exposure"] = -EXPOSURE_COST_PER_DECISION * (self.sim.trace / TRACE_MAX)
+        components["detection"] = -DETECTION_COST * max(0, self.sim.detections - before_detections)
+        # Securing data while the network is still cold is the reward for the
+        # quiet route, so stealth is actively worth something rather than merely
+        # less bad than being loud.
+        secured = max(0, self.sim.data - before_data)
+        if secured and self.sim.trace <= QUIET_TRACE_CEILING:
+            components["stealth"] = QUIET_DATA_BONUS * secured
         components["damage"] = -3.0 * max(0, before_integrity - self.sim.integrity)
         components["time"] = -0.002
-        components["idle"] = -0.006 if decoded.move == 0 and self.sim.active_hack_progress <= 0.0 else 0.0
+        # Holding still is now a legitimate tactic: crouched, in cover and
+        # unseen is waiting out a patrol, not stalling. The time cost still
+        # applies, so it cannot be farmed indefinitely.
+        holding_cover = bool(decoded.crouch) and self.sim.in_cover and not self.sim._was_seen
+        idling = decoded.move == 0 and self.sim.active_hack_progress <= 0.0
+        components["idle"] = -0.006 if idling and not holding_cover else 0.0
         components["invalid"] = -0.02 if invalid else 0.0
         if self.directive == ContractDirective.GHOST:
             components["directive"] -= 0.008 * max(0.0, self.sim.trace - before_trace)
@@ -155,7 +186,10 @@ class GhostlineEnvV3(GhostlineEnv):
 
     def _empty_rewards(self) -> dict[str, float]:
         result = super()._empty_rewards()
-        result["directive"] = 0.0
+        # Env-v3 adds the directive term plus the stealth economy. Keeping
+        # them declared here keeps exact component accounting intact.
+        for key in ("directive", "exposure", "detection", "stealth"):
+            result[key] = 0.0
         return result
 
     def _observation(self) -> dict[str, np.ndarray]:

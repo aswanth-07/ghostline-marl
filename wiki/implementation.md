@@ -39,6 +39,21 @@ state used by the MAPPO critic.
   is what makes a loud route expensive rather than strictly better.
 - Cover is read from the existing collision grid rather than authored volumes,
   so every generated facility supports it without a second source of truth.
+- Env-v3 carries a stealth reward economy. Exposure costs a fraction of a
+  decision proportional to live trace, each new detection costs a fixed amount,
+  and data secured while the network is still cold pays a bonus. These are
+  objective terms rather than potential-based shaping, deliberately: shaping is
+  policy-invariant by construction, and the intent here is to move the optimum
+  away from racing rather than to guide search toward the same one. A naive
+  potential `-k * trace/TRACE_MAX` is also actively wrong, because a constant
+  negative potential makes `gamma*Phi - Phi` positive and would pay a bonus for
+  sitting at maximum trace.
+- The measured defect this replaces: the old gain-only trace term gave the whole
+  stealth budget 4.7% of a successful run, so playing loud for an entire mission
+  cost less reward than spending 75 extra seconds. Route progress remains
+  potential-based, where preserving the optimum is the correct goal.
+- Holding still while crouched, in cover and unseen is no longer penalised as
+  idling. The time cost still applies, so cover cannot be farmed indefinitely.
 
 - Adaptive play is optional and never replaces the classic campaign or the published runner benchmark.
 - Acoustic decoys have limited charges, a two-second lifetime, deterministic placement, and perception-gated noise pulses.

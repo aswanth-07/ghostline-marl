@@ -749,3 +749,98 @@ def test_crouch_cannot_be_combined_with_dash_in_the_action_mask() -> None:
     # Even if an illegal pair is forced through, the dash wins and stays loud.
     sim.advance(RunnerActionV3(move=3, dash=True, crouch=True), ticks=6)
     assert sim.crouching is False
+
+
+def test_stealth_economy_makes_a_loud_mission_materially_expensive() -> None:
+    """Exposure and detection must carry a real budget, not a rounding error.
+
+    The previous gain-only trace term gave the entire stealth budget about 4.7%
+    of a successful run, so playing loud for a whole mission cost less than
+    spending 75 extra seconds. These are objective terms rather than
+    potential-based shaping because the intent is to move the optimum, not to
+    guide search toward the same one.
+    """
+
+    from ghostline.config import TRACE_MAX
+    from ghostline.config_v3 import (
+        DETECTION_COST,
+        EXPOSURE_COST_PER_DECISION,
+        QUIET_DATA_BONUS,
+        QUIET_TRACE_CEILING,
+    )
+
+    decisions = 370
+    loud_exposure = EXPOSURE_COST_PER_DECISION * decisions
+    quiet_exposure = EXPOSURE_COST_PER_DECISION * decisions * (QUIET_TRACE_CEILING / TRACE_MAX) * 0.3
+    positive_budget = 20.0 + 12.0
+
+    # A fully hot mission must cost a meaningful slice of a successful run.
+    assert loud_exposure / positive_budget > 0.08
+    assert loud_exposure > quiet_exposure * 3
+
+    # Being seen repeatedly has to hurt on its own, independent of trace level.
+    assert DETECTION_COST * 60 > 3.0
+    # ...but never so much that a successful loud extraction becomes pointless.
+    assert loud_exposure + DETECTION_COST * 60 < positive_budget * 0.5
+    assert QUIET_DATA_BONUS > 0.0
+
+
+def test_exposure_scales_with_trace_and_quiet_data_earns_a_bonus() -> None:
+    """The live terms track simulation state exactly."""
+
+    from ghostline.config import TRACE_MAX
+    from ghostline.config_v3 import EXPOSURE_COST_PER_DECISION, QUIET_TRACE_CEILING
+
+    env = GhostlineEnvV3(seed=3_000_021, tier=6, directive="standard")
+    env.reset(seed=3_000_021)
+    env.sim.trace = TRACE_MAX
+    env.step(RunnerActionV3(move=0).encode())
+    hot = env.reward_components["exposure"]
+    assert hot == pytest.approx(-EXPOSURE_COST_PER_DECISION, rel=0.02)
+
+    env.reset(seed=3_000_021)
+    env.sim.trace = 0.0
+    env.step(RunnerActionV3(move=0).encode())
+    cold = env.reward_components["exposure"]
+    assert cold > hot, "a cold network must cost less than a hot one"
+    assert QUIET_TRACE_CEILING < TRACE_MAX
+    env.close()
+
+
+def test_holding_cover_while_crouched_is_not_punished_as_idling() -> None:
+    """Waiting out a patrol is a tactic, not stalling."""
+
+    from ghostline.generation import tile_center
+    from ghostline.types import Tile
+
+    def cover_position(sim):
+        """Find a walkable tile that actually sits against geometry."""
+        grid = sim.level.grid
+        for ty in range(1, grid.shape[0] - 1):
+            for tx in range(1, grid.shape[1] - 1):
+                if grid[ty, tx] == Tile.WALL or (tx, ty) in sim._blocked_tiles:
+                    continue
+                for ox, oy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    if grid[ty + oy, tx + ox] == Tile.WALL:
+                        return tile_center((tx, ty))
+        raise AssertionError("no cover tile in this facility")
+
+    env = GhostlineEnvV3(seed=3_000_022, tier=6, directive="standard")
+    env.reset(seed=3_000_022)
+    spot = cover_position(env.sim)
+    env.sim.player[:] = spot
+    assert env.sim.in_cover
+
+    env.step(RunnerActionV3(move=0, crouch=True).encode())
+    crouched_idle = env.reward_components["idle"]
+
+    env.reset(seed=3_000_022)
+    env.sim.player[:] = spot
+    env.step(RunnerActionV3(move=0, crouch=False).encode())
+    standing_idle = env.reward_components["idle"]
+
+    assert crouched_idle == 0.0
+    assert standing_idle < 0.0
+    # The time cost still applies, so cover cannot be farmed indefinitely.
+    assert env.reward_components["time"] < 0.0
+    env.close()
