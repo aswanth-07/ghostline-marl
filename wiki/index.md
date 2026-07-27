@@ -24,4 +24,5 @@ Ghostline is the active RL experiment: a procedural stealth-infiltration game wi
 - `setup.md`: install, play, verify, train, record, and package.
 - `assets.md`: visual/audio workflow and disclosure.
 - `web-deployment.md`: static Pygbag/ONNX Runtime Web architecture, build, Chrome QA, and Vercel release.
+- `improvement-proposals.md`: non-binding suggestions for the next agent/training pass. Proposals only; `AGENTS.md` and the user remain the instruction sources.
 - `log.md`: newest-first project memory and verified results.
