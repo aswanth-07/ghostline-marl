@@ -701,7 +701,7 @@ def test_visible_renderer_redraws_all_text_at_native_output_resolution(monkeypat
     renderer.close()
 
 
-def test_live_agent_card_nests_below_the_minimap_instead_of_covering_the_route(monkeypatch) -> None:
+def test_live_agent_card_sits_in_the_bottom_right_chrome_cluster(monkeypatch) -> None:
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
     monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
 
@@ -722,8 +722,12 @@ def test_live_agent_card_nests_below_the_minimap_instead_of_covering_the_route(m
     changed = np.any(live != baseline, axis=2)
     xs, ys = np.where(changed)
 
-    assert xs.min() >= 529 and xs.max() <= 628
-    assert ys.min() >= 69 and ys.max() <= 102
+    from ghostline.presentation import LOGICAL_SIZE
+
+    from ghostline.presentation import CHROME_CLUSTER_X, CHROME_CLUSTER_Y
+
+    assert xs.min() >= CHROME_CLUSTER_X and xs.max() <= CHROME_CLUSTER_X + 99
+    assert ys.min() >= CHROME_CLUSTER_Y + 60 and ys.max() <= LOGICAL_SIZE[1] - 4
     assert int(changed.sum()) <= 100 * 34
     assert changed.mean() < 0.02
     renderer.close()
@@ -963,7 +967,7 @@ def test_hud_status_plate_backs_every_status_glyph_at_each_scale(monkeypatch) ->
     monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
     import pygame
 
-    from ghostline.presentation import GhostlineRenderer
+    from ghostline.presentation import HUD_BAND_HEIGHT, GhostlineRenderer
 
     sim = GhostlineSimulation(seed=2_000_004, tier=6)
     sim.trace = 71.0
@@ -991,8 +995,9 @@ def test_hud_status_plate_backs_every_status_glyph_at_each_scale(monkeypatch) ->
             assert plate.collidepoint(x, y), f"{text!r} starts outside the plate at scale {scale}"
             assert x + width <= plate.right, f"{text!r} overflows the plate at scale {scale}"
             assert y + height <= plate.bottom, f"{text!r} drops below the plate at scale {scale}"
-        assert plate.right < 529, "the status plate must not reach the minimap"
-        assert any(text.startswith("ACQUIRE") for text, *_ in cluster)
+        assert plate.top == 0 and plate.height >= HUD_BAND_HEIGHT
+        assert plate.bottom == renderer.world_viewport().top, "the band must abut the viewport"
+        assert any(text == "ACQUIRE" for text, *_ in cluster)
         assert any(text.startswith("TRACE 71") for text, *_ in cluster)
 
         def text_rect(call):
@@ -1005,6 +1010,82 @@ def test_hud_status_plate_backs_every_status_glyph_at_each_scale(monkeypatch) ->
         alert = next(call for call in cluster if call[0] == "ALERT")
         assert not text_rect(objective).colliderect(text_rect(integrity))
         assert not text_rect(utility).colliderect(text_rect(alert))
+    renderer.close()
+
+
+def test_status_band_never_overlaps_the_world_viewport(monkeypatch) -> None:
+    """The world and the persistent chrome occupy disjoint regions.
+
+    Reviewing a policy run was the motivating case: the old HUD floated over the
+    playfield, so the runner and operatives could pass behind it.
+    """
+
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+    import pygame
+
+    from ghostline.presentation import LOGICAL_SIZE, GhostlineRenderer
+
+    sim = GhostlineSimulation(seed=2_000_004, tier=6)
+    renderer = GhostlineRenderer(sim, visible=False)
+    for scale in (1.0, 1.25, 1.5):
+        renderer.apply_accessibility({"hud_scale": scale})
+        viewport = renderer.world_viewport()
+        assert viewport.top > 0 and viewport.bottom == LOGICAL_SIZE[1]
+        assert not viewport.colliderect(pygame.Rect(0, 0, LOGICAL_SIZE[0], viewport.top))
+
+        # The runner is centred in the viewport, never under the band.
+        renderer.camera = sim.player.astype(np.float32).copy()
+        renderer.shake = 0.0
+        runner_x, runner_y = renderer._world(sim.player)
+        assert viewport.collidepoint(runner_x, runner_y)
+        assert runner_y >= viewport.top + 40, "the runner must clear the band by a wide margin"
+
+        # No world layer may put a pixel inside the band: paint a sentinel,
+        # render only the world with its clip applied, and require it intact.
+        sentinel = (200, 0, 200)
+        renderer.logical.fill(sentinel)
+        renderer.logical.set_clip(viewport)
+        renderer._ensure_level_cache()
+        renderer._draw_floor()
+        renderer._draw_security_cones()
+        renderer._draw_walls()
+        renderer._draw_props()
+        renderer._draw_objectives()
+        renderer._draw_security()
+        renderer._draw_player()
+        renderer._draw_lighting()
+        renderer.logical.set_clip(None)
+        band_pixels = pygame.surfarray.array3d(renderer.logical)[:, 0 : viewport.top]
+        assert np.all(band_pixels == np.asarray(sentinel)), "world art bled into the reserved band"
+    renderer.close()
+
+
+def test_corner_cards_fade_when_something_passes_beneath_them(monkeypatch) -> None:
+    """Floating cards must not hide the runner during visual inspection."""
+
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
+    import pygame
+
+    from ghostline.presentation import CHROME_CLEAR_ALPHA, CHROME_OCCLUDED_ALPHA, GhostlineRenderer
+
+    sim = GhostlineSimulation(seed=2_000_004, tier=6)
+    renderer = GhostlineRenderer(sim, visible=False)
+    renderer.shake = 0.0
+    card = pygame.Rect(529, 322, 100, 34)
+
+    # Park the camera so the runner renders far from the card.
+    renderer.camera = sim.player.astype(np.float32).copy()
+    assert renderer._chrome_alpha(pygame.Rect(4, 300, 40, 20)) == CHROME_CLEAR_ALPHA
+
+    # Now place the runner underneath it.
+    centre = renderer._world_center()
+    renderer.camera = sim.player + np.asarray(
+        (centre[0] - card.centerx, centre[1] - card.centery), dtype=np.float32
+    )
+    assert card.collidepoint(renderer._world(sim.player))
+    assert renderer._chrome_alpha(card) == CHROME_OCCLUDED_ALPHA
     renderer.close()
 
 
@@ -1080,7 +1161,7 @@ def test_credits_panel_has_a_specific_title(monkeypatch) -> None:
     renderer.close()
 
 
-def test_adaptive_hud_stacks_alert_below_decoy_utility_without_overlap(monkeypatch) -> None:
+def test_adaptive_hud_keeps_decoy_utility_and_alert_in_separate_columns(monkeypatch) -> None:
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
     monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
     import pygame
@@ -1112,8 +1193,7 @@ def test_adaptive_hud_stacks_alert_below_decoy_utility_without_overlap(monkeypat
     assert not text_rect(utility).colliderect(text_rect(alert))
     assert renderer._hud_panel_rect.contains(text_rect(utility))
     assert renderer._hud_panel_rect.contains(text_rect(alert))
-    assert renderer._hud_panel_rect.right < 529
-    assert renderer._hud_panel_rect.bottom <= 70
+    assert renderer._hud_panel_rect.bottom == renderer.world_viewport().top
     renderer.close()
 
 
@@ -1215,7 +1295,7 @@ def test_minimap_marks_the_single_routed_objective(monkeypatch) -> None:
     monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")
     import pygame
 
-    from ghostline.presentation import AMBER, BG, GhostlineRenderer
+    from ghostline.presentation import AMBER, BG, LOGICAL_SIZE, GhostlineRenderer
 
     sim = GhostlineSimulation(seed=2_000_004, tier=6)
     renderer = GhostlineRenderer(sim, visible=False)
@@ -1226,7 +1306,9 @@ def test_minimap_marks_the_single_routed_objective(monkeypatch) -> None:
     renderer.logical.fill(BG)
     renderer._draw_minimap()
     pixels = pygame.surfarray.array3d(renderer.logical)
-    minimap = pixels[529:629, 9:65]
+    rect = renderer._minimap_rect
+    assert rect.bottom <= LOGICAL_SIZE[1] and rect.top > renderer.world_viewport().top
+    minimap = pixels[rect.left : rect.right, rect.top : rect.bottom]
     amber_cells = int(np.count_nonzero(np.all(minimap == np.asarray(AMBER), axis=-1)))
     other_cells = int(np.count_nonzero(np.all(minimap == np.asarray((150, 122, 74)), axis=-1)))
     # The routed terminal is a bright ringed marker; the rest stay dim.

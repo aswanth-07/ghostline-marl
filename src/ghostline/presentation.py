@@ -104,6 +104,19 @@ COLOR_SAFE_SAFE = (82, 184, 255)
 # which is hashed into the frozen Env-v2 environment fingerprint. Each value
 # stays below the Color-Safe red/green mask thresholds so room fills read the
 # same in every colour mode, and corridors stay darkest so rooms read as rooms.
+# Gameplay chrome geometry.  The status strip owns a reserved band at the top of
+# the logical canvas and the world is rendered and clipped strictly below it, so
+# no persistent readout can ever cover the runner, an operative, or a prop. The
+# camera centres the runner inside the viewport rather than the whole canvas.
+HUD_BAND_HEIGHT = 34
+# Corner cards float inside the viewport, so they dim automatically whenever
+# something worth watching passes beneath them.
+CHROME_CLEAR_ALPHA = 232
+CHROME_OCCLUDED_ALPHA = 48
+# Bottom-right cluster: 100x56 map stacked above the 100x34 agent card.
+CHROME_CLUSTER_X = 529
+CHROME_CLUSTER_Y = LOGICAL_SIZE[1] - 56 - 34 - 8
+
 # Right-hand menu panel geometry.  The panel starts at y=106 and must clear the
 # footer, so 218 px is its hard safe-area height and 14 px its line pitch.
 PANEL_MAX_HEIGHT = 218
@@ -366,7 +379,9 @@ class GhostlineRenderer:
         self._directional_gait_cache: dict[tuple[str, int, int], pygame.Surface] = {}
         self._diagonal_locomotion_cache: dict[tuple[str, int, int, bool], pygame.Surface] = {}
         self._last_room_role = ""
-        self._hud_panel_rect = pygame.Rect(10, 6, 276, 60)
+        self._touch_layout = False
+        self._hud_panel_rect = pygame.Rect(0, 0, LOGICAL_SIZE[0], HUD_BAND_HEIGHT)
+        self._minimap_rect = pygame.Rect(CHROME_CLUSTER_X, CHROME_CLUSTER_Y, 100, 56)
         self.font_small = pygame.font.SysFont("consolas", 10, bold=True)
         self.font = pygame.font.SysFont("consolas", 13, bold=True)
         self.font_large = pygame.font.SysFont("consolas", 26, bold=True)
@@ -638,8 +653,12 @@ class GhostlineRenderer:
         self._ensure_level_cache()
         self._update_security_memory()
         self._capture_output_size = output_size if return_array else None
+        self._touch_layout = bool(compact_hud or touch_controls is not None)
         self._native_text_commands.clear()
         self.logical.fill(BG)
+        # Every world layer is clipped to the viewport, so nothing can bleed
+        # under the reserved status band and no band pixel belongs to the world.
+        self.logical.set_clip(self.world_viewport())
         self._draw_floor()
         self._draw_security_cones()
         self._draw_walls()
@@ -653,7 +672,8 @@ class GhostlineRenderer:
         self._draw_screen_effects()
         self._draw_alert_indicators()
         self._draw_objective_indicator()
-        touch_layout = bool(compact_hud or touch_controls is not None)
+        self.logical.set_clip(None)
+        touch_layout = self._touch_layout
         self._draw_hud(lab_stats, touch_layout=touch_layout)
         self._draw_detection_status()
         self._draw_captions(touch_layout=touch_layout)
@@ -837,7 +857,8 @@ class GhostlineRenderer:
         look = np.zeros(2, dtype=np.float32) if self.reduced_motion else self.sim.heading * 46.0 + self.sim.velocity * 0.14
         target = self.sim.player + look
         self.camera += (target - self.camera) * min(1.0, dt * 5.5)
-        half_w, half_h = LOGICAL_SIZE[0] / 2, LOGICAL_SIZE[1] / 2
+        viewport = self.world_viewport()
+        half_w, half_h = viewport.width / 2, viewport.height / 2
         self.camera[0] = np.clip(self.camera[0], half_w, max(half_w, self.sim.level.world_width - half_w))
         self.camera[1] = np.clip(self.camera[1], half_h, max(half_h, self.sim.level.world_height - half_h))
         self.shake = max(0.0, self.shake - dt * 12.0)
@@ -846,15 +867,65 @@ class GhostlineRenderer:
         shake = np.zeros(2)
         if self.screen_shake_enabled and not self.reduced_motion and self.shake > 0.0:
             shake = np.asarray((math.sin(self._time * 71), math.cos(self._time * 59))) * self.shake
-        point = np.asarray(position) - self.camera + np.asarray((LOGICAL_SIZE[0] / 2, LOGICAL_SIZE[1] / 2)) + shake
+        # The runner sits at the centre of the world viewport, not the centre of
+        # the canvas, so the reserved status band never has the runner behind it.
+        point = np.asarray(position) - self.camera + np.asarray(self._world_center()) + shake
         return int(round(point[0])), int(round(point[1]))
 
     def _visible_tile_bounds(self) -> tuple[int, int, int, int]:
-        left = max(0, int((self.camera[0] - LOGICAL_SIZE[0] / 2) // TILE_SIZE) - 1)
-        right = min(self.sim.level.grid.shape[1], int((self.camera[0] + LOGICAL_SIZE[0] / 2) // TILE_SIZE) + 2)
-        top = max(0, int((self.camera[1] - LOGICAL_SIZE[1] / 2) // TILE_SIZE) - 1)
-        bottom = min(self.sim.level.grid.shape[0], int((self.camera[1] + LOGICAL_SIZE[1] / 2) // TILE_SIZE) + 2)
+        viewport = self.world_viewport()
+        half_w, half_h = viewport.width / 2, viewport.height / 2
+        left = max(0, int((self.camera[0] - half_w) // TILE_SIZE) - 1)
+        right = min(self.sim.level.grid.shape[1], int((self.camera[0] + half_w) // TILE_SIZE) + 2)
+        top = max(0, int((self.camera[1] - half_h) // TILE_SIZE) - 1)
+        bottom = min(self.sim.level.grid.shape[0], int((self.camera[1] + half_h) // TILE_SIZE) + 2)
         return left, right, top, bottom
+
+    def _band_metrics(self) -> tuple[int, int, int]:
+        """Return ``(label_y, value_y, band_height)`` for the current HUD scale."""
+
+        hud_small, hud_font = self._hud_fonts[self.hud_scale]
+        label_y = 4
+        value_y = label_y + hud_small.get_height() - 1
+        height = max(HUD_BAND_HEIGHT, value_y + max(hud_font.get_height(), 11) + 4)
+        return label_y, value_y, height
+
+    def world_viewport(self) -> pygame.Rect:
+        """The world's exclusive region.  Chrome never renders inside it.
+
+        The touch layout keeps the full-bleed canvas it was device-verified
+        with: its single decision band is deliberately an overlay so a phone
+        does not lose playfield height to reserved chrome.
+        """
+
+        if self._touch_layout:
+            return pygame.Rect(0, 0, *LOGICAL_SIZE)
+        top = self._band_metrics()[2]
+        return pygame.Rect(0, top, LOGICAL_SIZE[0], LOGICAL_SIZE[1] - top)
+
+    def _world_center(self) -> tuple[float, float]:
+        viewport = self.world_viewport()
+        return viewport.centerx, viewport.centery
+
+    def _chrome_alpha(self, rect: pygame.Rect) -> int:
+        """Dim a floating card whenever something worth watching is beneath it.
+
+        Visual inspection of a policy run was the motivating case: a corner card
+        that stays opaque hides exactly the moment the reviewer is watching for.
+        """
+
+        # Only moving actors trigger the fade.  Terminals and the extraction
+        # relay are static and already drawn on the map itself, so including
+        # them left a card permanently dimmed whenever it happened to sit over
+        # the extraction room.
+        probe = rect.inflate(10, 10)
+        watched: list[np.ndarray] = [self.sim.player]
+        watched.extend(guard.position for guard in self.sim.level.guards)
+        watched.extend(drone.position for drone in getattr(self.sim, "drones", ()))
+        for position in watched:
+            if probe.collidepoint(self._world(position)):
+                return CHROME_OCCLUDED_ALPHA
+        return CHROME_CLEAR_ALPHA
 
     def _ensure_level_cache(self) -> None:
         identity = (self.sim.seed, self.sim.tier, id(self.sim.level))
@@ -1826,10 +1897,11 @@ class GhostlineRenderer:
                 break
             delta = position - self.sim.player
             direction = delta / max(1e-6, norm(delta))
-            center = np.asarray((LOGICAL_SIZE[0] / 2, LOGICAL_SIZE[1] / 2))
+            viewport = self.world_viewport()
+            center = np.asarray(viewport.center, dtype=np.float64)
             edge = center + direction * min(
                 268.0 / max(abs(float(direction[0])), 0.001),
-                132.0 / max(abs(float(direction[1])), 0.001),
+                (viewport.height / 2 - 31.0) / max(abs(float(direction[1])), 0.001),
             )
             if any(float(np.linalg.norm(edge - occupied)) < 28.0 for occupied in occupied_edges):
                 continue
@@ -1847,10 +1919,7 @@ class GhostlineRenderer:
                 self._draw_threat_glyph(self.logical, kind, glyph_center, color)
             label_width = self.font_small.size(label)[0]
             label_x = int(np.clip(tip[0] - label_width / 2, 4, LOGICAL_SIZE[0] - label_width - 4))
-            label_y = int(np.clip(tip[1] + (9 if direction[1] <= 0.7 else -18), 68, 340))
-            detection_left = (LOGICAL_SIZE[0] - 210) // 2
-            if label_y < 91 and label_x + label_width >= detection_left and label_x <= detection_left + 210:
-                label_y = 96
+            label_y = int(np.clip(tip[1] + (9 if direction[1] <= 0.7 else -18), viewport.top + 30, 340))
             self._text(label, label_x, label_y, self.font_small, color)
 
     def _draw_detection_status(self) -> None:
@@ -1874,7 +1943,7 @@ class GhostlineRenderer:
             kind = "guard"
         color = GREEN if not records and not chasing and not searching else self._vision_color(1.0 if confirmed else pressure)
         width, height = 210, 18
-        x, y = (LOGICAL_SIZE[0] - width) // 2, 70
+        x, y = (LOGICAL_SIZE[0] - width) // 2, self.world_viewport().top + 6
         pygame.draw.rect(self.logical, (3, 8, 12), (x, y, width, height), border_radius=3)
         pygame.draw.rect(self.logical, color, (x, y, width, height), 1, border_radius=3)
         self._draw_threat_glyph(self.logical, kind, (x + 11, y + 9), color, filled=confirmed)
@@ -1996,7 +2065,7 @@ class GhostlineRenderer:
         self.logical.blit(effect_layer, (0, 0))
         if self.banner_life > 0.0:
             width = self.font.size(self.banner_text)[0] + 36
-            y = 88
+            y = self.world_viewport().top + 30
             pygame.draw.rect(self.logical, (4, 10, 14), (320 - width // 2, y, width, 28), border_radius=3)
             pygame.draw.rect(self.logical, CYAN if not self.sim.lockdown else RED, (320 - width // 2, y, width, 28), 1, border_radius=3)
             self._text(self.banner_text, 320 - width // 2 + 18, y + 7, self.font, INK)
@@ -2004,9 +2073,10 @@ class GhostlineRenderer:
             width = self.font_small.size(self.room_label)[0] + 20
             # Detection owns y=70..88. The old room tag sat directly beneath
             # that rectangle and its delayed native glyphs visibly collided.
-            pygame.draw.rect(self.logical, (4, 10, 14), (320 - width // 2, 96, width, 18), border_radius=2)
-            pygame.draw.rect(self.logical, MUTED, (320 - width // 2, 96, width, 18), 1, border_radius=2)
-            self._text(self.room_label, 320 - width // 2 + 10, 100, self.font_small, MUTED)
+            room_y = self.world_viewport().top + 30
+            pygame.draw.rect(self.logical, (4, 10, 14), (320 - width // 2, room_y, width, 18), border_radius=2)
+            pygame.draw.rect(self.logical, MUTED, (320 - width // 2, room_y, width, 18), 1, border_radius=2)
+            self._text(self.room_label, 320 - width // 2 + 10, room_y + 4, self.font_small, MUTED)
 
     def _draw_captions(self, *, touch_layout: bool = False) -> None:
         if not self.sound_captions_enabled or not self.captions:
@@ -2064,126 +2134,144 @@ class GhostlineRenderer:
         if touch_layout:
             self._draw_touch_hud(hud_small, hud_font)
             return
-        expanded = self.hud_scale > 1.0
-        phase = "EXTRACT" if self.sim.quota_met else "ACQUIRE"
-        objective_text = f"{phase} {self.sim.data}/{self.sim.level.quota}"
-        objective_right = 18 + hud_font.size(objective_text)[0]
-        int_x = max(128 if expanded else 106, objective_right + 10)
-        trace_x = 228 if expanded else 172
-        trace_width = 120 if expanded else 102
-        clock_x = 379 if expanded else 295
-        utility = f"PULSE {self.sim.pulse_charges}"
-        if hasattr(self.sim, "decoy_charges"):
-            utility += f"  DECOY {self.sim.decoy_charges}"
-        alert_text = ("CLEAR", "WATCH", "ALERT", "HUNT", "LOCKDOWN")[self.sim.alert_tier]
-        if hasattr(self.sim, "decoy_charges"):
-            alert_x = clock_x + 3
-            alert_y = 42 + hud_small.get_height() + 2
-        else:
-            alert_x = clock_x + 3 + hud_small.size(utility)[0] + 10
-            alert_y = 42
-        # Measure the plate from its own content.  The earlier fixed 276/350
-        # widths ended before the clock, so the mission timer, pulse charges,
-        # and alert tier were drawn straight onto world art at every HUD scale,
-        # and each new scale needed another hand-tuned coordinate pair.
-        content_right = max(
-            clock_x + 80,  # timer-warning frame
-            clock_x + 3 + hud_small.size(utility)[0],
-            alert_x + self.font_small.size(alert_text)[0],
-        )
-        panel_left, panel_top = 10, 6
-        panel_height = max(60, alert_y + self.font_small.get_height() + 1 - panel_top)
-        panel_width = content_right + 6 - panel_left
-        # Published so the regression can assert the invariant directly: every
-        # status-cluster glyph stays inside its own backing plate.
-        self._hud_panel_rect = pygame.Rect(panel_left, panel_top, panel_width, panel_height)
-        panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
-        panel.fill((5, 10, 14, 236))
-        self.logical.blit(panel, (panel_left, panel_top))
-        pygame.draw.rect(
-            self.logical,
-            (46, 91, 94),
-            (panel_left, panel_top, panel_width, panel_height),
-            1,
-            border_radius=4,
-        )
-        pygame.draw.rect(self.logical, CYAN, (panel_left, panel_top, 3, panel_height), border_radius=2)
-        self._text(f"T{self.sim.tier}  {TIERS[self.sim.tier].name.upper()}", 18, 14, hud_small, CYAN)
-        # The phase word is the objective state the player actually acts on;
-        # a bare ``DATA`` label repeated the quota fraction beside it. This also
-        # gives the desktop and touch bands one shared objective vocabulary.
-        self._text(
-            objective_text,
-            18,
-            30 if expanded else 29,
-            hud_font,
-            GREEN if self.sim.quota_met else AMBER,
-        )
-        self._pips(int_x, 38 if expanded else 33, self.sim.integrity, 3, GREEN, label="INTEGRITY", font=hud_small)
-        # Trace escalates at 25/50/75, so the exact value is a decision input
-        # rather than decoration; the bar alone cannot express distance to the
-        # next step.
-        self._bar(
-            trace_x,
-            22,
-            trace_width,
-            7,
-            self.sim.trace / TRACE_MAX,
-            RED if self.sim.trace > 70 else AMBER,
-            f"TRACE {self.sim.trace:.0f}",
-            font=hud_small,
-        )
-        for threshold in (25.0, 50.0, 75.0):
-            tick_x = trace_x + int(round(trace_width * threshold / TRACE_MAX))
-            pygame.draw.line(self.logical, (235, 237, 221), (tick_x, 21), (tick_x, 30), 1)
-        if self.sim.level.response_drones and self.sim.level.drone_trace_threshold <= TRACE_MAX:
-            drone_x = trace_x + int(round(trace_width * self.sim.level.drone_trace_threshold / TRACE_MAX))
-            pygame.draw.polygon(self.logical, VIOLET, ((drone_x, 19), (drone_x - 3, 15), (drone_x + 3, 15)))
-        self._bar(trace_x, 48 if expanded else 42, trace_width, 5, self.sim.dash_energy / 100.0, CYAN, "DASH", font=hud_small)
-        seconds = int(math.ceil(self.sim.remaining_seconds))
-        clock_color = RED if seconds < 25 else INK
-        if self.timer_warnings and seconds < 30:
-            pygame.draw.polygon(self.logical, clock_color, ((clock_x - 11, 18), (clock_x - 3, 18), (clock_x - 7, 10)), 2)
-            pygame.draw.rect(self.logical, clock_color, (clock_x - 12, 8, 92, 52), 1, border_radius=3)
-        self._text(f"{seconds // 60:02d}:{seconds % 60:02d}", clock_x, 15, self.font_large, clock_color)
-        self._text(utility, clock_x + 3, 42, hud_small, CYAN if self.sim.pulse_charges or getattr(self.sim, "decoy_charges", 0) else MUTED)
-        self._text(alert_text, alert_x, alert_y, self.font_small, RED if self.sim.alert_tier >= 2 else MUTED)
-
-        # Link progress belongs at the terminal, not 200 px away at the bottom
-        # edge.  ``_draw_objectives`` already draws a proportional progress arc
-        # and a link countdown on the ring the player is standing inside, so the
-        # second bottom-centre bar only competed with the context-hint lane.
+        self._draw_status_band(hud_small, hud_font)
+        self._draw_minimap()
+        self._draw_agent_card(lab_stats)
         if self.tutorial_hints and self.sim.context_hint and self.sim.active_hack_progress <= 0.0:
             hint = self.sim.context_hint
             width = self.font_small.size(hint)[0] + 16
-            pygame.draw.rect(self.logical, (6, 12, 17), (320 - width // 2, 326, width, 18), border_radius=3)
-            pygame.draw.rect(self.logical, (38, 78, 82), (320 - width // 2, 326, width, 18), 1, border_radius=3)
-            self._text(hint, 320 - width // 2 + 8, 331, self.font_small, CYAN if self.sim.quota_met else (190, 208, 207))
-        self._draw_minimap()
-        if lab_stats:
-            # Agent telemetry belongs with the minimap, not over the route.
-            # Full recurrent-state details remain available in the web shell
-            # and debrief; gameplay gets one compact status tile.
-            panel_x, panel_y, panel_width, panel_height = 529, 69, 100, 34
-            panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
-            panel.fill((5, 5, 5, 224))
-            self.logical.blit(panel, (panel_x, panel_y))
-            pygame.draw.rect(self.logical, VIOLET, (panel_x, panel_y, 3, panel_height))
-            pygame.draw.rect(self.logical, (61, 68, 78), (panel_x, panel_y, panel_width, panel_height), 1, border_radius=2)
-            policy_name = str(lab_stats.get("policy", "SCRIPTED BASELINE"))
-            if "ONNX" in policy_name:
-                policy_name = "ONNX"
-            elif "GRU" in policy_name:
-                policy_name = "GRU"
-            elif "SCRIPTED" in policy_name:
-                policy_name = "SCRIPTED"
-            else:
-                policy_name = policy_name.replace("RECURRENT ", "").replace(" POLICY", "")[:8]
-            self._text(f"AGENT  {policy_name}", panel_x + 8, panel_y + 5, self.font_small, VIOLET)
-            action_text = str(lab_stats.get("action", "HOLD"))
-            latency = float(lab_stats.get("latency_ms", 0.0))
-            action_text = action_text.replace(" +", "+")[:8]
-            self._text(f"{action_text:<8} {latency:3.1f}MS", panel_x + 8, panel_y + 19, self.font_small, CYAN)
+            rect = pygame.Rect(320 - width // 2, 336, width, 18)
+            plate = pygame.Surface(rect.size, pygame.SRCALPHA)
+            plate.fill((6, 12, 17, self._chrome_alpha(rect)))
+            self.logical.blit(plate, rect.topleft)
+            pygame.draw.rect(self.logical, (38, 78, 82), rect, 1, border_radius=3)
+            self._text(hint, rect.x + 8, rect.y + 5, self.font_small, CYAN if self.sim.quota_met else (190, 208, 207))
+
+    def _draw_status_band(self, hud_small: pygame.font.Font, hud_font: pygame.font.Font) -> None:
+        """Render the reserved single-row status band above the world viewport.
+
+        The old layout stacked three rows into a plate that floated over the
+        playfield and, with the minimap, covered roughly a sixth of the visible
+        world.  Everything now lives in dedicated chrome that the world is
+        clipped out of, so no readout can hide the runner or an operative.
+        """
+
+        label_y, value_y, band_height = self._band_metrics()
+        band = pygame.Rect(0, 0, LOGICAL_SIZE[0], band_height)
+        self._hud_panel_rect = band
+        pygame.draw.rect(self.logical, (5, 10, 14), band)
+        pygame.draw.line(self.logical, (46, 91, 94), (0, band_height - 1), (LOGICAL_SIZE[0], band_height - 1))
+        cursor = 8
+
+        def divider(x: int) -> None:
+            pygame.draw.line(self.logical, (28, 48, 56), (x, 6), (x, band_height - 7))
+
+        self._text(f"T{self.sim.tier}", cursor, label_y, self.font_small, MUTED)
+        self._text(TIERS[self.sim.tier].name.upper(), cursor, value_y, hud_small, CYAN)
+        cursor += max(hud_small.size(TIERS[self.sim.tier].name.upper())[0], 20) + 12
+        divider(cursor - 6)
+
+        phase = "EXTRACT" if self.sim.quota_met else "ACQUIRE"
+        quota_text = f"{self.sim.data}/{self.sim.level.quota}"
+        self._text(phase, cursor, label_y, self.font_small, MUTED)
+        self._text(quota_text, cursor, value_y, hud_font, GREEN if self.sim.quota_met else AMBER)
+        cursor += max(self.font_small.size(phase)[0], hud_font.size(quota_text)[0]) + 12
+        divider(cursor - 6)
+
+        self._text("INTEGRITY", cursor, label_y, self.font_small, MUTED)
+        for index in range(3):
+            colour = GREEN if index < self.sim.integrity else (32, 45, 49)
+            pygame.draw.rect(self.logical, colour, (cursor + index * 13, value_y + 2, 10, 7), border_radius=2)
+        cursor += max(self.font_small.size("INTEGRITY")[0], 3 * 13) + 12
+        divider(cursor - 6)
+
+        trace_width = 96
+        self._text(f"TRACE {self.sim.trace:.0f}", cursor, label_y, self.font_small, MUTED)
+        pygame.draw.rect(self.logical, (19, 29, 34), (cursor, value_y + 2, trace_width, 7))
+        pygame.draw.rect(
+            self.logical,
+            RED if self.sim.trace > 70 else AMBER,
+            (cursor, value_y + 2, int(trace_width * np.clip(self.sim.trace / TRACE_MAX, 0.0, 1.0)), 7),
+        )
+        for threshold in (25.0, 50.0, 75.0):
+            tick_x = cursor + int(round(trace_width * threshold / TRACE_MAX))
+            pygame.draw.line(self.logical, (235, 237, 221), (tick_x, value_y + 1), (tick_x, value_y + 9))
+        if self.sim.level.response_drones and self.sim.level.drone_trace_threshold <= TRACE_MAX:
+            drone_x = cursor + int(round(trace_width * self.sim.level.drone_trace_threshold / TRACE_MAX))
+            pygame.draw.polygon(
+                self.logical,
+                VIOLET,
+                ((drone_x, value_y), (drone_x - 3, value_y - 4), (drone_x + 3, value_y - 4)),
+            )
+        cursor += trace_width + 12
+        divider(cursor - 6)
+
+        dash_width = 56
+        self._text("DASH", cursor, label_y, self.font_small, MUTED)
+        pygame.draw.rect(self.logical, (19, 29, 34), (cursor, value_y + 2, dash_width, 7))
+        pygame.draw.rect(
+            self.logical,
+            CYAN,
+            (cursor, value_y + 2, int(dash_width * np.clip(self.sim.dash_energy / 100.0, 0.0, 1.0)), 7),
+        )
+        cursor += dash_width + 12
+        divider(cursor - 6)
+
+        utility = f"PULSE {self.sim.pulse_charges}"
+        if hasattr(self.sim, "decoy_charges"):
+            utility += f"  DECOY {self.sim.decoy_charges}"
+        self._text("UTILITY", cursor, label_y, self.font_small, MUTED)
+        self._text(
+            utility,
+            cursor,
+            value_y,
+            hud_small,
+            VIOLET if self.sim.pulse_charges or getattr(self.sim, "decoy_charges", 0) else MUTED,
+        )
+        cursor += max(self.font_small.size("UTILITY")[0], hud_small.size(utility)[0]) + 12
+        divider(cursor - 6)
+
+        alert_text = ("CLEAR", "WATCH", "ALERT", "HUNT", "LOCKDOWN")[self.sim.alert_tier]
+        self._text("ALERT", cursor, label_y, self.font_small, MUTED)
+        self._text(alert_text, cursor, value_y, hud_small, RED if self.sim.alert_tier >= 2 else MUTED)
+
+        seconds = int(math.ceil(self.sim.remaining_seconds))
+        clock_text = f"{seconds // 60:02d}:{seconds % 60:02d}"
+        clock_color = RED if seconds < 25 else INK
+        clock_x = LOGICAL_SIZE[0] - 8 - hud_font.size(clock_text)[0]
+        self._text("CLOCK", clock_x, label_y, self.font_small, MUTED)
+        self._text(clock_text, clock_x, value_y, hud_font, clock_color)
+        if self.timer_warnings and seconds < 30:
+            pygame.draw.rect(
+                self.logical,
+                clock_color,
+                (clock_x - 5, 2, LOGICAL_SIZE[0] - clock_x + 2, band_height - 5),
+                1,
+                border_radius=3,
+            )
+
+    def _draw_agent_card(self, lab_stats: dict[str, Any] | None) -> None:
+        if not lab_stats:
+            return
+        rect = pygame.Rect(CHROME_CLUSTER_X, CHROME_CLUSTER_Y + 56 + 4, 100, 34)
+        plate = pygame.Surface(rect.size, pygame.SRCALPHA)
+        plate.fill((5, 5, 5, self._chrome_alpha(rect)))
+        self.logical.blit(plate, rect.topleft)
+        pygame.draw.rect(self.logical, VIOLET, (rect.x, rect.y, 3, rect.height))
+        pygame.draw.rect(self.logical, (61, 68, 78), rect, 1, border_radius=2)
+        policy_name = str(lab_stats.get("policy", "SCRIPTED BASELINE"))
+        if "ONNX" in policy_name:
+            policy_name = "ONNX"
+        elif "GRU" in policy_name:
+            policy_name = "GRU"
+        elif "SCRIPTED" in policy_name:
+            policy_name = "SCRIPTED"
+        else:
+            policy_name = policy_name.replace("RECURRENT ", "").replace(" POLICY", "")[:8]
+        self._text(f"AGENT  {policy_name}", rect.x + 8, rect.y + 5, self.font_small, VIOLET)
+        action_text = str(lab_stats.get("action", "HOLD")).replace(" +", "+")[:8]
+        latency = float(lab_stats.get("latency_ms", 0.0))
+        self._text(f"{action_text:<8} {latency:3.1f}MS", rect.x + 8, rect.y + 19, self.font_small, CYAN)
 
     def _draw_touch_hud(self, hud_small: pygame.font.Font, hud_font: pygame.font.Font) -> None:
         """Render one calm, phone-readable status band.
@@ -2258,8 +2346,15 @@ class GhostlineRenderer:
 
     def _draw_minimap(self) -> None:
         width, height = 100, 56
-        x0, y0 = 529, 9
-        pygame.draw.rect(self.logical, (5, 10, 14), (x0, y0, width, height), border_radius=2)
+        # Bottom-right chrome cluster: map on top, live agent card beneath it.
+        # Both fade whenever the runner or an operative passes underneath.
+        # Anchored at the top-right the map sat in the busiest corner of the
+        # approach route and could not be moved out of the way.
+        x0, y0 = CHROME_CLUSTER_X, CHROME_CLUSTER_Y
+        self._minimap_rect = pygame.Rect(x0, y0, width, height)
+        plate = pygame.Surface((width, height), pygame.SRCALPHA)
+        plate.fill((5, 10, 14, self._chrome_alpha(self._minimap_rect)))
+        self.logical.blit(plate, (x0, y0))
         sx = (width - 6) / self.sim.level.grid.shape[1]
         sy = (height - 6) / self.sim.level.grid.shape[0]
         for room in self.sim.level.rooms:
