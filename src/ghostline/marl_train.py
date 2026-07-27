@@ -593,6 +593,7 @@ def train_security(
             log_probability_buffer: list[np.ndarray] = []
             value_buffer: list[np.ndarray] = []
             reward_buffer: list[np.ndarray] = []
+            agent_reward_buffer: list[np.ndarray] = []
             done_buffer: list[np.ndarray] = []
             episodes_finished = runner_successes = 0
             reward_component_sums: dict[str, float] = {}
@@ -614,6 +615,7 @@ def train_security(
                     values = policy.value(state_tensor)
                 sampled_np = sampled.reshape(env_count, MAX_OPERATIVES, 4).cpu().numpy()
                 rewards = np.zeros(env_count, dtype=np.float32)
+                agent_rewards = np.zeros((env_count, MAX_OPERATIVES), dtype=np.float32)
                 dones = np.zeros(env_count, dtype=bool)
                 next_records: list[dict[str, dict[str, np.ndarray]]] = []
                 next_starts = np.zeros((env_count, MAX_OPERATIVES), dtype=bool)
@@ -623,9 +625,14 @@ def train_security(
                         for agent in env.agents
                     }
                     observations, team_rewards, terminations, truncations, infos = env.step(actions)
-                    rewards[env_index] = float(next(iter(team_rewards.values())))
+                    # The critic predicts the shared team value, so its target
+                    # uses the shared component; the actor is credited with the
+                    # operative's own containment shaping on top of it.
+                    for agent, agent_reward in team_rewards.items():
+                        agent_rewards[env_index, env.agent_name_mapping[agent]] = float(agent_reward)
                     if infos:
                         components = next(iter(infos.values())).get("reward_components", {})
+                        rewards[env_index] = float(components.get("total", next(iter(team_rewards.values()))))
                         for name, value in components.items():
                             if name != "total":
                                 reward_component_sums[name] = reward_component_sums.get(name, 0.0) + float(value)
@@ -646,6 +653,7 @@ def train_security(
                 log_probability_buffer.append(log_probability.reshape(env_count, MAX_OPERATIVES).cpu().numpy())
                 value_buffer.append(values.cpu().numpy())
                 reward_buffer.append(rewards)
+                agent_reward_buffer.append(agent_rewards)
                 done_buffer.append(dones)
                 hidden = next_hidden.detach()
                 for env_index, ended in enumerate(dones):
@@ -664,8 +672,11 @@ def train_security(
             with torch.no_grad():
                 next_values = policy.value(torch.as_tensor(current_states, device=training_device)).cpu().numpy()
             rewards_np = np.stack(reward_buffer)
+            agent_rewards_np = np.stack(agent_reward_buffer)
             dones_np = np.stack(done_buffer)
             values_np = np.stack(value_buffer)
+
+            # Team GAE drives the centralized value target.
             advantages = np.zeros_like(rewards_np)
             last_advantage = np.zeros(env_count, dtype=np.float32)
             for index in reversed(range(actual_rollout)):
@@ -675,7 +686,23 @@ def train_security(
                 last_advantage = delta + gamma * gae_lambda * continuation * last_advantage
                 advantages[index] = last_advantage
             returns = advantages + values_np
-            normalized_advantages = (advantages - advantages.mean()) / max(1e-6, advantages.std())
+
+            # Per-operative GAE drives the policy. Each operative's own reward is
+            # advantaged against the shared team value, which is a valid baseline
+            # because it never depends on that operative's action. Broadcasting
+            # one team advantage to five parameter-shared agents left nothing to
+            # distinguish whose action mattered.
+            agent_advantages = np.zeros_like(agent_rewards_np)
+            last_agent_advantage = np.zeros((env_count, MAX_OPERATIVES), dtype=np.float32)
+            for index in reversed(range(actual_rollout)):
+                continuation = (1.0 - dones_np[index].astype(np.float32))[:, None]
+                following = (next_values if index == actual_rollout - 1 else values_np[index + 1])[:, None]
+                delta = agent_rewards_np[index] + gamma * following * continuation - values_np[index][:, None]
+                last_agent_advantage = delta + gamma * gae_lambda * continuation * last_agent_advantage
+                agent_advantages[index] = last_agent_advantage
+            normalized_advantages = (agent_advantages - agent_advantages.mean()) / max(
+                1e-6, float(agent_advantages.std())
+            )
 
             sequence_observation = {
                 key: torch.as_tensor(np.stack(values), device=training_device).flatten(1, 2)
@@ -685,8 +712,7 @@ def train_security(
             old_log_probability = torch.as_tensor(np.stack(log_probability_buffer), device=training_device).flatten(1, 2)
             active_tensor = torch.as_tensor(np.stack(active_buffer), device=training_device).flatten(1, 2)
             reset_tensor = torch.as_tensor(np.stack(start_buffer), device=training_device).flatten(1, 2)
-            advantage_tensor = torch.as_tensor(normalized_advantages, device=training_device)
-            actor_advantage = advantage_tensor.unsqueeze(-1).expand(-1, -1, MAX_OPERATIVES).flatten(1, 2)
+            actor_advantage = torch.as_tensor(normalized_advantages, device=training_device).flatten(1, 2)
             returns_tensor = torch.as_tensor(returns, device=training_device)
             states_tensor = torch.as_tensor(np.stack(state_buffer), device=training_device)
             old_values_tensor = torch.as_tensor(values_np, device=training_device)

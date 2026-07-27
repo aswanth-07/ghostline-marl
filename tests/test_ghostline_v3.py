@@ -302,10 +302,20 @@ def test_security_reward_components_sum_exactly() -> None:
         for agent, observation in observations.items()
     }
     _, rewards, _, _, infos = env.step(actions)
+    shaping_values = []
     for agent, reward in rewards.items():
         components = infos[agent]["reward_components"]
-        assert components["total"] == pytest.approx(reward)
-        assert sum(value for key, value in components.items() if key != "total") == pytest.approx(reward)
+        shared = components["total"]
+        shaping = infos[agent]["agent_shaping"]
+        shaping_values.append(shaping)
+        # The shared team components still account for themselves exactly, and
+        # each operative's reward is that shared total plus only its own
+        # containment shaping. Nothing else may leak into the per-agent reward.
+        assert sum(value for key, value in components.items() if key != "total") == pytest.approx(shared)
+        assert shared + shaping == pytest.approx(reward)
+    # Credit assignment is the point: operatives in different positions must not
+    # all receive the same number.
+    assert len(set(round(value, 9) for value in shaping_values)) > 1
     env.close()
 
 
@@ -484,3 +494,142 @@ def test_security_evaluation_writes_json_and_both_csv_views(tmp_path) -> None:
     assert 0.0 <= summary["security_stop_ci95_low"] <= summary["security_stop_ci95_high"] <= 1.0
     assert output.with_suffix(".csv").is_file()
     assert output.with_name("security-evaluation.episodes.csv").is_file()
+
+
+def test_security_sight_matches_the_simulation_detection_envelope(monkeypatch) -> None:
+    """The observation's ``visible`` flag must agree with actual detection.
+
+    A hardcoded 245 px / cos 0.45 cone reported the runner visible when the
+    guard could not detect it, and the error inverted at high alert where the
+    real envelope grows past 245 px. ``intent_mask[PURSUE]`` is gated on this
+    flag, so the legal action set has to track the detection model.
+    """
+
+    from ghostline.config import (
+        GUARD_VISION_BASE_DISTANCE,
+        GUARD_VISION_COSINE,
+        GUARD_VISION_DISTANCE_PER_ALERT,
+    )
+
+    env = GhostlineSecurityParallelEnv(tier=6, seed=20_000_101)
+    env.reset(seed=20_000_101)
+    guard = env.sim.level.guards[0]
+    captured: list[dict[str, float]] = []
+    real_visible = env.sim.visible
+
+    def tracked(origin, facing, target, **kwargs):
+        captured.append(dict(kwargs))
+        return real_visible(origin, facing, target, **kwargs)
+
+    env.sim.visible = tracked
+    for alert in (0, 4):
+        captured.clear()
+        monkeypatch.setattr(type(env.sim), "alert_tier", property(lambda _self, value=alert: value))
+        env._runner_contact(guard)
+        assert captured, "no sight query issued"
+        contract = captured[0]
+        assert contract["cosine"] == GUARD_VISION_COSINE
+        assert contract["distance"] == GUARD_VISION_BASE_DISTANCE + GUARD_VISION_DISTANCE_PER_ALERT * alert
+    env.close()
+
+
+def test_security_audio_estimate_is_coarse_and_not_invertible() -> None:
+    """Heard contacts must not resolve to the exact runner position."""
+
+    import numpy as np
+
+    from ghostline.config import TILE_SIZE
+
+    env = GhostlineSecurityParallelEnv(tier=6, seed=20_000_102)
+    env.reset(seed=20_000_102)
+    guard = env.sim.level.guards[0]
+
+    offsets = set()
+    exact_hits = 0
+    for step in range(24):
+        env.sim.player = guard.position + np.asarray((90.0 + step * 3.0, 40.0 - step * 2.0), dtype=np.float32)
+        estimate = env._quantized_audio_estimate(guard)
+        delta = estimate - env.sim.player
+        offsets.add((round(float(delta[0]), 3), round(float(delta[1]), 3)))
+        if float(np.linalg.norm(delta)) < 1e-6:
+            exact_hits += 1
+
+    # A constant per-guard offset would produce exactly one distinct delta and
+    # would be trivially invertible back to the true position.
+    assert len(offsets) > 1
+    assert exact_hits == 0
+    # Quantisation stays bounded: it is a coarse cue, not random noise.
+    worst = max(max(abs(dx), abs(dy)) for dx, dy in offsets)
+    assert worst <= TILE_SIZE * 4
+    env.close()
+
+
+def test_security_targets_distinguish_extraction_from_doors() -> None:
+    """Every tactical slot carries its own kind code."""
+
+    import numpy as np
+
+    from ghostline.config_v3 import SECURITY_TARGET_FEATURES, SECURITY_TARGET_KINDS
+    from ghostline.security_env import TargetKind
+
+    env = GhostlineSecurityParallelEnv(tier=6, seed=20_000_103)
+    observations, _ = env.reset(seed=20_000_103)
+    targets = observations[next(iter(observations))]["targets"]
+
+    assert targets.shape == (8, SECURITY_TARGET_FEATURES)
+    assert len(TargetKind) == SECURITY_TARGET_KINDS
+    kinds = [int(np.argmax(row[3:])) for row in targets]
+    assert len(set(kinds)) == len(kinds), "two slots share a target-kind code"
+    assert kinds[int(TargetKind.EXTRACTION)] != kinds[int(TargetKind.DOOR)]
+    env.close()
+
+
+def test_central_critic_state_carries_the_mission_clock() -> None:
+    """Timer expiry is a scoring outcome, so the critic must see the clock."""
+
+    import numpy as np
+
+    from ghostline.config_v3 import SECURITY_CENTRAL_STATE_SIZE
+
+    env = GhostlineSecurityParallelEnv(tier=6, seed=20_000_104)
+    env.reset(seed=20_000_104)
+    early = env.state()
+    assert early.shape == (SECURITY_CENTRAL_STATE_SIZE,)
+
+    env.sim.elapsed_ticks += 60 * 100
+    late = env.state()
+    assert not np.array_equal(early, late), "state is blind to elapsed mission time"
+
+    # Missing operatives are marked by an explicit presence mask rather than a
+    # -1.0 sentinel that a real operative at the world origin could produce.
+    present = env.state()[-5:]
+    live = {guard.guard_id for guard in env.sim.level.guards}
+    for guard_id in range(5):
+        assert (present[guard_id] > 0.0) == (guard_id in live)
+    env.close()
+
+
+def test_interception_beats_tailing_in_the_shaping_potential() -> None:
+    """Being ahead of the runner must score above trailing it.
+
+    Guards move at 95-99% of runner speed, so a tail chase can never close.
+    The old potential rewarded raw proximity, which trained exactly that.
+    """
+
+    import numpy as np
+
+    env = GhostlineSecurityParallelEnv(tier=6, seed=20_000_105)
+    env.reset(seed=20_000_105)
+    guard = env.sim.level.guards[0]
+    goal = env._runner_goal()
+    direction = goal - env.sim.player
+    direction = direction / max(1e-6, float(np.linalg.norm(direction)))
+
+    guard.position = (env.sim.player - direction * 40.0).astype(np.float32)
+    trailing = env._interception_score(guard)
+    guard.position = (env.sim.player + direction * 120.0).astype(np.float32)
+    intercepting = env._interception_score(guard)
+
+    assert trailing == 0.0, "trailing the runner must earn no containment credit"
+    assert intercepting > trailing
+    env.close()

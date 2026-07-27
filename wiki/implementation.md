@@ -101,12 +101,38 @@ The default Watch Agent entries use one curated passing contract per tier from t
 - Objective vector: phase, goal dx/dy, route distance, next-waypoint dx/dy, link progress, and target value.
 - Terminal telemetry: success/reason, tier/seed, quota/data, duration, trace, detections, guard/drone damage attribution, pulse use, path distance, action histogram, idle decisions, efficiency, and exact reward components.
 
+The 2026-07-27 security rebaseline changed the operative contract. Sight now
+uses the simulation's own `GUARD_VISION_*` envelope instead of a hardcoded
+245 px / cos 0.45 cone, so the observation's visibility flag and the `PURSUE`
+mask agree with the detection model that produces awareness. Every tactical
+target slot carries a distinct kind code, so the extraction relay and a security
+door are no longer indistinguishable. Heard contacts use the same twelve-sector,
+48 px quantisation the runner's own audio cue uses, replacing a fixed
+per-operative offset from the exact runner position. The centralized critic
+state is 72 values and carries remaining mission time, alert tier, live link
+progress, completed-terminal fraction, and an explicit operative presence mask.
+
+Credit is now split: damage, detection, data, radio, formation, and the terminal
+stay team-wide, while discount-matched containment shaping is attributed to the
+operative that earned it, and the trainer runs per-operative GAE against the
+shared team value as a baseline. The shaping potential scores interception
+geometry — progress along the runner's own route to its current objective, in a
+corridor around that line — rather than raw proximity. Guards move at 95-99% of
+runner speed, so a tail chase can never close, and rewarding closeness trained
+exactly that losing behaviour.
+
+These changes move the security contract identity. `models/ghostline-security.pt`
+and the 11M/12M/13M evidence are historical: the checkpoint no longer loads and
+Adaptive Contracts falls back to the deterministic tactical team, which is the
+documented fail-closed path. No learned-security claim is made under the new
+contract until a fresh campaign and held-out evaluation exist.
+
 The optional public additions are `GhostlineEnv-v3` and
 `GhostlineSecurityParallel-v0`. Env-v3 has 72 masked runner actions and adds a
 six-value directive record, three local-grid channels, three entity fields,
 one projectile ray field, and decoy state. The parallel security environment
 uses up to five parameter-sharing operatives, factorized `MultiDiscrete([8,
-8, 5, 2])` actions, local actor observations, and a fixed 64-value centralized
+8, 5, 2])` actions, local actor observations, and a fixed 72-value centralized
 critic state. Security training seeds start at 10M, validation at 11M, and
 final test at 12M so no Env-v2 release slice is reused.
 

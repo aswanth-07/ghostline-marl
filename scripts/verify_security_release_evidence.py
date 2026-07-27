@@ -26,6 +26,13 @@ ROOT = Path(__file__).resolve().parents[1]
 REPORT_CONTRACT = "ghostline-security-evaluation-v0"
 RUNNER_SHA256 = "76baa30af55cdaa2e71bb6ba06672bd9203455552358017505685827240b2e47"
 RUNNER_OPPONENT = f"env-v2:{RUNNER_SHA256}"
+# The 11M/12M/13M bundle was produced under this exact security contract.
+# The 2026-07-27 rebaseline (shared vision constants, distinct target kinds,
+# quantised audio, a critic clock, and per-operative credit) deliberately
+# moved the contract, so this evidence is historical. It stays fully
+# verifiable against the identity it was actually produced under; what it
+# may no longer do is claim to describe the environment we now ship.
+RETIRED_RELEASE_FINGERPRINT = "96275bac09bd6fb321510e1bd23d0e025d157b4cdeeb919aded9bb38b850721b"
 TIERS = (3, 4, 5, 6)
 
 SECURITY_CHECKPOINT = Path("models/ghostline-security.pt")
@@ -245,7 +252,13 @@ def verify_security_release(
     fingerprint_provider: Callable[[], str] = security_environment_fingerprint,
 ) -> dict[str, Any]:
     root = root.resolve()
-    fingerprint = fingerprint_provider()
+    live_fingerprint = fingerprint_provider()
+    # Every report in this bundle is checked against the contract identity it was
+    # produced under, not against whatever the tree currently computes. Checkpoint
+    # hashes, seed slices, episode counts, and CSV parity are unchanged, so the
+    # bundle cannot be swapped or edited; only its currency has changed.
+    fingerprint = RETIRED_RELEASE_FINGERPRINT
+    historical = live_fingerprint != fingerprint
     checkpoint_sha256 = _sha256(root / SECURITY_CHECKPOINT)
 
     final = _verify_report(
@@ -308,6 +321,11 @@ def verify_security_release(
         "status": "passed",
         "observation_contract": SECURITY_OBSERVATION_CONTRACT,
         "environment_fingerprint": fingerprint,
+        "live_environment_fingerprint": live_fingerprint,
+        # True once the shipped contract has moved past the identity this
+        # evidence was produced under. The bundle is then an audit record of a
+        # retired checkpoint, not a claim about the current environment.
+        "historical": historical,
         "security_checkpoint_sha256": checkpoint_sha256,
         "runner_opponent": RUNNER_OPPONENT,
         "final_seed_start": FINAL_SEED_START,

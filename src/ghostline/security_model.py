@@ -8,12 +8,14 @@ import numpy as np
 import torch
 from torch import nn
 
+from ghostline.config_v3 import SECURITY_CENTRAL_STATE_SIZE, SECURITY_TARGET_FEATURES
+
 
 SECURITY_OBSERVATION_CONTRACT = "GhostlineSecurityParallel-v0"
 SECURITY_ACTION_FACTORS = ("intent", "target", "message", "ability")
 SECURITY_ACTION_SIZES = (8, 8, 5, 2)
 SECURITY_MASK_KEYS = ("intent_mask", "target_mask", "message_mask", "ability_mask")
-SECURITY_MODEL_CONTRACT_VERSION = "shared-security-actor-critic-v1"
+SECURITY_MODEL_CONTRACT_VERSION = "shared-security-actor-critic-v2"
 _RELEASE_CANONICAL_SOURCE_SHA256 = "2525da27f6983965f9abf9e54ae934f4e915d6008d8cd7abca0145fa96d7c96c"
 _RELEASE_ENVIRONMENT_FINGERPRINT = "96275bac09bd6fb321510e1bd23d0e025d157b4cdeeb919aded9bb38b850721b"
 
@@ -97,7 +99,7 @@ class SharedSecurityActorCritic(nn.Module):
         self.ego_encoder = nn.Sequential(nn.Linear(18, 64), nn.ELU(), nn.Linear(64, 48), nn.ELU())
         self.runner_encoder = nn.Sequential(nn.Linear(12, 48), nn.ELU(), nn.Linear(48, 48), nn.ELU())
         self.teammate_encoder = MaskedSecuritySetEncoder(12, 48)
-        self.target_encoder = MaskedSecuritySetEncoder(8, 48)
+        self.target_encoder = MaskedSecuritySetEncoder(SECURITY_TARGET_FEATURES, 48)
         self.radio_encoder = MaskedSecuritySetEncoder(8, 48)
         self.actor_fusion = nn.Sequential(
             nn.Linear(336, 320),
@@ -113,7 +115,7 @@ class SharedSecurityActorCritic(nn.Module):
 
         # Centralized training-only critic.  No actor method reads this state.
         self.critic = nn.Sequential(
-            nn.Linear(64, 256),
+            nn.Linear(SECURITY_CENTRAL_STATE_SIZE, 256),
             nn.ELU(),
             nn.Linear(256, 256),
             nn.ELU(),

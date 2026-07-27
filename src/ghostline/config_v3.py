@@ -23,3 +23,13 @@ SUPPRESSOR_PROJECTILE_RADIUS = 4.0
 MAX_SECURITY_TARGETS = 8
 MAX_RADIO_MESSAGES = 4
 MAX_TEAMMATES = 4
+
+# One target-kind code per tactical slot. Extraction and doors previously
+# shared a code, so the policy could not tell an exit from a chokepoint.
+SECURITY_TARGET_KINDS = 8
+# Three relative geometry values plus the target-kind one-hot.
+SECURITY_TARGET_FEATURES = 3 + SECURITY_TARGET_KINDS
+# Centralized critic state: mission block (with remaining time, alert tier,
+# and live link progress), five operative blocks, three door blocks, and an
+# explicit operative presence mask.
+SECURITY_CENTRAL_STATE_SIZE = 72

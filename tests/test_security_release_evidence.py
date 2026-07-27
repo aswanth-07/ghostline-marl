@@ -42,6 +42,14 @@ def test_security_release_evidence_binds_checkpoint_and_seed_slices(tmp_path: Pa
     assert summary["final_episodes"] == 100
     assert summary["mean_stop_rate"] == pytest.approx(0.07)
     assert summary["tier_stop_rates"] == {"3": 0.04, "4": 0.0, "5": 0.08, "6": 0.16}
+    # The bundle stays bound to the contract it was produced under, and is
+    # explicitly flagged once the shipped contract moves past it. Every other
+    # binding -- checkpoint hash, seed slices, episode counts, CSV parity --
+    # is unchanged, so the record cannot be swapped or edited.
+    assert summary["environment_fingerprint"] == security_evidence.RETIRED_RELEASE_FINGERPRINT
+    assert summary["historical"] is (
+        summary["live_environment_fingerprint"] != security_evidence.RETIRED_RELEASE_FINGERPRINT
+    )
 
 
 def test_security_release_evidence_rejects_report_checkpoint_mismatch(tmp_path: Path) -> None:
