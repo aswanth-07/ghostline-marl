@@ -920,3 +920,96 @@ def test_v3_interior_structure_creates_cover_without_sealing_routes() -> None:
     # Structure exists in the room bodies, not only against the walls.
     structural = [p for p in level.props if p.kind in ("pillar", "partition")]
     assert structural, "no sightline-breaking structure was placed"
+
+
+def test_v3_runner_policy_starts_uniform_over_legal_actions() -> None:
+    """Orthogonal init with a near-zero policy head is the point of the change.
+
+    The project previously used PyTorch defaults everywhere, so the policy began
+    training already committed to whatever the random draw favoured.
+    """
+
+    import torch
+
+    from ghostline.env_v3 import GhostlineEnvV3
+    from ghostline.model_v3 import RunnerPolicyV3
+
+    env = GhostlineEnvV3(seed=4_300_001, tier=6, directive="ghost")
+    observation, _ = env.reset(seed=4_300_001)
+    policy = RunnerPolicyV3(recurrent_size=256)
+    tensors = {key: torch.as_tensor(value).unsqueeze(0) for key, value in observation.items()}
+    logits, value, _hidden = policy.forward(tensors, None)
+
+    mask = torch.as_tensor(observation["action_mask"]).bool()
+    probabilities = torch.softmax(logits[0], dim=-1)
+    assert float(probabilities[~mask].sum()) == pytest.approx(0.0, abs=1e-9)
+    entropy = float(torch.distributions.Categorical(logits=logits[0]).entropy())
+    assert entropy == pytest.approx(float(np.log(int(mask.sum()))), rel=0.02)
+    assert value.shape == (1,)
+    env.close()
+
+
+def test_v3_runner_policy_respects_the_directive_and_sequence_resets() -> None:
+    """FiLM conditioning must actually change the representation."""
+
+    import torch
+
+    from ghostline.env_v3 import GhostlineEnvV3
+    from ghostline.model_v3 import RunnerPolicyV3
+
+    env = GhostlineEnvV3(seed=4_300_002, tier=6, directive="ghost")
+    observation, _ = env.reset(seed=4_300_002)
+    policy = RunnerPolicyV3(recurrent_size=256)
+    tensors = {key: torch.as_tensor(value).unsqueeze(0) for key, value in observation.items()}
+    ghost = policy.encode(tensors)
+
+    greed = dict(tensors)
+    directive = torch.zeros_like(tensors["directive"])
+    directive[0, 3] = 1.0
+    greed["directive"] = directive
+    assert not torch.allclose(ghost, policy.encode(greed)), "directive does not reach the representation"
+
+    steps, batch = 3, 2
+    sequence = {
+        key: torch.as_tensor(np.stack([[value] * batch] * steps)) for key, value in observation.items()
+    }
+    resets = torch.zeros(steps, batch, dtype=torch.bool)
+    resets[1, 0] = True
+    logits, values, _hidden = policy.forward_sequence(sequence, None, resets)
+    assert logits.shape == (steps, batch, 144)
+    assert values.shape == (steps, batch)
+    env.close()
+
+
+def test_v3_runner_checkpoint_round_trips_and_rejects_wrong_contracts(tmp_path) -> None:
+    from ghostline.model_v3 import RunnerPolicyV3, load_runner_v3, save_runner_v3
+
+    path = tmp_path / "runner-v3.pt"
+    policy = RunnerPolicyV3(recurrent_size=256)
+    save_runner_v3(policy, path, note="unit")
+    restored = load_runner_v3(path)
+    assert restored.recurrent_size == 256
+
+    import torch
+
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    payload["action_count"] = 72
+    torch.save(payload, path)
+    with pytest.raises(RuntimeError, match="action count"):
+        load_runner_v3(path)
+
+
+def test_running_return_scale_tracks_target_magnitude() -> None:
+    """Value normalisation is what stopped the critic chasing its own scale."""
+
+    from ghostline.marl_train import RunningReturnScale
+
+    scale = RunningReturnScale()
+    scale.update(np.full(512, 20.0, dtype=np.float32))
+    assert scale.sigma == pytest.approx(20.0, rel=0.05)
+
+    small = RunningReturnScale()
+    small.update(np.full(512, 0.5, dtype=np.float32))
+    assert small.sigma < scale.sigma
+    # Never zero, so the division in the value loss is always safe.
+    assert RunningReturnScale().sigma > 0.0

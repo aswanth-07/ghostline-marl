@@ -26,6 +26,32 @@ a role-gated ability at 5 Hz. Deterministic base navigation, collision, sight,
 and animation remain the motor layer. The actor never receives the centralized
 state used by the MAPPO critic.
 
+## Multi-agent network architecture
+
+`model.py` is the frozen Env-v2 network and is untouched. `model_v3.py` owns the
+Env-v3 runner, which sees a wider observation (27-value ego, 11-channel local
+grid, 16-feature entity rows, a directive record) and chooses from 144 masked
+actions.
+
+- Orthogonal initialisation with per-layer gains now applies to both the runner
+  and the operative networks; the project previously used PyTorch defaults
+  everywhere. Hidden layers use `sqrt(2)`, value heads `1.0`, and action heads
+  `0.01`. The measured effect is that every policy starts at exactly the uniform
+  entropy over its legal actions with zero probability mass on illegal ones,
+  instead of beginning already committed to a random preference.
+- The runner conditions on its directive through feature-wise linear modulation
+  rather than concatenation. Concatenating six values into a 384-wide fusion
+  lets the network ignore them; scaling and shifting every fused feature lets
+  Ghost, Speed and Greed re-purpose the shared representation.
+- Actor and critic keep separate decoders after the recurrent core so the much
+  larger value gradient does not interfere with the policy trunk.
+- The operative critic gained a LayerNorm trunk, and MAPPO now normalises value
+  targets against a running return scale. Only the scale is tracked, never the
+  mean: subtracting a drifting mean would shift advantages too and change the
+  sign of the containment terminal. Measured effect in a 5,000-step smoke, value
+  loss fell from the 10-45 range to roughly 0.1-1.4 and declined instead of
+  oscillating.
+
 ## Multi-agent facility layout
 
 `generation_v3.py` builds the multi-agent track's facilities. `generation.py` is

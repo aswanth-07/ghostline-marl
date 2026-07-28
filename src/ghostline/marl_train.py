@@ -143,6 +143,39 @@ def _sample_actions(
     )
 
 
+
+class RunningReturnScale:
+    """Running standard deviation of value targets, for value normalisation.
+
+    MAPPO value targets here span a +/-20 terminal plus dense shaping, so the
+    critic spends much of early training just learning the output scale. Fitting
+    the critic against targets divided by a running sigma, and multiplying the
+    prediction back when bootstrapping, removes that and is one of the few
+    consistently reported wins in the MAPPO ablations. Only the scale is
+    tracked, never the mean: subtracting a drifting mean would shift advantages
+    as well and change the sign of the containment terminal.
+    """
+
+    def __init__(self, epsilon: float = 1e-4):
+        self.mean = 0.0
+        self.mean_square = 1.0
+        self.count = epsilon
+
+    def update(self, values: np.ndarray) -> None:
+        flat = np.asarray(values, dtype=np.float64).reshape(-1)
+        if flat.size == 0:
+            return
+        count = flat.size
+        total = self.count + count
+        self.mean += (flat.mean() - self.mean) * count / total
+        self.mean_square += (np.square(flat).mean() - self.mean_square) * count / total
+        self.count = total
+
+    @property
+    def sigma(self) -> float:
+        return float(max(1e-6, np.sqrt(max(1e-12, self.mean_square))))
+
+
 @torch.no_grad()
 def _batched_security_actions(
     policy: SharedSecurityActorCritic,
@@ -471,6 +504,7 @@ def train_security(
         policy.load_state_dict(initialized.state_dict(), strict=True)
         init_label = f"{init_checkpoint}:{_sha256(init_checkpoint)}"
     optimizer = torch.optim.Adam(policy.parameters(), lr=learning_rate, eps=1e-5)
+    return_scale = RunningReturnScale()
     steps = updates = seed_cursor = 0
     best_worst_tier = -math.inf
     best_selection_key: tuple[float, ...] = (-math.inf,) * 6
@@ -612,7 +646,7 @@ def train_security(
                     logits, next_hidden = policy.forward_actor(tensors, hidden)
                     sampled = _sample_actions(logits)
                     log_probability, _ = factorized_log_prob(logits, sampled)
-                    values = policy.value(state_tensor)
+                    values = policy.value(state_tensor) * return_scale.sigma
                 sampled_np = sampled.reshape(env_count, MAX_OPERATIVES, 4).cpu().numpy()
                 rewards = np.zeros(env_count, dtype=np.float32)
                 agent_rewards = np.zeros((env_count, MAX_OPERATIVES), dtype=np.float32)
@@ -670,7 +704,10 @@ def train_security(
 
             actual_rollout = len(reward_buffer)
             with torch.no_grad():
-                next_values = policy.value(torch.as_tensor(current_states, device=training_device)).cpu().numpy()
+                next_values = (
+                    policy.value(torch.as_tensor(current_states, device=training_device)).cpu().numpy()
+                    * return_scale.sigma
+                )
             rewards_np = np.stack(reward_buffer)
             agent_rewards_np = np.stack(agent_reward_buffer)
             dones_np = np.stack(done_buffer)
@@ -686,6 +723,7 @@ def train_security(
                 last_advantage = delta + gamma * gae_lambda * continuation * last_advantage
                 advantages[index] = last_advantage
             returns = advantages + values_np
+            return_scale.update(returns)
 
             # Per-operative GAE drives the policy. Each operative's own reward is
             # advantaged against the shared team value, which is a valid baseline
@@ -731,10 +769,15 @@ def train_security(
                 clipped = ratio.clamp(1.0 - clip_ratio, 1.0 + clip_ratio) * actor_advantage
                 policy_loss = -_masked_mean(torch.minimum(unclipped, clipped), active_tensor)
                 predicted_values = policy.value(states_tensor)
-                clipped_values = old_values_tensor + (predicted_values - old_values_tensor).clamp(-clip_ratio, clip_ratio)
+                # Both sides of the value loss live in normalised units.
+                scaled_returns = returns_tensor / return_scale.sigma
+                scaled_old_values = old_values_tensor / return_scale.sigma
+                clipped_values = scaled_old_values + (predicted_values - scaled_old_values).clamp(
+                    -clip_ratio, clip_ratio
+                )
                 value_loss = 0.5 * torch.maximum(
-                    (predicted_values - returns_tensor).square(),
-                    (clipped_values - returns_tensor).square(),
+                    (predicted_values - scaled_returns).square(),
+                    (clipped_values - scaled_returns).square(),
                 ).mean()
                 entropy_mean = _masked_mean(entropy, active_tensor)
                 loss = policy_loss + value_coefficient * value_loss - entropy_coefficient * entropy_mean

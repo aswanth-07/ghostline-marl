@@ -15,7 +15,7 @@ SECURITY_OBSERVATION_CONTRACT = "GhostlineSecurityParallel-v0"
 SECURITY_ACTION_FACTORS = ("intent", "target", "message", "ability")
 SECURITY_ACTION_SIZES = (8, 8, 5, 2)
 SECURITY_MASK_KEYS = ("intent_mask", "target_mask", "message_mask", "ability_mask")
-SECURITY_MODEL_CONTRACT_VERSION = "shared-security-actor-critic-v2"
+SECURITY_MODEL_CONTRACT_VERSION = "shared-security-actor-critic-v3"
 _RELEASE_CANONICAL_SOURCE_SHA256 = "2525da27f6983965f9abf9e54ae934f4e915d6008d8cd7abca0145fa96d7c96c"
 _RELEASE_ENVIRONMENT_FINGERPRINT = "96275bac09bd6fb321510e1bd23d0e025d157b4cdeeb919aded9bb38b850721b"
 
@@ -57,16 +57,33 @@ def security_environment_fingerprint() -> str:
     )
 
 
+def orthogonal_(module: nn.Module, gain: float) -> nn.Module:
+    """Orthogonal weights with zero bias, the standard PPO initialisation.
+
+    The project previously used PyTorch defaults everywhere. The gain schedule
+    matters most at the action heads: initialising them near zero starts every
+    operative close to uniform over its legal actions instead of committing to
+    whatever the random draw happened to favour, which is worth real sample
+    efficiency in the first few thousand updates.
+    """
+
+    if isinstance(module, (nn.Linear, nn.Conv2d)):
+        nn.init.orthogonal_(module.weight, gain=gain)
+        if module.bias is not None:
+            nn.init.constant_(module.bias, 0.0)
+    return module
+
+
 class MaskedSecuritySetEncoder(nn.Module):
     def __init__(self, inputs: int, hidden: int = 64):
         super().__init__()
         self.item = nn.Sequential(
-            nn.Linear(inputs, hidden),
+            orthogonal_(nn.Linear(inputs, hidden), 2.0 ** 0.5),
             nn.ELU(),
-            nn.Linear(hidden, hidden),
+            orthogonal_(nn.Linear(hidden, hidden), 2.0 ** 0.5),
             nn.ELU(),
         )
-        self.score = nn.Linear(hidden, 1)
+        self.score = orthogonal_(nn.Linear(hidden, 1), 1.0)
 
     def forward(self, values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         encoded = self.item(values.float())
@@ -86,40 +103,56 @@ class SharedSecurityActorCritic(nn.Module):
             raise ValueError("recurrent_size must be 256 or 384")
         self.recurrent_size = int(recurrent_size)
         self.local_encoder = nn.Sequential(
-            nn.Conv2d(8, 24, 3, padding=1),
+            orthogonal_(nn.Conv2d(8, 24, 3, padding=1), 2.0 ** 0.5),
             nn.ELU(),
-            nn.Conv2d(24, 40, 3, stride=2, padding=1),
+            orthogonal_(nn.Conv2d(24, 40, 3, stride=2, padding=1), 2.0 ** 0.5),
             nn.ELU(),
-            nn.Conv2d(40, 48, 3, stride=2, padding=1),
+            orthogonal_(nn.Conv2d(40, 48, 3, stride=2, padding=1), 2.0 ** 0.5),
             nn.ELU(),
             nn.Flatten(),
-            nn.Linear(48 * 4 * 4, 96),
+            orthogonal_(nn.Linear(48 * 4 * 4, 96), 2.0 ** 0.5),
             nn.ELU(),
         )
-        self.ego_encoder = nn.Sequential(nn.Linear(18, 64), nn.ELU(), nn.Linear(64, 48), nn.ELU())
-        self.runner_encoder = nn.Sequential(nn.Linear(12, 48), nn.ELU(), nn.Linear(48, 48), nn.ELU())
+        self.ego_encoder = nn.Sequential(
+            orthogonal_(nn.Linear(18, 64), 2.0 ** 0.5), nn.ELU(),
+            orthogonal_(nn.Linear(64, 48), 2.0 ** 0.5), nn.ELU(),
+        )
+        self.runner_encoder = nn.Sequential(
+            orthogonal_(nn.Linear(12, 48), 2.0 ** 0.5), nn.ELU(),
+            orthogonal_(nn.Linear(48, 48), 2.0 ** 0.5), nn.ELU(),
+        )
         self.teammate_encoder = MaskedSecuritySetEncoder(12, 48)
         self.target_encoder = MaskedSecuritySetEncoder(SECURITY_TARGET_FEATURES, 48)
         self.radio_encoder = MaskedSecuritySetEncoder(8, 48)
         self.actor_fusion = nn.Sequential(
-            nn.Linear(336, 320),
+            orthogonal_(nn.Linear(336, 320), 2.0 ** 0.5),
             nn.ELU(),
             nn.LayerNorm(320),
         )
         self.actor_core = nn.GRU(320, self.recurrent_size, batch_first=True)
-        self.actor_decoder = nn.Sequential(nn.Linear(self.recurrent_size, 192), nn.ELU())
-        self.intent_head = nn.Linear(192, SECURITY_ACTION_SIZES[0])
-        self.target_head = nn.Linear(192, SECURITY_ACTION_SIZES[1])
-        self.message_head = nn.Linear(192, SECURITY_ACTION_SIZES[2])
-        self.ability_head = nn.Linear(192, SECURITY_ACTION_SIZES[3])
+        for name, parameter in self.actor_core.named_parameters():
+            if "weight" in name:
+                nn.init.orthogonal_(parameter, gain=1.0)
+            else:
+                nn.init.constant_(parameter, 0.0)
+        self.actor_decoder = nn.Sequential(orthogonal_(nn.Linear(self.recurrent_size, 192), 2.0 ** 0.5), nn.ELU())
+        # Near-zero action heads start each operative close to uniform over
+        # its legal factorised actions.
+        self.intent_head = orthogonal_(nn.Linear(192, SECURITY_ACTION_SIZES[0]), 0.01)
+        self.target_head = orthogonal_(nn.Linear(192, SECURITY_ACTION_SIZES[1]), 0.01)
+        self.message_head = orthogonal_(nn.Linear(192, SECURITY_ACTION_SIZES[2]), 0.01)
+        self.ability_head = orthogonal_(nn.Linear(192, SECURITY_ACTION_SIZES[3]), 0.01)
 
         # Centralized training-only critic.  No actor method reads this state.
+        # LayerNorm on the critic trunk: value targets span the +/-20 terminal
+        # plus dense shaping, and an unnormalised trunk learns that range slowly.
         self.critic = nn.Sequential(
-            nn.Linear(SECURITY_CENTRAL_STATE_SIZE, 256),
+            orthogonal_(nn.Linear(SECURITY_CENTRAL_STATE_SIZE, 256), 2.0 ** 0.5),
             nn.ELU(),
-            nn.Linear(256, 256),
+            nn.LayerNorm(256),
+            orthogonal_(nn.Linear(256, 256), 2.0 ** 0.5),
             nn.ELU(),
-            nn.Linear(256, 1),
+            orthogonal_(nn.Linear(256, 1), 1.0),
         )
 
     def encode_actor(self, observation: Mapping[str, torch.Tensor]) -> torch.Tensor:
