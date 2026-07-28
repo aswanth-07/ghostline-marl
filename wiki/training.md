@@ -222,6 +222,13 @@ Opponent updates occur between generations, never mid-rollout. Every checkpoint 
 the exact opponent hashes and mixture. Security accepts a repeatable
 `--runner-pool` containing published-v1 adapters and/or native v2 runner
 snapshots, with `--scripted-opponent-fraction` retaining the tactical baseline.
+
+The coordinator also owns the host resource contract. Trainer subprocesses run
+at below-normal Windows priority, numerical libraries are capped to one thread,
+and the full process tree inherits a 50% logical-CPU affinity ceiling. The
+long-run laptop baseline uses eight runner and four security environments; the
+ceiling is enforced independently of worker behavior rather than inferred from
+an average utilization sample.
 Runner training accepts a repeatable `--security-opponent`; its actor receives
 only the same local observations available during deployment, and exact resume
 reconstructs its recurrent opponent state by action replay. Alternation begins

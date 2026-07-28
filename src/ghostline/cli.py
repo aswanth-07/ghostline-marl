@@ -205,6 +205,18 @@ def build_parser() -> argparse.ArgumentParser:
     co_train.add_argument("--monitor-seconds", type=float, default=30.0)
     co_train.add_argument("--runner-max-decisions", type=int, default=0)
     co_train.add_argument("--security-max-steps", type=int, default=0)
+    co_train.add_argument(
+        "--cpu-thread-limit",
+        type=int,
+        default=1,
+        help="per-trainer numerical-library thread cap",
+    )
+    co_train.add_argument(
+        "--cpu-fraction-limit",
+        type=float,
+        default=0.50,
+        help="maximum fraction of logical CPUs inherited by the trainer tree",
+    )
     co_train.add_argument("--dry-run", action="store_true")
     evaluate = subparsers.add_parser(
         "evaluate",
@@ -525,6 +537,8 @@ def main() -> None:
                 monitor_seconds=args.monitor_seconds,
                 runner_max_decisions=args.runner_max_decisions,
                 security_max_steps=args.security_max_steps,
+                cpu_thread_limit=args.cpu_thread_limit,
+                cpu_fraction_limit=args.cpu_fraction_limit,
                 dry_run=args.dry_run,
             )
         )

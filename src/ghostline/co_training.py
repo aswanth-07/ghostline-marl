@@ -10,8 +10,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import ctypes
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -91,6 +93,8 @@ class CoTrainingConfig:
     scripted_opponent_fraction: float = 0.20
     runner_max_decisions: int = 0
     security_max_steps: int = 0
+    cpu_thread_limit: int = 1
+    cpu_fraction_limit: float = 0.50
     dry_run: bool = False
 
     def validate(self) -> None:
@@ -126,6 +130,10 @@ class CoTrainingConfig:
             raise ValueError("scripted_opponent_fraction must lie in [0, 1]")
         if self.runner_max_decisions < 0 or self.security_max_steps < 0:
             raise ValueError("step limits cannot be negative")
+        if not 1 <= self.cpu_thread_limit <= 4:
+            raise ValueError("cpu_thread_limit must lie in 1..4")
+        if not 0.10 <= self.cpu_fraction_limit <= 0.60:
+            raise ValueError("cpu_fraction_limit must lie in [0.10, 0.60]")
 
 
 @dataclass(frozen=True)
@@ -310,10 +318,75 @@ def _terminate(processes: Iterable[subprocess.Popen[str]]) -> None:
                 process.kill()
 
 
+def _training_process_environment(
+    config: CoTrainingConfig,
+) -> dict[str, str]:
+    """Bound implicit numerical-library pools inside every trainer process."""
+
+    environment = os.environ.copy()
+    thread_limit = str(config.cpu_thread_limit)
+    for name in (
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "BLIS_NUM_THREADS",
+    ):
+        environment[name] = thread_limit
+    return environment
+
+
+def _cpu_affinity_mask(
+    logical_cpu_count: int,
+    fraction: float,
+) -> tuple[int, int]:
+    available = max(1, int(logical_cpu_count))
+    selected = max(1, min(available, math.floor(available * fraction)))
+    return (1 << selected) - 1, selected
+
+
+def _apply_process_cpu_affinity(
+    config: CoTrainingConfig,
+) -> dict[str, int | float | str]:
+    logical = max(1, int(os.cpu_count() or 1))
+    mask, selected = _cpu_affinity_mask(
+        logical,
+        config.cpu_fraction_limit,
+    )
+    if os.name == "nt":
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.SetProcessAffinityMask.argtypes = (
+            wintypes.HANDLE,
+            ctypes.c_size_t,
+        )
+        kernel32.SetProcessAffinityMask.restype = wintypes.BOOL
+        handle = kernel32.GetCurrentProcess()
+        if not kernel32.SetProcessAffinityMask(handle, mask):
+            raise OSError(
+                ctypes.get_last_error(),
+                "failed to apply the co-training CPU affinity ceiling",
+            )
+        status = "applied"
+    else:
+        status = "unsupported-platform"
+    return {
+        "status": status,
+        "logical_cpu_count": logical,
+        "selected_cpu_count": selected,
+        "fraction_limit": config.cpu_fraction_limit,
+        "mask": mask,
+    }
+
+
 def run_co_training(config: CoTrainingConfig) -> Path:
     """Run the frozen-snapshot league and return its result manifest."""
 
     config.validate()
+    affinity = _apply_process_cpu_affinity(config)
     config.output.mkdir(parents=True, exist_ok=True)
     state_path = config.output / "session.json"
     result_path = config.output / "result.json"
@@ -357,6 +430,15 @@ def run_co_training(config: CoTrainingConfig) -> Path:
                 {"path": str(path), "sha256": _sha256(path)}
                 for path in plan.security_opponents
             ],
+            "resource_controls": {
+                "cpu_thread_limit": config.cpu_thread_limit,
+                "cpu_affinity": affinity,
+                "windows_priority": (
+                    "below-normal"
+                    if os.name == "nt"
+                    else "platform-default"
+                ),
+            },
             "status": "running",
         }
         records.append(generation_record)
@@ -390,9 +472,19 @@ def run_co_training(config: CoTrainingConfig) -> Path:
                     subprocess.Popen(
                         command,
                         cwd=Path.cwd(),
+                        env=_training_process_environment(config),
                         stdout=stream,
                         stderr=subprocess.STDOUT,
                         text=True,
+                        creationflags=(
+                            getattr(
+                                subprocess,
+                                "BELOW_NORMAL_PRIORITY_CLASS",
+                                0,
+                            )
+                            if os.name == "nt"
+                            else 0
+                        ),
                     )
                 )
             generation_record["pids"] = [item.pid for item in processes]

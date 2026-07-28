@@ -151,11 +151,13 @@ so the diagnostics matter as much as the result:
   borrow acceptance from any earlier campaign.
 
 The intended first campaign is 48 wall-clock hours over three 16-hour
-generations. The measured concurrent rates are approximately 929 runner
-decisions/s and 100 security agent-decisions/s. That budget supplies roughly
-15-17 million security decisions after validation and warm-up, covering the
-14-million security target with contingency. Monitoring uses an ordinary
-sleep/poll loop between one and sixty seconds; no scheduled task is involved.
+generations. Interactive laptop runs use eight runner environments and four
+security environments. Every trainer receives a one-thread numerical-library
+cap, below-normal Windows priority, and an inherited 50% logical-CPU affinity
+ceiling. The calibrated concurrent startup measured 23.1% mean, 35.9% p95, and
+58.0% maximum total CPU while retaining about 794 runner decisions/s before
+steady state. Monitoring uses an ordinary sleep/poll loop between one and sixty
+seconds; no scheduled task is involved.
 
 The algorithm choices follow PPO and GAE, the MAPPO parameter-sharing and CTDE
 baseline, policy-invariant potential shaping, and frozen league practice:
