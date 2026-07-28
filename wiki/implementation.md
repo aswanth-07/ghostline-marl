@@ -26,6 +26,36 @@ a role-gated ability at 5 Hz. Deterministic base navigation, collision, sight,
 and animation remain the motor layer. The actor never receives the centralized
 state used by the MAPPO critic.
 
+## Multi-agent facility layout
+
+`generation_v3.py` builds the multi-agent track's facilities. `generation.py` is
+hashed into the frozen `GhostlineEnv-v2` contract and is never modified; the
+swap happens inside `GhostlineSimulationV3.reset`, which runs before the base
+class generates a level, so the single-agent track keeps its original layouts.
+
+The generator is subtractive and conservative: it reshapes an already valid
+level and re-runs the original `LevelGenerator.validate`, so reachability, route
+redundancy, door throats and every security clearance still hold rather than
+being reimplemented. Three passes run in order, each behind a single batched
+connectivity check because per-tile flood fills cost roughly a 10x slowdown on a
+path that runs at every training reset.
+
+- Corner carving recesses room corners into L-shaped, stepped and alcoved
+  silhouettes so a room's shape is no longer predictable from its position.
+- Room archetypes lay structured runs with walkable gaps: server aisles, desk
+  rows, shelving, vault cases. This is what actually breaks the empty-rectangle
+  read, and the parallel runs create the short sightlines, corner peeking and
+  cover that the crouch stealth layer and the security interception shaping both
+  depend on.
+- Pillars, glass partitions and non-blocking decor (floor markings, signage,
+  cable runs, vent grates) finish the space. Decor never blocks movement or
+  sight, so it cannot reach navigation, detection or any policy observation.
+
+New structure and decor render code-natively rather than through the release
+atlases, so they add no binary asset and cannot change the packaged manifest.
+Crouching squashes the runner silhouette and draws a ground marker that turns
+green in cover, because both states are mechanical rather than cosmetic.
+
 ## Adaptive Contracts fairness contract
 
 - Env-v3 runners have a stealth state. `RunnerActionV3` carries a fifth `crouch`

@@ -844,3 +844,79 @@ def test_holding_cover_while_crouched_is_not_punished_as_idling() -> None:
     # The time cost still applies, so cover cannot be farmed indefinitely.
     assert env.reward_components["time"] < 0.0
     env.close()
+
+
+def test_v3_generator_reshapes_every_facility_and_stays_valid() -> None:
+    """The multi-agent track gets varied layouts that still pass validation."""
+
+    from ghostline.generation import LevelGenerator
+    from ghostline.generation_v3 import FacilityLayoutV3
+
+    base, shaped = LevelGenerator(), FacilityLayoutV3()
+    reshaped = 0
+    for seed in range(4_100_000, 4_100_030):
+        tier = 3 + seed % 4
+        original = base.generate(seed=seed, tier=tier)
+        variant = shaped.generate(seed=seed, tier=tier)
+        # Reuses the original validator: reachability, route redundancy, door
+        # throats and every security clearance still hold.
+        assert shaped.validate(variant), f"seed {seed} produced an invalid facility"
+        assert len(variant.props) > len(original.props), "no interior structure added"
+        if not np.array_equal(original.grid, variant.grid):
+            reshaped += 1
+    assert reshaped >= 25, f"only {reshaped}/30 facilities were reshaped"
+
+
+def test_v3_generator_is_deterministic_for_a_seed() -> None:
+    """Replay and evaluation both depend on this."""
+
+    from ghostline.generation_v3 import FacilityLayoutV3
+
+    first = FacilityLayoutV3().generate(seed=4_100_777, tier=6)
+    second = FacilityLayoutV3().generate(seed=4_100_777, tier=6)
+    assert np.array_equal(first.grid, second.grid)
+    assert [(p.kind, p.tile_x, p.tile_y) for p in first.props] == [
+        (p.kind, p.tile_x, p.tile_y) for p in second.props
+    ]
+
+
+def test_v3_simulation_uses_the_reshaped_generator_and_v2_does_not() -> None:
+    """The frozen single-agent track must keep its original facilities."""
+
+    from ghostline.generation import LevelGenerator
+    from ghostline.generation_v3 import FacilityLayoutV3
+    from ghostline.simulation import GhostlineSimulation
+
+    classic = GhostlineSimulation(seed=4_100_042, tier=6)
+    adaptive = GhostlineSimulationV3(seed=4_100_042, tier=6)
+    assert type(classic.generator) is LevelGenerator
+    assert isinstance(adaptive.generator, FacilityLayoutV3)
+    assert not np.array_equal(classic.level.grid, adaptive.level.grid)
+
+    # The swap survives a reset, which is the path training actually uses.
+    adaptive.reset(seed=4_100_043, tier=5)
+    assert isinstance(adaptive.generator, FacilityLayoutV3)
+
+
+def test_v3_interior_structure_creates_cover_without_sealing_routes() -> None:
+    """Aisles must produce cover and still leave the facility walkable."""
+
+    from ghostline.generation import flood_fill, world_to_tile
+    from ghostline.generation_v3 import FacilityLayoutV3
+
+    level = FacilityLayoutV3().generate(seed=4_100_099, tier=6)
+    blocked = {
+        (p.tile_x + dx, p.tile_y + dy)
+        for p in level.props
+        if p.blocking
+        for dx in range(p.width)
+        for dy in range(p.height)
+    }
+    reachable = flood_fill(level.grid, world_to_tile(level.spawn), blocked)
+    for terminal in level.terminals:
+        assert world_to_tile(terminal.position) in reachable
+    assert world_to_tile(level.extraction) in reachable
+
+    # Structure exists in the room bodies, not only against the walls.
+    structural = [p for p in level.props if p.kind in ("pillar", "partition")]
+    assert structural, "no sightline-breaking structure was placed"

@@ -40,6 +40,7 @@ from ghostline.config_v3 import (
     SUPPRESSOR_PROJECTILE_SPEED,
 )
 from ghostline.generation import tile_center, world_to_tile
+from ghostline.generation_v3 import FacilityLayoutV3
 from ghostline.simulation import GhostlineSimulation, MOVE_DIRECTIONS, norm, unit
 from ghostline.types import Guard, GuardMode, SimEvent, Tile
 from ghostline.types_v3 import (
@@ -80,6 +81,13 @@ class GhostlineSimulationV3(GhostlineSimulation):
     crouching: bool = False
 
     def reset(self, *, seed: int | None = None, tier: int | None = None) -> None:
+        # The multi-agent track builds its own reshaped facilities. Swapping the
+        # generator here rather than adding a seam to the base class keeps
+        # simulation.py byte-identical, which the frozen Env-v2 fingerprint
+        # requires. ``__init__`` assigns the default generator before calling
+        # reset, so this override always runs first.
+        if not isinstance(self.generator, FacilityLayoutV3):
+            self.generator = FacilityLayoutV3()
         super().reset(seed=seed, tier=tier)
         self.decoy_charges = 0 if self.tier <= 2 else (1 if self.tier <= 4 else 2)
         self.decoys_used = 0

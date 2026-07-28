@@ -94,6 +94,8 @@ GREEN = (108, 255, 177)
 
 # Color-Safe replacement pair, shared by the world pixel mask and the native
 # text path so one rule set governs both.
+_V3_DECOR_KINDS = ("floor_marking", "wall_sign", "cable_run", "vent_grate")
+
 COLOR_SAFE_DANGER = (255, 92, 190)
 COLOR_SAFE_SAFE = (82, 184, 255)
 
@@ -380,6 +382,7 @@ class GhostlineRenderer:
         self._diagonal_locomotion_cache: dict[tuple[str, int, int, bool], pygame.Surface] = {}
         self._last_room_role = ""
         self._touch_layout = False
+        self._crouch_cache: dict[tuple[int, int, int], pygame.Surface] = {}
         self._hud_panel_rect = pygame.Rect(0, 0, LOGICAL_SIZE[0], HUD_BAND_HEIGHT)
         self._minimap_rect = pygame.Rect(CHROME_CLUSTER_X, CHROME_CLUSTER_Y, 100, 56)
         self.font_small = pygame.font.SysFont("consolas", 10, bold=True)
@@ -664,6 +667,7 @@ class GhostlineRenderer:
         self._draw_walls()
         self._draw_props()
         self._draw_objectives()
+        self._draw_stealth_state()
         self._draw_adaptive_mechanics()
         self._draw_security()
         self._draw_player()
@@ -1059,8 +1063,17 @@ class GhostlineRenderer:
             )
             self._blit_accessible_sprite(atlas_sprite, destination)
             return
-        pygame.draw.rect(self.logical, (6, 10, 14), rect.move(3, 5), border_radius=2)
         kind = prop.kind
+        # Env-v3 facility structure and flavour. These are drawn code-natively
+        # rather than added to the release atlases so they need no new binary
+        # asset, stay deterministic, and cannot change the packaged manifest.
+        if kind in _V3_DECOR_KINDS:
+            self._draw_v3_decor(kind, rect)
+            return
+        if kind in ("pillar", "partition"):
+            self._draw_v3_structure(kind, rect)
+            return
+        pygame.draw.rect(self.logical, (6, 10, 14), rect.move(3, 5), border_radius=2)
         if kind in ("desk", "meeting_table", "coffee_table", "lab_bench"):
             color = (83, 66, 61) if kind != "lab_bench" else (57, 84, 86)
             pygame.draw.rect(self.logical, color, rect, border_radius=2)
@@ -1116,6 +1129,62 @@ class GhostlineRenderer:
             pygame.draw.rect(self.logical, (51, 63, 67), rect, border_radius=2)
             pygame.draw.rect(self.logical, (79, 98, 101), rect, 1, border_radius=2)
             pygame.draw.line(self.logical, (26, 35, 40), rect.topleft, rect.bottomright)
+
+    def _draw_v3_structure(self, kind: str, rect: pygame.Rect) -> None:
+        """Load-bearing interior structure: concrete pillars and partitions.
+
+        Both block sight and movement, so they read as heavy architecture rather
+        than furniture: a hard cast shadow, a lit top face, and a grounded base
+        so the player can tell instantly that they cannot walk or see through.
+        """
+
+        shadow = rect.move(4, 6)
+        pygame.draw.rect(self.logical, (4, 7, 10), shadow, border_radius=2)
+        if kind == "pillar":
+            body = rect.inflate(-rect.width // 3, 0)
+            pygame.draw.rect(self.logical, (58, 64, 72), body)
+            pygame.draw.rect(self.logical, (86, 94, 104), (body.x, body.y, body.width, 4))
+            pygame.draw.rect(self.logical, (30, 35, 41), (body.x, body.bottom - 4, body.width, 4))
+            pygame.draw.line(self.logical, (74, 82, 92), (body.centerx, body.y + 4), (body.centerx, body.bottom - 4))
+            return
+        # Partition: a low glass-and-steel divider.
+        pygame.draw.rect(self.logical, (38, 46, 54), rect)
+        glass = rect.inflate(-4, -8)
+        pygame.draw.rect(self.logical, (52, 88, 96), glass)
+        pygame.draw.rect(self.logical, (96, 150, 158), glass, 1)
+        for offset in range(glass.x + 3, glass.right - 2, 5):
+            pygame.draw.line(self.logical, (74, 118, 126), (offset, glass.y + 1), (offset, glass.bottom - 2))
+        pygame.draw.rect(self.logical, (74, 82, 92), (rect.x, rect.bottom - 3, rect.width, 3))
+
+    def _draw_v3_decor(self, kind: str, rect: pygame.Rect) -> None:
+        """Non-blocking flavour that gives a room a purpose.
+
+        None of this affects navigation, sight, or any policy observation; it
+        exists so a space reads as a loading bay or a server aisle rather than a
+        rectangle with furniture in it.
+        """
+
+        if kind == "floor_marking":
+            band = pygame.Rect(rect.x, rect.centery - 3, rect.width, 6)
+            pygame.draw.rect(self.logical, (58, 52, 26), band)
+            for offset in range(band.x, band.right - 2, 6):
+                pygame.draw.line(self.logical, (138, 122, 54), (offset, band.bottom - 1), (offset + 3, band.y))
+        elif kind == "wall_sign":
+            plate = pygame.Rect(rect.centerx - 7, rect.y + 2, 14, 8)
+            pygame.draw.rect(self.logical, (22, 32, 38), plate, border_radius=1)
+            pygame.draw.rect(self.logical, (58, 96, 104), plate, 1, border_radius=1)
+            pygame.draw.line(self.logical, CYAN, (plate.x + 3, plate.centery), (plate.right - 3, plate.centery))
+        elif kind == "cable_run":
+            base = rect.centery + 2
+            for index, tint in enumerate(((44, 58, 66), (38, 70, 76), (60, 48, 40))):
+                y = base + index * 2 - 2
+                pygame.draw.line(self.logical, tint, (rect.x, y), (rect.right, y))
+        else:  # vent_grate
+            grate = rect.inflate(-6, -10)
+            pygame.draw.rect(self.logical, (26, 32, 38), grate)
+            pygame.draw.rect(self.logical, (58, 66, 74), grate, 1)
+            for offset in range(grate.y + 2, grate.bottom - 1, 3):
+                pygame.draw.line(self.logical, (44, 52, 60), (grate.x + 1, offset), (grate.right - 2, offset))
 
     def _draw_objectives(self) -> None:
         for terminal in self.sim.level.terminals:
@@ -1740,6 +1809,49 @@ class GhostlineRenderer:
             strike_y = sy - 34 if sy - 34 >= 116 else sy + 39
             self._text("STRIKE", sx - 18, strike_y, self.font_small, cue_color)
 
+    def _crouched_sprite(self, sprite: pygame.Surface) -> pygame.Surface:
+        """Squash the runner so the stealth state reads instantly.
+
+        Crouching changes speed, noise and how fast guards acquire you, so it
+        has to be visible at a glance rather than inferred from the HUD. The
+        silhouette is compressed vertically and kept pixel-exact with a nearest
+        neighbour scale so it stays consistent with the authored art.
+        """
+
+        key = (id(sprite), sprite.get_width(), sprite.get_height())
+        cached = self._crouch_cache.get(key)
+        if cached is not None:
+            return cached
+        width, height = sprite.get_width(), sprite.get_height()
+        squashed = pygame.transform.scale(sprite, (width, max(4, int(height * 0.72))))
+        self._crouch_cache[key] = squashed
+        if len(self._crouch_cache) > 64:
+            self._crouch_cache.clear()
+            self._crouch_cache[key] = squashed
+        return squashed
+
+    def _draw_stealth_state(self) -> None:
+        """Ground marker for crouch and cover.
+
+        Both states are mechanical, not cosmetic: crouching slows guard
+        acquisition and cover speeds trace decay, so the player needs an
+        unambiguous read on whether they currently have them.
+        """
+
+        if not getattr(self.sim, "crouching", False):
+            return
+        sx, sy = self._world(self.sim.player)
+        overlay = pygame.Surface(LOGICAL_SIZE, pygame.SRCALPHA)
+        covered = bool(getattr(self.sim, "in_cover", False))
+        tint = (*GREEN, 70) if covered else (*CYAN, 46)
+        pygame.draw.ellipse(overlay, tint, (sx - 13, sy + 6, 26, 10))
+        pygame.draw.ellipse(overlay, (*(GREEN if covered else CYAN), 150), (sx - 13, sy + 6, 26, 10), 1)
+        self.logical.blit(overlay, (0, 0))
+        if covered:
+            # Two short brackets read as "shielded" without adding a text tag.
+            pygame.draw.line(self.logical, GREEN, (sx - 15, sy + 2), (sx - 15, sy + 9))
+            pygame.draw.line(self.logical, GREEN, (sx + 15, sy + 2), (sx + 15, sy + 9))
+
     def _draw_player(self) -> None:
         sx, sy = self._world(self.sim.player)
         facing = math.atan2(float(self.sim.heading[1]), float(self.sim.heading[0]))
@@ -1752,10 +1864,13 @@ class GhostlineRenderer:
         else:
             state = "normal"
         moving = norm(self.sim.velocity) > 5.0
+        crouching = bool(getattr(self.sim, "crouching", False))
         sprite = self._runner_atlas_sprite(facing, moving, state)
         atlas_sprite = sprite is not None
         if sprite is None:
             sprite = self._actor_sprite("runner", facing, moving, state)
+        if crouching:
+            sprite = self._crouched_sprite(sprite)
         destination = (sx - sprite.get_width() // 2, sy + 13 - sprite.get_height()) if atlas_sprite else (sx - sprite.get_width() // 2, sy - 17)
         if state == "dash" and not self.reduced_motion:
             direction = self.sim.heading
