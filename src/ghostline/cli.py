@@ -46,6 +46,11 @@ def _add_runner_v2_training_arguments(
     parser.add_argument("--tiers", default="1,2,3,4,5,6")
     parser.add_argument("--directives", default="standard,ghost,speed,greed")
     parser.add_argument(
+        "--ghost-directive-fraction",
+        type=float,
+        default=0.25,
+    )
+    parser.add_argument(
         "--no-curriculum",
         dest="adaptive_curriculum",
         action="store_false",

@@ -6,6 +6,7 @@ import json
 import pytest
 
 import ghostline.co_training as co_training
+from ghostline.cli import build_parser
 from ghostline.co_training import (
     CoTrainingConfig,
     _cpu_affinity_mask,
@@ -66,6 +67,9 @@ def test_generation_uses_only_previously_frozen_opponents(tmp_path: Path) -> Non
     ] == "0.5"
     assert str(plan.runner_output) not in plan.security_command
     assert str(plan.security_output) not in plan.runner_command
+    parsed = build_parser().parse_args(list(plan.runner_command[3:]))
+    assert parsed.command == "train-runner-v2"
+    assert parsed.ghost_directive_fraction == pytest.approx(0.50)
 
 
 def test_generations_use_disjoint_training_and_validation_offsets(
