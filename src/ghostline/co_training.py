@@ -79,7 +79,9 @@ class CoTrainingConfig:
     security_epochs: int = 2
     recurrent_size_runner: int = 384
     recurrent_size_security: int = 256
-    runner_learning_rate: float = 1.5e-4
+    runner_learning_rate: float = 5.0e-5
+    runner_entropy_coefficient: float = 0.003
+    runner_initial_curriculum_tier: int = 3
     security_learning_rate: float = 3.0e-4
     gamma: float = 0.999
     gae_lambda: float = 0.98
@@ -113,8 +115,10 @@ class CoTrainingConfig:
             raise ValueError("rollouts must contain at least two decisions")
         if self.runner_epochs < 1 or self.security_epochs < 1:
             raise ValueError("training epochs must be positive")
-        if self.recurrent_size_runner not in (256, 384, 512):
-            raise ValueError("runner recurrent size must be 256, 384 or 512")
+        if self.recurrent_size_runner != 384:
+            raise ValueError(
+                "published-v1 league initialization requires runner recurrent size 384"
+            )
         if self.recurrent_size_security not in (256, 384):
             raise ValueError("security recurrent size must be 256 or 384")
         if not 0.0 < self.gamma <= 1.0:
@@ -125,6 +129,10 @@ class CoTrainingConfig:
             raise ValueError("reward_scale must lie in (0, 1]")
         if self.runner_learning_rate <= 0.0 or self.security_learning_rate <= 0.0:
             raise ValueError("learning rates must be positive")
+        if not 0.0 <= self.runner_entropy_coefficient <= 0.10:
+            raise ValueError("runner entropy coefficient must lie in [0, 0.10]")
+        if self.runner_initial_curriculum_tier not in range(1, 7):
+            raise ValueError("runner initial curriculum tier must lie in 1..6")
         if not 1.0 <= self.monitor_seconds <= 60.0:
             raise ValueError("monitor_seconds must lie in 1..60")
         if not 0.0 <= self.scripted_opponent_fraction <= 1.0:
@@ -194,6 +202,8 @@ def build_generation_plan(
         str(config.recurrent_size_runner),
         "--learning-rate",
         str(config.runner_learning_rate),
+        "--entropy-coefficient",
+        str(config.runner_entropy_coefficient),
         "--gamma",
         str(config.gamma),
         "--gae-lambda",
@@ -204,6 +214,8 @@ def build_generation_plan(
         str(runner_training_start),
         "--initial-validation-cursor",
         str(validation_cursor),
+        "--initial-curriculum-tier",
+        str(config.runner_initial_curriculum_tier),
         "--validation-interval",
         str(config.runner_validation_interval),
         "--validation-episodes",

@@ -202,6 +202,18 @@ def build_parser() -> argparse.ArgumentParser:
     co_train.add_argument("--security-envs", type=int, default=8)
     co_train.add_argument("--runner-rollout", type=int, default=512)
     co_train.add_argument("--security-rollout", type=int, default=192)
+    co_train.add_argument("--runner-learning-rate", type=float, default=5.0e-5)
+    co_train.add_argument(
+        "--runner-entropy-coefficient",
+        type=float,
+        default=0.003,
+    )
+    co_train.add_argument(
+        "--runner-initial-curriculum-tier",
+        type=int,
+        choices=range(1, 7),
+        default=3,
+    )
     co_train.add_argument("--monitor-seconds", type=float, default=30.0)
     co_train.add_argument("--runner-max-decisions", type=int, default=0)
     co_train.add_argument("--security-max-steps", type=int, default=0)
@@ -539,6 +551,9 @@ def main() -> None:
                 security_envs=args.security_envs,
                 runner_rollout=args.runner_rollout,
                 security_rollout=args.security_rollout,
+                runner_learning_rate=args.runner_learning_rate,
+                runner_entropy_coefficient=args.runner_entropy_coefficient,
+                runner_initial_curriculum_tier=args.runner_initial_curriculum_tier,
                 monitor_seconds=args.monitor_seconds,
                 runner_max_decisions=args.runner_max_decisions,
                 security_max_steps=args.security_max_steps,

@@ -55,6 +55,12 @@ def test_generation_uses_only_previously_frozen_opponents(tmp_path: Path) -> Non
     assert "--runner-pool" in plan.security_command
     assert "--init-checkpoint" in plan.runner_command
     assert "--init-model" in plan.security_command
+    assert plan.runner_command[
+        plan.runner_command.index("--initial-curriculum-tier") + 1
+    ] == "3"
+    assert plan.runner_command[
+        plan.runner_command.index("--entropy-coefficient") + 1
+    ] == "0.003"
     assert str(plan.runner_output) not in plan.security_command
     assert str(plan.security_output) not in plan.runner_command
 
@@ -96,6 +102,13 @@ def test_co_training_rejects_more_generations_than_seed_partition(tmp_path: Path
             **{
                 **config.__dict__,
                 "generations": 5,
+            }
+        ).validate()
+    with pytest.raises(ValueError, match="recurrent size 384"):
+        CoTrainingConfig(
+            **{
+                **config.__dict__,
+                "recurrent_size_runner": 256,
             }
         ).validate()
 
