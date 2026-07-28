@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pytest
 
+import ghostline.co_training as co_training
 from ghostline.co_training import (
     CoTrainingConfig,
     _cpu_affinity_mask,
     _training_process_environment,
     build_generation_plan,
+    run_co_training,
 )
 
 
@@ -137,3 +140,223 @@ def test_co_training_affinity_is_a_hard_fractional_cpu_ceiling(
                 "cpu_fraction_limit": 0.75,
             }
         ).validate()
+
+
+class _FinishedProcess:
+    next_pid = 20_000
+
+    def __init__(
+        self,
+        command: list[str] | tuple[str, ...],
+        *,
+        return_code: int = 0,
+        **_: object,
+    ) -> None:
+        self.command = tuple(command)
+        self.return_code = int(return_code)
+        self.pid = _FinishedProcess.next_pid
+        _FinishedProcess.next_pid += 1
+        output = Path(self.command[self.command.index("--output") + 1])
+        output.mkdir(parents=True, exist_ok=True)
+        if "--dry-run" in self.command:
+            config = {"tiers": [1, 2, 3, 4, 5, 6]}
+            manifest = (
+                {"status": "preflight-passed", "checkpoint_contract": {"config": config}}
+                if "train-runner-v2" in self.command
+                else {"status": "preflight-passed"}
+            )
+            (output / "experiment-manifest.json").write_text(
+                json.dumps(manifest),
+                encoding="utf-8",
+            )
+        elif "train-runner-v2" in self.command:
+            (output / "latest.pt").write_bytes(b"runner-latest")
+            (output / "best.pt").write_bytes(b"runner-best")
+        else:
+            (output / "latest.pt").write_bytes(b"security-latest")
+            (output / "champion.pt").write_bytes(b"security-best")
+
+    def poll(self) -> int:
+        return self.return_code
+
+    def terminate(self) -> None:
+        self.return_code = -15
+
+    def kill(self) -> None:
+        self.return_code = -9
+
+    def wait(self, timeout: float | None = None) -> int:
+        del timeout
+        return self.return_code
+
+
+def _disable_affinity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        co_training,
+        "_apply_process_cpu_affinity",
+        lambda _config: {
+            "status": "test",
+            "logical_cpu_count": 1,
+            "selected_cpu_count": 1,
+            "fraction_limit": 0.5,
+            "mask": 1,
+        },
+    )
+
+
+def test_driver_selects_and_freezes_each_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _disable_affinity(monkeypatch)
+    commands: list[tuple[str, ...]] = []
+
+    def launch(command: list[str] | tuple[str, ...], **kwargs: object) -> _FinishedProcess:
+        commands.append(tuple(command))
+        return _FinishedProcess(command, **kwargs)
+
+    monkeypatch.setattr(co_training.subprocess, "Popen", launch)
+    config = _config(tmp_path)
+    result_path = run_co_training(config)
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+
+    assert result["status"] == "trained-candidates"
+    assert len(result["generations"]) == 2
+    assert all(
+        record["status"] == "validation-selected"
+        for record in result["generations"]
+    )
+    second_runner = next(
+        command
+        for command in commands
+        if "generation-01" in " ".join(command)
+        and "train-runner-v2" in command
+    )
+    second_security = next(
+        command
+        for command in commands
+        if "generation-01" in " ".join(command)
+        and "train-security" in command
+    )
+    assert "--security-opponent" in second_runner
+    assert "--runner-pool" in second_security
+
+
+def test_driver_resume_reuses_frozen_boundary_and_strict_checkpoints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _disable_affinity(monkeypatch)
+
+    def fail_second_generation(
+        command: list[str] | tuple[str, ...],
+        **kwargs: object,
+    ) -> _FinishedProcess:
+        generation_one = "generation-01" in " ".join(command)
+        return _FinishedProcess(
+            command,
+            return_code=7 if generation_one and "train-runner-v2" in command else 0,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(co_training.subprocess, "Popen", fail_second_generation)
+    config = _config(tmp_path)
+    with pytest.raises(RuntimeError, match="failed with return codes"):
+        run_co_training(config)
+    state = json.loads(
+        (config.output / "session.json").read_text(encoding="utf-8")
+    )
+    assert state["generations"][0]["status"] == "validation-selected"
+    assert state["generations"][1]["status"] == "interrupted"
+
+    resumed_commands: list[tuple[str, ...]] = []
+
+    def finish_resume(
+        command: list[str] | tuple[str, ...],
+        **kwargs: object,
+    ) -> _FinishedProcess:
+        resumed_commands.append(tuple(command))
+        return _FinishedProcess(command, **kwargs)
+
+    monkeypatch.setattr(co_training.subprocess, "Popen", finish_resume)
+    resumed = CoTrainingConfig(**{**config.__dict__, "resume": True})
+    result = json.loads(
+        run_co_training(resumed).read_text(encoding="utf-8")
+    )
+    assert result["status"] == "trained-candidates"
+    assert len(result["generations"]) == 2
+    runner_command = next(
+        command
+        for command in resumed_commands
+        if "train-runner-v2" in command
+    )
+    security_command = next(
+        command
+        for command in resumed_commands
+        if "train-security" in command
+    )
+    assert "--resume" in runner_command
+    assert "--published-v1-init" not in runner_command
+    assert "--init-checkpoint" not in runner_command
+    assert "--init-model" not in security_command
+
+
+def test_driver_failure_terminates_the_concurrent_sibling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _disable_affinity(monkeypatch)
+    sibling: _PendingProcess | None = None
+
+    class _PendingProcess(_FinishedProcess):
+        def __init__(
+            self,
+            command: list[str] | tuple[str, ...],
+            **kwargs: object,
+        ) -> None:
+            super().__init__(command, **kwargs)
+            self.return_code: int | None = None
+            self.was_terminated = False
+
+        def poll(self) -> int | None:
+            return self.return_code
+
+        def terminate(self) -> None:
+            self.was_terminated = True
+            self.return_code = -15
+
+    def launch(
+        command: list[str] | tuple[str, ...],
+        **kwargs: object,
+    ) -> _FinishedProcess:
+        nonlocal sibling
+        if "train-runner-v2" in command:
+            return _FinishedProcess(command, return_code=9, **kwargs)
+        sibling = _PendingProcess(command, **kwargs)
+        return sibling
+
+    monkeypatch.setattr(co_training.subprocess, "Popen", launch)
+    config = CoTrainingConfig(
+        **{**_config(tmp_path).__dict__, "generations": 1}
+    )
+    with pytest.raises(RuntimeError, match="failed with return codes"):
+        run_co_training(config)
+    assert sibling is not None and sibling.was_terminated
+
+
+def test_driver_dry_run_executes_generation_boundary_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _disable_affinity(monkeypatch)
+    monkeypatch.setattr(co_training.subprocess, "Popen", _FinishedProcess)
+    base = _config(tmp_path)
+    config = CoTrainingConfig(
+        **{**base.__dict__, "generations": 1, "dry_run": True}
+    )
+
+    result = json.loads(
+        run_co_training(config).read_text(encoding="utf-8")
+    )
+    assert result["status"] == "preflight-passed"
+    assert result["generations"][0]["status"] == "preflight-passed"

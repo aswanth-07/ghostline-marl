@@ -217,6 +217,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.50,
         help="maximum fraction of logical CPUs inherited by the trainer tree",
     )
+    co_train.add_argument(
+        "--resume",
+        action="store_true",
+        help="resume the first incomplete generation from strict trainer checkpoints",
+    )
     co_train.add_argument("--dry-run", action="store_true")
     evaluate = subparsers.add_parser(
         "evaluate",
@@ -539,6 +544,7 @@ def main() -> None:
                 security_max_steps=args.security_max_steps,
                 cpu_thread_limit=args.cpu_thread_limit,
                 cpu_fraction_limit=args.cpu_fraction_limit,
+                resume=args.resume,
                 dry_run=args.dry_run,
             )
         )

@@ -1401,6 +1401,12 @@ def validation_selection_key(report: Mapping[str, Any]) -> tuple[float, float, f
     )
 
 
+def selection_validation_tiers(config: RunnerPPOConfig) -> tuple[int, ...]:
+    """Keep checkpoint ranking independent from the training curriculum."""
+
+    return config.tiers
+
+
 @torch.no_grad()
 def validate_runner(
     policy: RunnerPolicyV2,
@@ -2176,11 +2182,11 @@ def train(
                     episodes_per_tier=config.validation_episodes,
                     validation_cursor=validation_cursor,
                     device=device,
-                    tiers=(
-                        tuple(range(1, curriculum_tier + 1))
-                        if config.adaptive_curriculum
-                        else config.tiers
-                    ),
+                    # Curriculum limits the training distribution, never the
+                    # held-out selection distribution.  A league generation
+                    # must be rankable from its first validation even when
+                    # promotion has not yet reached tier 6.
+                    tiers=selection_validation_tiers(config),
                     directives=tuple(
                         ContractDirective(value)
                         for value in config.directives

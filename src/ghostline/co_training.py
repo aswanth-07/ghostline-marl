@@ -95,6 +95,7 @@ class CoTrainingConfig:
     security_max_steps: int = 0
     cpu_thread_limit: int = 1
     cpu_fraction_limit: float = 0.50
+    resume: bool = False
     dry_run: bool = False
 
     def validate(self) -> None:
@@ -155,6 +156,8 @@ def build_generation_plan(
     security_pool: Sequence[Path],
     previous_runner: Path | None,
     previous_security: Path | None,
+    resume_runner: bool = False,
+    resume_security: bool = False,
 ) -> GenerationPlan:
     """Build one deterministic pair of frozen-opponent training commands."""
 
@@ -212,7 +215,9 @@ def build_generation_plan(
         runner.extend(
             ("--max-decisions", str(config.runner_max_decisions))
         )
-    if previous_runner is None:
+    if resume_runner:
+        runner.append("--resume")
+    elif previous_runner is None:
         runner.extend(
             ("--published-v1-init", str(config.published_runner))
         )
@@ -258,11 +263,21 @@ def build_generation_plan(
         str(config.published_runner),
         "--scripted-opponent-fraction",
         str(config.scripted_opponent_fraction),
-        "--no-resume",
     ]
     if config.security_max_steps:
         security.extend(("--max-steps", str(config.security_max_steps)))
-    if previous_security is None:
+    if resume_security:
+        security.extend(
+            (
+                "--bc-warmup-steps",
+                str(
+                    config.security_bc_steps
+                    if previous_security is None
+                    else 0
+                ),
+            )
+        )
+    elif previous_security is None:
         security.extend(
             ("--bc-warmup-steps", str(config.security_bc_steps))
         )
@@ -382,6 +397,126 @@ def _apply_process_cpu_affinity(
     }
 
 
+def _campaign_configuration(config: CoTrainingConfig) -> dict[str, Any]:
+    """Return the immutable campaign contract used to authorize a resume."""
+
+    payload = asdict(config)
+    payload.pop("resume", None)
+    payload.pop("dry_run", None)
+    payload["output"] = str(config.output.resolve())
+    payload["published_runner"] = str(config.published_runner.resolve())
+    return payload
+
+
+def _session_payload(
+    config: CoTrainingConfig,
+    *,
+    created: str,
+    status: str,
+    records: Sequence[dict[str, Any]],
+    started: float,
+    affinity: dict[str, int | float | str],
+    error: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "contract": CO_TRAINING_CONTRACT,
+        "created_at_utc": created,
+        "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "status": status,
+        "elapsed_seconds": time.monotonic() - started,
+        "campaign_configuration": _campaign_configuration(config),
+        "resource_controls": {
+            "cpu_thread_limit": config.cpu_thread_limit,
+            "cpu_affinity": affinity,
+            "windows_priority": (
+                "below-normal" if os.name == "nt" else "platform-default"
+            ),
+        },
+        "generations": list(records),
+    }
+    if error is not None:
+        payload["error"] = error
+    return payload
+
+
+def _load_completed_generations(
+    config: CoTrainingConfig,
+    state_path: Path,
+) -> tuple[str, list[dict[str, Any]], list[Path], list[Path]]:
+    """Validate a prior session and recover only frozen generation boundaries."""
+
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"cannot resume invalid session state: {state_path}") from exc
+    if state.get("contract") != CO_TRAINING_CONTRACT:
+        raise RuntimeError("cannot resume a different co-training contract")
+    expected = _campaign_configuration(config)
+    if state.get("campaign_configuration") != expected:
+        raise RuntimeError(
+            "cannot resume because the co-training configuration changed"
+        )
+    completed: list[dict[str, Any]] = []
+    runner_pool: list[Path] = []
+    security_pool: list[Path] = []
+    for expected_index, record in enumerate(state.get("generations", [])):
+        if record.get("status") != "validation-selected":
+            break
+        if int(record.get("generation", -1)) != expected_index:
+            raise RuntimeError("resume state has a non-contiguous generation history")
+        runner = Path(record["runner_checkpoint"]["path"]).resolve()
+        security = Path(record["security_checkpoint"]["path"]).resolve()
+        if not runner.is_file() or _sha256(runner) != record["runner_checkpoint"]["sha256"]:
+            raise RuntimeError(f"frozen runner checkpoint changed or disappeared: {runner}")
+        if (
+            not security.is_file()
+            or _sha256(security) != record["security_checkpoint"]["sha256"]
+        ):
+            raise RuntimeError(
+                f"frozen security checkpoint changed or disappeared: {security}"
+            )
+        completed.append(record)
+        runner_pool.append(runner)
+        security_pool.append(security)
+    return (
+        str(state.get("created_at_utc") or datetime.now(timezone.utc).isoformat()),
+        completed,
+        runner_pool,
+        security_pool,
+    )
+
+
+def _validate_dry_run_outputs(plan: GenerationPlan) -> None:
+    """Require both trainer preflights to execute before a driver preflight passes."""
+
+    for side, output in (
+        ("runner", plan.runner_output),
+        ("security", plan.security_output),
+    ):
+        manifest_path = output / "experiment-manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"{side} dry-run did not produce a valid experiment manifest"
+            ) from exc
+        if manifest.get("status") != "preflight-passed":
+            raise RuntimeError(f"{side} dry-run preflight did not pass")
+    runner_manifest = json.loads(
+        (plan.runner_output / "experiment-manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    configured_tiers = tuple(
+        int(tier)
+        for tier in runner_manifest["checkpoint_contract"]["config"]["tiers"]
+    )
+    if configured_tiers != (1, 2, 3, 4, 5, 6):
+        raise RuntimeError(
+            "runner selection preflight must cover every contract tier"
+        )
+
+
 def run_co_training(config: CoTrainingConfig) -> Path:
     """Run the frozen-snapshot league and return its result manifest."""
 
@@ -390,21 +525,40 @@ def run_co_training(config: CoTrainingConfig) -> Path:
     config.output.mkdir(parents=True, exist_ok=True)
     state_path = config.output / "session.json"
     result_path = config.output / "result.json"
-    if state_path.exists() or result_path.exists():
+    if config.resume and result_path.is_file():
+        return result_path
+    if not config.resume and (state_path.exists() or result_path.exists()):
         raise RuntimeError(
             f"{config.output} already contains a co-training session; "
-            "choose a new output directory"
+            "choose a new output directory or pass --resume"
         )
-
-    runner_pool: list[Path] = []
-    security_pool: list[Path] = []
-    previous_runner: Path | None = None
-    previous_security: Path | None = None
-    records: list[dict[str, Any]] = []
     started = time.monotonic()
-    created = datetime.now(timezone.utc).isoformat()
+    if config.resume:
+        if not state_path.is_file():
+            raise RuntimeError(
+                f"cannot resume because {state_path} does not exist"
+            )
+        created, records, runner_pool, security_pool = (
+            _load_completed_generations(config, state_path)
+        )
+    else:
+        created = datetime.now(timezone.utc).isoformat()
+        records = []
+        runner_pool = []
+        security_pool = []
+    previous_runner = runner_pool[-1] if runner_pool else None
+    previous_security = security_pool[-1] if security_pool else None
 
-    for generation in range(config.generations):
+    for generation in range(len(records), config.generations):
+        generation_dir = config.output / f"generation-{generation:02d}"
+        resume_runner = (
+            config.resume
+            and (generation_dir / "runner" / "latest.pt").is_file()
+        )
+        resume_security = (
+            config.resume
+            and (generation_dir / "security" / "latest.pt").is_file()
+        )
         plan = build_generation_plan(
             config,
             generation=generation,
@@ -412,6 +566,8 @@ def run_co_training(config: CoTrainingConfig) -> Path:
             security_pool=security_pool,
             previous_runner=previous_runner,
             previous_security=previous_security,
+            resume_runner=resume_runner,
+            resume_security=resume_security,
         )
         plan.runner_output.mkdir(parents=True, exist_ok=True)
         plan.security_output.mkdir(parents=True, exist_ok=True)
@@ -440,26 +596,25 @@ def run_co_training(config: CoTrainingConfig) -> Path:
                 ),
             },
             "status": "running",
+            "resumed": bool(resume_runner or resume_security),
         }
         records.append(generation_record)
         _atomic_json(
             state_path,
-            {
-                "contract": CO_TRAINING_CONTRACT,
-                "created_at_utc": created,
-                "status": "running",
-                "configuration": {
-                    **asdict(config),
-                    "output": str(config.output),
-                    "published_runner": str(config.published_runner),
-                },
-                "generations": records,
-            },
+            _session_payload(
+                config,
+                created=created,
+                status="running",
+                records=records,
+                started=started,
+                affinity=affinity,
+            ),
         )
 
+        stream_mode = "a" if resume_runner or resume_security else "w"
         streams = (
-            runner_log.open("w", encoding="utf-8", newline="\n"),
-            security_log.open("w", encoding="utf-8", newline="\n"),
+            runner_log.open(stream_mode, encoding="utf-8", newline="\n"),
+            security_log.open(stream_mode, encoding="utf-8", newline="\n"),
         )
         processes: list[subprocess.Popen[str]] = []
         try:
@@ -498,13 +653,14 @@ def run_co_training(config: CoTrainingConfig) -> Path:
                 )
                 _atomic_json(
                     state_path,
-                    {
-                        "contract": CO_TRAINING_CONTRACT,
-                        "created_at_utc": created,
-                        "status": "running",
-                        "elapsed_seconds": time.monotonic() - started,
-                        "generations": records,
-                    },
+                    _session_payload(
+                        config,
+                        created=created,
+                        status="running",
+                        records=records,
+                        started=started,
+                        affinity=affinity,
+                    ),
                 )
                 failures = [
                     code for code in return_codes
@@ -520,22 +676,56 @@ def run_co_training(config: CoTrainingConfig) -> Path:
                 if all(code == 0 for code in return_codes):
                     break
                 time.sleep(config.monitor_seconds)
+        except Exception as exc:
+            generation_record["status"] = "interrupted"
+            generation_record["error"] = str(exc)
+            _atomic_json(
+                state_path,
+                _session_payload(
+                    config,
+                    created=created,
+                    status="interrupted",
+                    records=records,
+                    started=started,
+                    affinity=affinity,
+                    error=str(exc),
+                ),
+            )
+            raise
         finally:
             _terminate(processes)
             for stream in streams:
                 stream.close()
 
         if config.dry_run:
+            _validate_dry_run_outputs(plan)
             generation_record["status"] = "preflight-passed"
             continue
-        previous_runner = _selected_checkpoint(
-            plan.runner_output,
-            "runner",
-        )
-        previous_security = _selected_checkpoint(
-            plan.security_output,
-            "security",
-        )
+        try:
+            previous_runner = _selected_checkpoint(
+                plan.runner_output,
+                "runner",
+            )
+            previous_security = _selected_checkpoint(
+                plan.security_output,
+                "security",
+            )
+        except Exception as exc:
+            generation_record["status"] = "interrupted"
+            generation_record["error"] = str(exc)
+            _atomic_json(
+                state_path,
+                _session_payload(
+                    config,
+                    created=created,
+                    status="interrupted",
+                    records=records,
+                    started=started,
+                    affinity=affinity,
+                    error=str(exc),
+                ),
+            )
+            raise
         runner_pool.append(previous_runner)
         security_pool.append(previous_security)
         generation_record.update(
@@ -551,6 +741,17 @@ def run_co_training(config: CoTrainingConfig) -> Path:
                     "sha256": _sha256(previous_security),
                 },
             }
+        )
+        _atomic_json(
+            state_path,
+            _session_payload(
+                config,
+                created=created,
+                status="running",
+                records=records,
+                started=started,
+                affinity=affinity,
+            ),
         )
 
     result: dict[str, Any] = {
@@ -576,15 +777,17 @@ def run_co_training(config: CoTrainingConfig) -> Path:
             "sha256": _sha256(final_security),
         }
     _atomic_json(result_path, result)
+    final_state = _session_payload(
+        config,
+        created=created,
+        status=result["status"],
+        records=records,
+        started=started,
+        affinity=affinity,
+    )
+    final_state["result"] = str(result_path.resolve())
     _atomic_json(
         state_path,
-        {
-            "contract": CO_TRAINING_CONTRACT,
-            "created_at_utc": created,
-            "status": result["status"],
-            "elapsed_seconds": result["elapsed_seconds"],
-            "result": str(result_path.resolve()),
-            "generations": records,
-        },
+        final_state,
     )
     return result_path

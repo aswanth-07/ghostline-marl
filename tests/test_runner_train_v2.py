@@ -34,6 +34,7 @@ from ghostline.runner_train_v2 import (
     require_training_schedule,
     require_validation_window,
     save_training_checkpoint,
+    selection_validation_tiers,
     runner_sequence_outputs,
     validate_runner,
     validate_runner_suite,
@@ -520,6 +521,12 @@ def test_seed_namespaces_validation_gates_and_selection_are_fail_closed() -> Non
         }
     }
     assert validation_selection_key(incomplete_report)[:2] == (-1.0, -1.0)
+    adaptive = smoke_config(
+        tiers=ALL_TIERS,
+        adaptive_curriculum=True,
+        initial_curriculum_tier=1,
+    )
+    assert selection_validation_tiers(adaptive) == ALL_TIERS
     complete_report = {
         "tiers": {
             str(tier): {

@@ -179,11 +179,17 @@ point:
 ghostline train-runner-v2 --output artifacts/runner-v2/preflight --published-v1-init models/ghostline-policy.pt --dry-run --cpu
 ghostline train-runner-v2 --output artifacts/runner-v2/ppo --published-v1-init models/ghostline-policy.pt --envs 16 --rollout 512 --epochs 4 --gamma 0.999 --gae-lambda 0.98 --reward-scale 0.05 --seconds 86400
 ghostline co-train-v2 --output artifacts/v2-cotraining --hours 48 --generations 3
+# Recover an interrupted campaign after verifying its recorded configuration:
+ghostline co-train-v2 --output artifacts/v2-cotraining --hours 48 --generations 3 --resume
 ```
 
 The optional `--published-v1-init` path verifies the frozen checkpoint and
 transplants only compatible weights; it does not treat the 36-action artifact
-as a v2 policy or evidence. See [training](wiki/training.md) and
+as a v2 policy or evidence. Co-training ranks every checkpoint on all six held-
+out tiers even while adaptive curriculum limits the training distribution.
+Completed league generations are hash-verified on resume, and only the first
+incomplete generation is restarted from strict trainer checkpoints. See
+[training](wiki/training.md) and
 [setup](wiki/setup.md) for smoke/resume gates, curriculum, opponent scheduling,
 and held-out selection.
 
