@@ -1,21 +1,16 @@
 ---
 title: Ghostline Setup and Release
-updated: 2026-07-23
+updated: 2026-07-28
 status: active
 ---
 
 # Setup and release
 
 Python 3.13 is the locked release baseline. CI also checks the base runtime on
-Python 3.12 and 3.14. Commands below use `requirements.lock` as a constraints
-file so editable installs resolve to the reviewed direct and transitive pins.
+Python 3.12 and 3.14. Use the repository `.venv` and `requirements.lock` for
+every command. Other local virtual environments are unsupported.
 
-`.venv` is the only supported local environment. An untracked `.venv-py311`
-directory also exists on the current machine; it is stale, unsupported, and
-outside the CI matrix. It lacks `pettingzoo`, so it cannot even collect
-`tests/test_ghostline_v3.py`. Do not verify against it. Deleting it is safe.
-
-## Human game
+## Install and play
 
 ```powershell
 py -3.13 -m venv .venv
@@ -25,81 +20,141 @@ python -m pip install --constraint requirements.lock -e .
 ghostline play
 ```
 
-The base install deliberately has no PyTorch, ONNX Runtime, recording codec, or
-packager dependency. It supports human play and `GhostlineEnv-v2` headlessly.
-It also supports rule-controlled Adaptive Contracts and `GhostlineEnv-v3`:
+The normal campaign and published Agent Lab policy are public
+`GhostlineEnv-v1`. The current multi-agent v2 game is opt-in:
 
 ```powershell
 ghostline play --adaptive --tier 6 --directive ghost
 ```
 
+The `--adaptive` CLI spelling is retained as a user-facing mode switch; it does
+not create a third environment version. The selected simulation is
+`GhostlineEnv-v2`.
+
+The base install has no PyTorch, ONNX Runtime, recording codec, or packager
+dependency. Both environments can run headlessly with deterministic scripted
+controllers.
+
 ## Agent Lab and development
 
 ```powershell
-# Lightweight ONNX inference; no PyTorch.
+# Lightweight published-v1 ONNX inference; no PyTorch.
 python -m pip install --constraint requirements.lock -e ".[agent]"
 ghostline lab --tier 6 --seed 2000000
 
-# Complete tests, lock maintenance, and Python distribution builds. This extra
-# includes TensorBoard and recording codecs because the suite imports and
-# exercises the training and recorder modules in a clean CI environment.
+# Tests, lock maintenance, and distributions.
 python -m pip install --constraint requirements.lock -e ".[dev]"
 python -m pytest -q
 ```
 
-Agent Lab falls back to human/scripted play when no compatible
-`models/ghostline-policy.onnx` is present. A portfolio release does not use that
-fallback: its packaging gate requires and smoke-tests the selected policy.
+The published Agent Lab policy is v1-only. The desktop and web launchers must
+refuse to pass its 36-action observation contract to a live v2 simulation.
+Missing or incompatible policies fall back to human/scripted control.
 
-## Correctness and throughput
+## Contract smoke
 
 ```powershell
-python scripts/fuzz_ghostline_levels.py --seeds 10000
-python scripts/benchmark_ghostline.py --decisions 10000 --tier 6 --workers 22 --minimum-decisions-per-second 3000 --output benchmarks/system/headless-throughput.json
+python -c "import gymnasium as gym, ghostline; a=gym.make('GhostlineEnv-v1'); b=gym.make('GhostlineEnv-v2'); print(a.action_space, b.action_space)"
 ```
 
-Set `--workers` to the intended CPU worker count; one worker is useful for
-profiling, while the aggregate command measures the training-throughput gate.
+Expected action spaces are `Discrete(36)` and `Discrete(288)`. There is no
+third registered Ghostline environment.
 
-## Hybrid training on Windows/CUDA
+## Correctness and generation
 
-WSL2 is optional, not required. The supported local path is the same Python
-3.13 environment on Windows with the CUDA-enabled PyTorch 2.13 wheel:
+```powershell
+# Published-v1 level contract.
+python scripts/fuzz_ghostline_levels.py --seeds 10000
+
+# Developmental v2 geometry, vents, panels, security doors, and readiness.
+python scripts/fuzz_ghostline_levels.py --adaptive --seeds 10000
+
+# Immutable public-v1 release throughput gate.
+python scripts/benchmark_ghostline.py --decisions 10000 --tier 6 --workers 22 --minimum-decisions-per-second 3000 --output benchmarks/system/headless-throughput.json
+
+# Developmental-v2 calibration; record the measured value without inventing a pass threshold.
+python scripts/benchmark_ghostline.py --adaptive --decisions 1000 --tier 6 --workers 22 --minimum-decisions-per-second 0 --output artifacts/v2-readiness/headless-throughput.json
+```
+
+V2 fuzzing uses the v2 generator's own validator and readiness diagnostics,
+not only the inherited base validator.
+
+## Published v1 reproduction
+
+```powershell
+python -m pip install --constraint requirements.lock -e ".[train]"
+
+ghostline imitate collect --output artifacts/teacher-data --episodes-per-tier 100 --overwrite
+ghostline imitate bc --dataset artifacts/teacher-data --output artifacts/bc-current
+ghostline imitate dagger --base-dataset artifacts/teacher-data --initial-checkpoint artifacts/bc-current/best.pt --output artifacts/dagger --beta-start 0
+ghostline train --hours 24 --experiment ghostline-universal --init-checkpoint PATH_FROM_DAGGER_OUTPUT --initial-curriculum-tier 6
+```
+
+These commands reproduce the published runner lineage. Its checkpoint/evidence
+metadata retains the historical internal label `GhostlineEnv-v2`; the public
+environment id is v1.
+
+## Developmental v2 runner training
+
+Install the train extra, run a short CPU smoke with the standalone v2 runner
+entry point, then launch the long CUDA campaign only after the preflight
+manifest is frozen:
 
 ```powershell
 python -m pip install --constraint requirements.lock -e ".[train]"
 python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 
-ghostline imitate collect --output artifacts/teacher-data --episodes-per-tier 100 --overwrite
-ghostline imitate bc --dataset artifacts/teacher-data --output artifacts/bc-current
-ghostline imitate dagger --base-dataset artifacts/teacher-data --initial-checkpoint artifacts/bc-current/best.pt --output artifacts/dagger --beta-start 0
-ghostline train --hours 24 --experiment ghostline-universal --init-checkpoint PATH_FROM_DAGGER_OUTPUT --initial-curriculum-tier 6 --initial-validation-cursor 3800
+ghostline train-runner-v2 --output artifacts/runner-v2/preflight --published-v1-init models/ghostline-policy.pt --dry-run --cpu
+ghostline train-runner-v2 --output artifacts/runner-v2/smoke --allow-scratch --envs 1 --rollout 2 --epochs 1 --minibatch-envs 1 --sync-envs --validation-interval 0 --max-updates 1 --cpu
+ghostline train-runner-v2 --output artifacts/runner-v2/smoke --envs 1 --rollout 2 --epochs 1 --minibatch-envs 1 --sync-envs --validation-interval 0 --max-updates 2 --cpu --resume
+
+ghostline train-runner-v2 --output artifacts/runner-v2/ppo --published-v1-init models/ghostline-policy.pt --envs 8 --rollout 128 --epochs 4 --minibatch-envs 2 --seconds 86400
 ```
 
-Checkpoint paths may change as experiments are selected; use `ghostline
-imitate --help` and `ghostline train --help` for the current command contract.
-Training and evaluation results must remain in this project directory.
+The first command validates the complete manifest and initialization without
+starting workers. The second exercises one complete recurrent PPO update and
+checkpoint; the third proves that environment schedules, live episode state,
+observations, GRU state, optimizer state, and every RNG stream restore exactly.
+Do not start a long campaign until the 10,000-seed v2 audit and the security
+optimizer smoke both pass.
 
-## Adaptive-security training
+`--published-v1-init` is an explicit weight transplant, not checkpoint
+compatibility. It verifies the immutable v1 checkpoint, copies shape-compatible
+perception/recurrent/value weights, expands each 36-action logit across its v2
+semantic variants, leaves new field channels neutral, and records the source
+hash. The orthogonal-scratch ablation must say `--allow-scratch`;
+`--init-checkpoint` accepts only a current-fingerprint v2 policy.
+
+## Developmental v2 security training
 
 ```powershell
 python -m pip install --constraint requirements.lock -e ".[marl]"
-ghostline train-security --hours 72 --envs 8 --rollout 64 --tiers 3,4,5,6 --runner-model models/ghostline-policy.pt
-ghostline evaluate-security --model models/ghostline-security.pt --episodes-per-tier 25 --seed-start 13000000 --output benchmarks/security/adaptive-security-final-13m-25.json
-python scripts/verify_security_release_evidence.py
+
+# Pipeline smoke.
+ghostline train-security --max-steps 20 --envs 1 --rollout 3 --epochs 1 --device cpu --tiers 3
+
+# Long campaign after the preflight gate.
+ghostline train-security --dry-run --hours 72 --envs 8 --rollout 64 --tiers 3,4,5,6 --runner-model models/ghostline-policy.pt
+ghostline train-security --hours 72 --envs 8 --rollout 64 --tiers 3,4,5,6 --runner-model models/ghostline-policy.pt --runner-pool artifacts/runner-v2/ppo/best.pt
+ghostline evaluate-security --model artifacts/security-mappo/champion.pt --episodes-per-tier 500 --seed-start 14000000 --slice-manifest benchmarks/security/v2-final-test-slices.json
 ```
 
-Use `--max-steps 20 --envs 1 --rollout 3 --epochs 1 --device cpu` for a
-pipeline smoke. The production campaign should use CUDA, retain the automatic
-11M validation reports, and open the 12M final namespace only after selecting
-and freezing a champion.
+The published v1 runner may be a frozen opponent only through its explicit
+adapter. `--scripted-runner` is the easier baseline. Every security checkpoint
+binds the observation, source, generation, reward, critic, runner-opponent, and
+configuration fingerprints. A no-validation smoke ends at `last-policy.pt`;
+only held-out selection writes `champion.pt`.
+
+The pre-migration `models/ghostline-security.pt` is stale for v2. The launcher
+must reject it and use the tactical fallback until a new compatible checkpoint
+passes held-out evaluation.
 
 ## Recording, ONNX export, and Windows package
 
+The current public package continues to ship the published v1 champion:
+
 ```powershell
 python -m pip install --constraint requirements.lock -e ".[train,media,build]"
-# Run exactly once, only after validation has selected and frozen the champion.
-ghostline evaluate --model models/ghostline-policy.pt --episodes 500 --seed-start 8000000 --slice-manifest benchmarks/final-test-slices.json --output benchmarks/neural/champion-final-8m-500.json
 ghostline record --model models/ghostline-policy.pt --tier 6 --seed 2000000 --output videos/ghostline-demo.mp4
 ghostline export --model models/ghostline-policy.pt --output models/ghostline-policy.fp32.onnx --quantize --deployment-output models/ghostline-policy.onnx --parity-samples 1000
 Copy-Item models/ghostline-policy.fp32.parity.json benchmarks/neural/champion-onnx-parity.json
@@ -108,58 +163,18 @@ ghostline package --model models/ghostline-policy.onnx
 .\dist\Ghostline.exe --release-smoke-test
 ```
 
-The tracked slice manifest retains 2M-7M as historical, locked 8M before the
-first current-fingerprint episode, and permanently marked it consumed.
-Final JSON, aggregate CSV, and episode CSV evidence bind the checkpoint SHA-256,
-environment fingerprint, exact seeds, and deterministic action-sequence hashes.
-If a future champion misses acceptance, that slice remains retired; improvements must use
-validation evidence and a newly declared untouched slice.
+The ONNX metadata must still say historical `GhostlineEnv-v2` because release
+verification binds those exact bytes. Packaging maps that artifact to public
+v1 in UI and documentation. It must not relabel graph metadata.
 
-If the selected ONNX file already exists and no recording/export is needed,
-installing `.[build]` alone is sufficient for `ghostline package`.
+The FP32 export is canonical. Dynamic INT8 becomes the deployment graph only
+after at least 1,000 recurrent transitions produce zero deterministic-action
+mismatches; otherwise verified FP32 is deployed.
 
-The FP32 file is the immutable canonical export. The default INT8 candidate is
-`ghostline-policy.fp32.int8.onnx`; it is copied to the deployment path only if
-all 1,000 recurrent deterministic actions match PyTorch. If quantization fails
-or changes any action, the command copies verified FP32 instead and records the
-rejection in `ghostline-policy.fp32.parity.json`.
-
-The PyInstaller entry point is player-only. It embeds assets, ONNX Runtime, and
-the selected policy while excluding Torch, TensorBoard, recording, and trainer
-modules. Runtime art is selected exclusively from
-`assets/licenses.json:runtime_distribution.files`; portfolio screenshots,
-source drafts, web derivatives, and retired key art cannot enter the player by
-recursive discovery. The asset manifest and `THIRD_PARTY_NOTICES.md` are
-embedded with the MIT terms.
-
-Before PyInstaller runs, portfolio packaging applies the same complete tensor,
-dtype, output, `GhostlineEnv-v2`, recurrent-width, and frozen-fingerprint gate
-as the web builder. It then requires a sibling export parity report whose
-audited artifact SHA-256 is the exact ONNX file being packaged, whose source
-checkpoint SHA-256 is present, and whose recurrent audit contains at least
-1,000 transitions, all six tiers, 128-step sequences, and zero action
-mismatches. Merely renaming an arbitrary ONNX file cannot pass this gate.
-
-Packaging now fails closed in four stages: validate release inputs and the
-declared runtime-asset set, inspect the completed PyInstaller archive for
-training/media packages, launch the packaged executable's headless simulation
-and policy smoke test, then emit the release documents. The schema-3
-`dist/Ghostline.manifest.json` hashes the executable, bundled policy, asset
-manifest, every runtime atlas, and every release document. It also inventories
-the package versions/licenses actually discovered in the executable and records
-the user-data/recording contract plus the source-checkpoint and recurrent-parity
-evidence for the selected policy.
-
-The release folder contains `LICENSE`, `ASSET-LICENSES.json`,
-`THIRD_PARTY_NOTICES.md`, `Ghostline.policy-parity.json`, and exact installed dependency license texts under
-`dist/licenses/`. Ghostline source and project-owned assets remain MIT; bundled
-dependencies retain their respective licenses. The one-file player records run
-telemetry to `%LOCALAPPDATA%\Ghostline\runs-v1.jsonl` and progression/settings
-to `progression-v1.json`. MP4 capture intentionally remains a source-tooling
-feature under the `media` extra and is not bundled into the player executable.
-
-`ghostline package --human-only` is a diagnostic escape hatch and is not an
-acceptable portfolio release artifact.
+The player executable contains the game, declared runtime art, ONNX Runtime,
+the verified policy, licenses, and notices. It excludes Torch, trainers,
+TensorBoard, and recording codecs. `--human-only` is diagnostic and not a
+portfolio release.
 
 ## Wheel and clean-install gate
 
@@ -169,52 +184,37 @@ python scripts/verify_source_archive.py
 python scripts/verify_clean_install.py
 ```
 
-The clean-install probe creates an isolated environment, installs only the
-base wheel, runs `pip check`, imports simulation/generation without Pygame or
-Torch side effects, steps `GhostlineEnv-v2`, and verifies that Ghostline is the
-only public console script. It then resolves the MIT license, asset manifest,
-third-party notice, environment, character/security, and diagonal-locomotion
-runtime atlases from the installed package; validates the manifest's exact
-three-file runtime declaration; verifies retired menu art is not a dependency;
-renders a hidden gameplay frame; and proves the wheel is playable outside the
-source checkout. CI repeats the same probe from the generated source archive.
-The wheel remains runtime-only. The sdist is intentionally the reproducible
-source archive: it includes the lock file, authored art and provenance,
-screenshots, benchmark evidence, wiki, release scripts/workflows, static web
-sources, and all runnable Ghostline tests. `verify_source_archive.py` audits
-that contract without extraction; the tag workflow adds `--release` so the
-final neural JSON/CSV, parity, and throughput evidence must also be present in
-the archive. The three tests coupled to the retired
-`neon_arena` implementation are excluded consistently with that package; the
-legacy source remains repository-only engineering history.
+The clean-install probe installs the base wheel in an isolated environment,
+confirms deferred Pygame/Torch imports, steps public v1 and developmental v2,
+checks `36` and `288` actions, verifies the v1 historical-contract annotation,
+renders a headless frame, and exercises the v2 tactical fallback. Player wheels
+deliberately omit the retired `models/ghostline-security.pt`; the source archive
+retains it only as immutable historical evidence.
 
-## Release workflow
+## Static web build
 
-Ordinary pull requests run the complete suite on Windows and Linux, a practical
-1,000-seed generator audit, both clean-install probes, and a human-only web
-diagnostic. The tag/manual release workflow first runs the complete suite,
-10,000-seed audit, benchmark-harness smoke, source-archive audit, and
-`verify_release_evidence.py`. The evidence gate requires the exact selected
-checkpoint and ONNX graph, 3,000 canonical 8M episode records, all thresholds,
-1,000-transition recurrent parity, a recorded tier-6 throughput of at least
-3,000 decisions/second, and the selected MP4 demo. The measured WSL2 result is
-3,194 decisions/second; the earlier 5,000/s target remains a documented
-optimization limitation. Windows and web builds cannot
-start until that job passes. A `v*` tag creates a GitHub Release containing the
-Windows and web archives, wheel, sdist, checkpoint, deployment ONNX, model card,
-final JSON/CSV evidence, parity/throughput audits, and demo video; manual
-dispatch builds the same artifacts without publishing.
+```powershell
+# Human-only diagnostic.
+python scripts/build_web.py --human-only
 
-## Refreshing the dependency lock
+# Published v1 portfolio build.
+python scripts/build_web.py --model models/ghostline-policy.onnx
+```
 
-After deliberately updating direct pins in `pyproject.toml`, regenerate the
-single reviewed constraints file under Python 3.13:
+The runtime stage includes the exact v1 wrapper plus v2 config, types,
+generation, simulation, and environment modules. The browser shell labels the
+contracts v1/v2 and blocks policy takeover on v2. Interactive QA uses Chrome
+only.
+
+## Dependency lock
+
+After deliberately changing direct pins in `pyproject.toml`:
 
 ```powershell
 python -m piptools compile --extra=agent --extra=build --extra=dev --extra=media --extra=train --extra=web --output-file=requirements.lock --strip-extras pyproject.toml
 python -m pip check
 ```
 
-Do not update the lock opportunistically during a long training run. Stop the
-run, update and smoke-test the environment, then resume only from a compatible
-checkpoint.
+Never change dependencies during a long run. Stop, update the lock, run every
+smoke gate, and resume only from a checkpoint whose full contract still
+matches.

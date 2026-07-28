@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Mapping
 
@@ -8,16 +9,39 @@ import numpy as np
 import torch
 from torch import nn
 
-from ghostline.config_v3 import SECURITY_CENTRAL_STATE_SIZE, SECURITY_TARGET_FEATURES
+from ghostline.config_v2 import (
+    MAX_SECURITY_TARGETS,
+    SECURITY_CENTRAL_STATE_SIZE,
+    SECURITY_TARGET_FEATURES,
+)
+from ghostline.types_v2 import RadioMessage, SecurityIntent
 
 
-SECURITY_OBSERVATION_CONTRACT = "GhostlineSecurityParallel-v0"
+SECURITY_OBSERVATION_CONTRACT = "GhostlineSecurityParallel-v2"
 SECURITY_ACTION_FACTORS = ("intent", "target", "message", "ability")
-SECURITY_ACTION_SIZES = (8, 8, 5, 2)
+SECURITY_ACTION_SIZES = (
+    len(SecurityIntent),
+    MAX_SECURITY_TARGETS,
+    len(RadioMessage),
+    2,
+)
 SECURITY_MASK_KEYS = ("intent_mask", "target_mask", "message_mask", "ability_mask")
-SECURITY_MODEL_CONTRACT_VERSION = "shared-security-actor-critic-v3"
-_RELEASE_CANONICAL_SOURCE_SHA256 = "2525da27f6983965f9abf9e54ae934f4e915d6008d8cd7abca0145fa96d7c96c"
-_RELEASE_ENVIRONMENT_FINGERPRINT = "96275bac09bd6fb321510e1bd23d0e025d157b4cdeeb919aded9bb38b850721b"
+SECURITY_CONDITIONAL_MASK_KEY = "intent_target_mask"
+SECURITY_MODEL_CONTRACT_VERSION = "shared-security-actor-critic-v4"
+SECURITY_FINGERPRINT_FILES = (
+    "config.py",
+    "config_v2.py",
+    "types.py",
+    "types_v2.py",
+    "generation.py",
+    "generation_v2.py",
+    "simulation.py",
+    "simulation_v2.py",
+    "security_baselines.py",
+    "security_env.py",
+    "security_model.py",
+    "security_types.py",
+)
 
 
 def _canonical_security_source_digest(root: Path | None = None) -> str:
@@ -25,36 +49,19 @@ def _canonical_security_source_digest(root: Path | None = None) -> str:
 
     root = Path(__file__).resolve().parent if root is None else Path(root)
     digest = hashlib.sha256()
-    for name in (
-        "config_v3.py",
-        "types_v3.py",
-        "simulation_v3.py",
-        "security_baselines.py",
-        "security_env.py",
-    ):
+    for name in SECURITY_FINGERPRINT_FILES:
         path = root / name
         digest.update(name.encode("utf-8"))
-        digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
+        payload = path.read_bytes().replace(b"\r\n", b"\n") if path.is_file() else b"<missing>"
+        digest.update(payload)
     digest.update(f"security-model-contract:{SECURITY_MODEL_CONTRACT_VERSION}".encode("utf-8"))
     return digest.hexdigest()
 
 
 def security_environment_fingerprint() -> str:
-    """Return the exact, cross-platform public security contract identity.
+    """Hash inherited and v2 mechanics, generation, reward, and model sources."""
 
-    The first released checkpoint used a raw-source fingerprint on an LF
-    checkout. The canonical payload anchor below maps that exact environment
-    back to its audited identity on LF and CRLF systems. Any mechanics,
-    observation, reward, tactical-teacher, or explicit model-contract change
-    falls through to a new digest and invalidates stale checkpoints.
-    """
-
-    canonical = _canonical_security_source_digest()
-    return (
-        _RELEASE_ENVIRONMENT_FINGERPRINT
-        if canonical == _RELEASE_CANONICAL_SOURCE_SHA256
-        else canonical
-    )
+    return _canonical_security_source_digest()
 
 
 def orthogonal_(module: nn.Module, gain: float) -> nn.Module:
@@ -85,17 +92,22 @@ class MaskedSecuritySetEncoder(nn.Module):
         )
         self.score = orthogonal_(nn.Linear(hidden, 1), 1.0)
 
-    def forward(self, values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        encoded = self.item(values.float())
+    def encode_items(self, values: torch.Tensor) -> torch.Tensor:
+        return self.item(values.float())
+
+    def pool(self, encoded: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         valid = mask > 0
         logits = self.score(encoded).squeeze(-1).masked_fill(~valid, -1e9)
         weights = torch.softmax(logits, dim=-1) * valid.float()
         weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-6)
         return torch.sum(encoded * weights.unsqueeze(-1), dim=-2)
 
+    def forward(self, values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        return self.pool(self.encode_items(values), mask)
+
 
 class SharedSecurityActorCritic(nn.Module):
-    """Parameter-shared recurrent operative actor with a CTDE team critic."""
+    """Decentralized recurrent actor with an agent-specific CTDE critic."""
 
     def __init__(self, *, recurrent_size: int = 256):
         super().__init__()
@@ -132,27 +144,45 @@ class SharedSecurityActorCritic(nn.Module):
         self.actor_core = nn.GRU(320, self.recurrent_size, batch_first=True)
         for name, parameter in self.actor_core.named_parameters():
             if "weight" in name:
-                nn.init.orthogonal_(parameter, gain=1.0)
+                # PyTorch concatenates reset/update/new gates on axis zero.
+                # Initialize each gate independently; applying one orthogonal
+                # transform to the concatenated matrix couples their bases.
+                for gate in parameter.chunk(3, dim=0):
+                    nn.init.orthogonal_(gate, gain=1.0)
             else:
                 nn.init.constant_(parameter, 0.0)
         self.actor_decoder = nn.Sequential(orthogonal_(nn.Linear(self.recurrent_size, 192), 2.0 ** 0.5), nn.ELU())
         # Near-zero action heads start each operative close to uniform over
         # its legal factorised actions.
         self.intent_head = orthogonal_(nn.Linear(192, SECURITY_ACTION_SIZES[0]), 0.01)
-        self.target_head = orthogonal_(nn.Linear(192, SECURITY_ACTION_SIZES[1]), 0.01)
+        # Targets are a variable semantic set. A learned pointer preserves each
+        # slot's geometry and kind; pooling them and predicting a fixed index
+        # loses the very row the target factor is meant to select.
+        self.target_query = orthogonal_(nn.Linear(192, 48), 0.01)
         self.message_head = orthogonal_(nn.Linear(192, SECURITY_ACTION_SIZES[2]), 0.01)
         self.ability_head = orthogonal_(nn.Linear(192, SECURITY_ACTION_SIZES[3]), 0.01)
 
-        # Centralized training-only critic.  No actor method reads this state.
-        # LayerNorm on the critic trunk: value targets span the +/-20 terminal
-        # plus dense shaping, and an unnormalised trunk learns that range slowly.
-        self.critic = nn.Sequential(
-            orthogonal_(nn.Linear(SECURITY_CENTRAL_STATE_SIZE, 256), 2.0 ** 0.5),
+        # Centralized training-only critic. Operative blocks use a shared
+        # encoder and masked pooling, making the joint representation
+        # permutation equivariant. Each V_i receives its own encoded block,
+        # team context, and the unordered facility context. Actor methods never
+        # read this privileged state.
+        self.critic_agent = nn.Sequential(
+            orthogonal_(nn.Linear(8, 64), 2.0 ** 0.5),
             nn.ELU(),
-            nn.LayerNorm(256),
-            orthogonal_(nn.Linear(256, 256), 2.0 ** 0.5),
+            orthogonal_(nn.Linear(64, 64), 2.0 ** 0.5),
             nn.ELU(),
-            orthogonal_(nn.Linear(256, 1), 1.0),
+        )
+        critic_global_size = SECURITY_CENTRAL_STATE_SIZE - 5 * 8 - 5
+        self.critic_global = nn.Sequential(
+            orthogonal_(nn.Linear(critic_global_size, 128), 2.0 ** 0.5),
+            nn.ELU(),
+            nn.LayerNorm(128),
+        )
+        self.critic_head = nn.Sequential(
+            orthogonal_(nn.Linear(128 + 64 + 64, 192), 2.0 ** 0.5),
+            nn.ELU(),
+            orthogonal_(nn.Linear(192, 1), 1.0),
         )
 
     def encode_actor(self, observation: Mapping[str, torch.Tensor]) -> torch.Tensor:
@@ -171,8 +201,9 @@ class SharedSecurityActorCritic(nn.Module):
         # guard keeps padded inactive agents numerically safe during training.
         empty = ~valid.any(dim=-1)
         if empty.any():
-            valid = valid.clone()
-            valid[empty, 0] = True
+            fallback = torch.zeros_like(valid)
+            fallback[..., 0] = True
+            valid = torch.where(empty.unsqueeze(-1), fallback, valid)
         return logits.masked_fill(~valid, -1e9)
 
     def _heads(
@@ -181,9 +212,15 @@ class SharedSecurityActorCritic(nn.Module):
         observation: Mapping[str, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         decoded = self.actor_decoder(latent)
+        target_items = self.target_encoder.encode_items(observation["targets"])
+        target_query = self.target_query(decoded)
+        target_logits = torch.sum(
+            target_items * target_query.unsqueeze(-2),
+            dim=-1,
+        ) / float(target_items.shape[-1]) ** 0.5
         raw = (
             self.intent_head(decoded),
-            self.target_head(decoded),
+            target_logits,
             self.message_head(decoded),
             self.ability_head(decoded),
         )
@@ -229,7 +266,33 @@ class SharedSecurityActorCritic(nn.Module):
         return self._heads(latent, observation), next_hidden
 
     def value(self, central_state: torch.Tensor) -> torch.Tensor:
-        return self.critic(central_state.float()).squeeze(-1)
+        """Return one centralized value per operative slot.
+
+        ``central_state`` may be ``[batch, state]`` or time-major
+        ``[time, batch, state]``. The result appends an operative dimension of
+        length five. Inactive values are harmless and are excluded by the
+        trainer's explicit active mask.
+        """
+
+        state = central_state.float()
+        if state.shape[-1] != SECURITY_CENTRAL_STATE_SIZE:
+            raise ValueError(
+                f"expected central state width {SECURITY_CENTRAL_STATE_SIZE}, "
+                f"got {state.shape[-1]}"
+            )
+        mission = state[..., :12]
+        agents = state[..., 12 : 12 + 5 * 8].reshape(*state.shape[:-1], 5, 8)
+        facility = state[..., 12 + 5 * 8 : -5]
+        presence = state[..., -5:] > 0.0
+        encoded_agents = self.critic_agent(agents)
+        weights = presence.float().unsqueeze(-1)
+        team = (encoded_agents * weights).sum(dim=-2) / weights.sum(dim=-2).clamp_min(1.0)
+        global_context = self.critic_global(torch.cat((mission, facility), dim=-1))
+        global_context = global_context.unsqueeze(-2).expand(*encoded_agents.shape[:-1], 128)
+        team = team.unsqueeze(-2).expand_as(encoded_agents)
+        return self.critic_head(
+            torch.cat((global_context, team, encoded_agents), dim=-1)
+        ).squeeze(-1)
 
     @torch.no_grad()
     def act(
@@ -245,22 +308,95 @@ class SharedSecurityActorCritic(nn.Module):
             for key, value in observation.items()
         }
         logits, next_hidden = self.forward_actor(tensors, hidden)
-        if deterministic:
-            action = [int(torch.argmax(head, dim=-1).item()) for head in logits]
-        else:
-            action = [int(torch.distributions.Categorical(logits=head).sample().item()) for head in logits]
-        return np.asarray(action, dtype=np.int64), next_hidden
+        action = select_factorized_actions(
+            logits,
+            tensors[SECURITY_CONDITIONAL_MASK_KEY],
+            deterministic=deterministic,
+        )
+        return action[0].cpu().numpy().astype(np.int64), next_hidden
+
+
+def _conditional_target_logits(
+    target_logits: torch.Tensor,
+    intents: torch.Tensor,
+    intent_target_mask: torch.Tensor,
+) -> torch.Tensor:
+    target_count = target_logits.shape[-1]
+    selected_mask = torch.gather(
+        intent_target_mask,
+        dim=-2,
+        index=intents.unsqueeze(-1).unsqueeze(-1).expand(
+            *intents.shape,
+            1,
+            target_count,
+        ),
+    ).squeeze(-2)
+    valid = selected_mask > 0
+    empty = ~valid.any(dim=-1)
+    if empty.any():
+        fallback = torch.zeros_like(valid)
+        fallback[..., 0] = True
+        valid = torch.where(empty.unsqueeze(-1), fallback, valid)
+    return target_logits.masked_fill(~valid, -1e9)
+
+
+def select_factorized_actions(
+    logits: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+    intent_target_mask: torch.Tensor,
+    *,
+    deterministic: bool,
+) -> torch.Tensor:
+    """Sample intent first, then a target legal for that intent."""
+
+    intent_distribution = torch.distributions.Categorical(logits=logits[0])
+    intents = (
+        torch.argmax(logits[0], dim=-1)
+        if deterministic
+        else intent_distribution.sample()
+    )
+    conditional_targets = _conditional_target_logits(
+        logits[1],
+        intents,
+        intent_target_mask,
+    )
+    target_distribution = torch.distributions.Categorical(logits=conditional_targets)
+    targets = (
+        torch.argmax(conditional_targets, dim=-1)
+        if deterministic
+        else target_distribution.sample()
+    )
+    remaining = [
+        torch.argmax(head, dim=-1)
+        if deterministic
+        else torch.distributions.Categorical(logits=head).sample()
+        for head in logits[2:]
+    ]
+    return torch.stack((intents, targets, *remaining), dim=-1)
 
 
 def factorized_log_prob(
     logits: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
     actions: torch.Tensor,
+    intent_target_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return summed log probability and entropy for the semantic action."""
+    """Return the autoregressive semantic log probability and entropy."""
 
     log_probability = torch.zeros(actions.shape[:-1], dtype=torch.float32, device=actions.device)
     entropy = torch.zeros_like(log_probability)
-    for index, head in enumerate(logits):
+    intent_distribution = torch.distributions.Categorical(logits=logits[0])
+    log_probability = log_probability + intent_distribution.log_prob(actions[..., 0])
+    entropy = entropy + intent_distribution.entropy()
+    target_logits = logits[1]
+    if intent_target_mask is not None:
+        target_logits = _conditional_target_logits(
+            target_logits,
+            actions[..., 0],
+            intent_target_mask,
+        )
+    target_distribution = torch.distributions.Categorical(logits=target_logits)
+    log_probability = log_probability + target_distribution.log_prob(actions[..., 1])
+    entropy = entropy + target_distribution.entropy()
+    for index, head in enumerate(logits[2:], start=2):
         distribution = torch.distributions.Categorical(logits=head)
         log_probability = log_probability + distribution.log_prob(actions[..., index])
         entropy = entropy + distribution.entropy()
@@ -270,16 +406,20 @@ def factorized_log_prob(
 def save_security_policy(policy: SharedSecurityActorCritic, path: Path, **metadata: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fingerprint = security_environment_fingerprint()
-    torch.save(
-        {
+    payload = {
             "model": policy.state_dict(),
             "recurrent_size": policy.recurrent_size,
             "observation_contract": SECURITY_OBSERVATION_CONTRACT,
             "environment_fingerprint": fingerprint,
             "metadata": metadata,
-        },
-        path,
-    )
+        }
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        torch.save(payload, temporary)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def load_security_policy(

@@ -1,3 +1,5 @@
+"""Semantic state and actions for the in-development multi-agent v2 contract."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -45,9 +47,9 @@ class SecurityIntent(IntEnum):
     FLANK_LEFT = 5
     FLANK_RIGHT = 6
     HOLD = 7
-    # Coordinated closure. PINCER assigns complementary approach arcs across the
-    # team so operatives converge from different bearings instead of stacking on
-    # one point, which a strictly slower pursuer needs in order to ever connect.
+    # Coordinated closure. PINCER sends operatives to policy-selected public
+    # doorway cutoffs so a slower team can cover multiple escape routes without
+    # receiving the runner's hidden objective or heading.
     PINCER = 8
     SEAL = 9
 
@@ -66,12 +68,12 @@ class RadioMessage(IntEnum):
 # Entering a vent and hacking a device are never both legal on the same tile, so
 # a single code keeps the action space at 288 instead of 576 and keeps the mask
 # doing the disambiguation the simulation already has to do anyway.
-RUNNER_ACTION_COUNT_V3 = 288
+RUNNER_ACTION_COUNT_V2 = 288
 
 
 @dataclass(frozen=True)
-class RunnerActionV3:
-    """Env-v3 action: 9 movement x dash x pulse x decoy x crouch."""
+class RunnerActionV2:
+    """V2 action: 9 movement x dash x pulse x decoy x crouch x interact."""
 
     move: int = 0
     dash: bool = False
@@ -81,8 +83,8 @@ class RunnerActionV3:
     interact: bool = False
 
     @classmethod
-    def decode(cls, value: int) -> "RunnerActionV3":
-        value = int(np.clip(value, 0, RUNNER_ACTION_COUNT_V3 - 1))
+    def decode(cls, value: int) -> "RunnerActionV2":
+        value = max(0, min(int(value), RUNNER_ACTION_COUNT_V2 - 1))
         return cls(
             move=value % 9,
             dash=bool((value // 9) % 2),
@@ -185,6 +187,9 @@ class HackableDevice:
     tile: tuple[int, int]
     position: np.ndarray
     target_id: int = -1
+    # Door panels bind to one authored security-door tile.  ``target_id`` is
+    # retained for camera and room-light systems.
+    target_tile: tuple[int, int] | None = None
     hacked_for: float = 0.0
     cooldown: float = 0.0
 

@@ -24,20 +24,35 @@ OBSERVATION_CONTRACT = "GhostlineEnv-v2"
 ACTION_REPEAT_TICKS = 6
 
 
-def run_worker(worker: int, decisions: int, tier: int) -> tuple[float, int]:
+def run_worker(
+    worker: int,
+    decisions: int,
+    tier: int,
+    adaptive: bool = False,
+) -> tuple[float, int]:
     """Run one independent deterministic random-action workload."""
 
-    env = GhostlineEnv(seed=worker, tier=tier)
-    env.reset(seed=worker)
+    if adaptive:
+        from ghostline.env_v2 import GhostlineEnvV2
+
+        env = GhostlineEnvV2(seed=worker, tier=tier)
+    else:
+        env = GhostlineEnv(seed=worker, tier=tier)
+    observation, _ = env.reset(seed=worker)
     rng = np.random.default_rng(9_173 + worker)
     resets = 0
     started = time.perf_counter()
     try:
         for _ in range(decisions):
-            _, _, terminated, truncated, _ = env.step(int(rng.integers(0, 36)))
+            if adaptive:
+                legal = np.flatnonzero(observation["action_mask"])
+                action = int(legal[int(rng.integers(0, len(legal)))])
+            else:
+                action = int(rng.integers(0, 36))
+            observation, _, terminated, truncated, _ = env.step(action)
             if terminated or truncated:
                 resets += 1
-                env.reset()
+                observation, _ = env.reset()
     finally:
         env.close()
     return time.perf_counter() - started, resets
@@ -52,6 +67,9 @@ def _build_report(
     results: Sequence[tuple[float, int]],
     minimum_decisions_per_second: float,
     fingerprint: str,
+    report_contract: str = REPORT_CONTRACT,
+    observation_contract: str = OBSERVATION_CONTRACT,
+    action_count: int = 36,
 ) -> dict[str, object]:
     """Build the machine-readable report from raw worker timings."""
 
@@ -70,9 +88,10 @@ def _build_report(
     aggregate_rate = total / wall_elapsed
     worker_rates = [decisions / elapsed for elapsed, _ in results]
     return {
-        "report_contract": REPORT_CONTRACT,
-        "observation_contract": OBSERVATION_CONTRACT,
+        "report_contract": report_contract,
+        "observation_contract": observation_contract,
         "environment_fingerprint": fingerprint,
+        "action_count": action_count,
         "tier": tier,
         "action_repeat_ticks": ACTION_REPEAT_TICKS,
         "decisions_per_worker": decisions,
@@ -103,6 +122,7 @@ def run_benchmark(
     tier: int,
     workers: int,
     minimum_decisions_per_second: float = 0.0,
+    adaptive: bool = False,
 ) -> dict[str, object]:
     """Execute the benchmark and return its provenance-bound report."""
 
@@ -117,7 +137,7 @@ def run_benchmark(
     workers = min(workers, os.cpu_count() or workers)
     wall_started = time.perf_counter()
     if workers == 1:
-        results = [run_worker(0, decisions, tier)]
+        results = [run_worker(0, decisions, tier, adaptive)]
     else:
         with ProcessPoolExecutor(max_workers=workers) as pool:
             results = list(
@@ -126,9 +146,24 @@ def run_benchmark(
                     range(workers),
                     [decisions] * workers,
                     [tier] * workers,
+                    [adaptive] * workers,
                 )
             )
     wall_elapsed = time.perf_counter() - wall_started
+    if adaptive:
+        from ghostline.model_v2 import multi_agent_environment_fingerprint
+
+        fingerprint = multi_agent_environment_fingerprint(
+            ROOT / "src" / "ghostline"
+        )
+        report_contract = "ghostline-headless-throughput-v2"
+        observation_contract = "GhostlineEnv-v2"
+        action_count = 288
+    else:
+        fingerprint = environment_fingerprint(ROOT / "src" / "ghostline")
+        report_contract = REPORT_CONTRACT
+        observation_contract = OBSERVATION_CONTRACT
+        action_count = 36
     return _build_report(
         decisions=decisions,
         tier=tier,
@@ -136,7 +171,10 @@ def run_benchmark(
         wall_elapsed=wall_elapsed,
         results=results,
         minimum_decisions_per_second=minimum_decisions_per_second,
-        fingerprint=environment_fingerprint(ROOT / "src" / "ghostline"),
+        fingerprint=fingerprint,
+        report_contract=report_contract,
+        observation_contract=observation_contract,
+        action_count=action_count,
     )
 
 
@@ -148,6 +186,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--decisions", type=int, default=2_000, help="Decisions per worker")
     parser.add_argument("--tier", type=int, choices=range(1, 7), default=6)
+    parser.add_argument(
+        "--adaptive",
+        action="store_true",
+        help="benchmark the developmental 288-action v2 environment",
+    )
     parser.add_argument(
         "--workers",
         type=int,
@@ -168,6 +211,7 @@ def main() -> None:
             tier=args.tier,
             workers=args.workers,
             minimum_decisions_per_second=args.minimum_decisions_per_second,
+            adaptive=args.adaptive,
         )
     except ValueError as error:
         parser.error(str(error))

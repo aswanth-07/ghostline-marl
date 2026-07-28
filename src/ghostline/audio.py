@@ -198,12 +198,24 @@ class AudioDirector:
             "suppressor_aim": "alert",
             "suppressor_fire": "damage",
             "projectile_impact": "damage",
+            "vent_enter": "dash",
+            "vent_exit": "focus",
+            "hack_camera": "complete",
+            "hack_door": "pulse",
+            "hack_lights": "complete",
+            "sensor_deployed": "confirm",
+            "sensor_trip": "alert",
         }
         for event in events:
             key = mapping.get(event.kind)
             if key and key in self.sounds:
                 now = time.monotonic()
-                cooldown = {"hack": 0.16, "alert": 0.28, "damage": 0.25, "dash": 0.08}.get(key, 0.02)
+                cooldown = {
+                    "hack": 0.16,
+                    "alert": 0.28,
+                    "damage": 0.25,
+                    "dash": 0.08,
+                }.get(key, 0.02)
                 if now - self._last_played.get(key, -math.inf) >= cooldown:
                     self._play(key)
                     self._last_played[key] = now

@@ -41,10 +41,23 @@ function formatMetric(value, suffix = "") {
 
 function renderComparison() {
   const snapshot = matchedRunSnapshot(runHistory);
+  const contractMismatch = Boolean(
+    runHistory.human
+    && runHistory.agent
+    && runHistory.human.contract !== runHistory.agent.contract
+  );
+  const comparison = contractMismatch
+    ? {
+        ...snapshot,
+        matched: false,
+        state: "refused",
+        message: "Contract versions differ. Compare runs from the same public environment.",
+      }
+    : snapshot;
   const status = $("match-status");
   if (status) {
-    status.dataset.state = snapshot.state;
-    status.textContent = snapshot.message;
+    status.dataset.state = comparison.state;
+    status.textContent = comparison.message;
   }
   for (const mode of ["human", "agent"]) {
     const record = runHistory[mode];
@@ -54,7 +67,7 @@ function renderComparison() {
       root.innerHTML = '<span class="empty-metric">No completed run yet</span>';
       continue;
     }
-    if (!snapshot.matched && runHistory.human && runHistory.agent) {
+    if (!comparison.matched && runHistory.human && runHistory.agent) {
       root.innerHTML = `
         <strong class="metric-result refused">NOT COMPARED</strong>
         <span>T${record.tier} / seed ${record.seed}</span>
@@ -191,9 +204,9 @@ function updateMetrics(serialized) {
   $("live-time").textContent = `${Number(metrics.time).toFixed(1)}s`;
   $("live-trace").textContent = `${Number(metrics.trace).toFixed(0)}%`;
   $("live-damage").textContent = formatMetric(metrics.damage);
-  $("live-contract").textContent = metrics.contract === "GhostlineEnv-v3"
-    ? `ADAPTIVE // ${String(metrics.directive || "standard").toUpperCase()}`
-    : "CLASSIC // ENV-v2";
+  $("live-contract").textContent = metrics.contract === "GhostlineEnv-v2"
+    ? `MULTI-AGENT v2 // ${String(metrics.directive || "standard").toUpperCase()}`
+    : "PUBLISHED // ENV-v1";
   if (lastStatus === "active" && metrics.status !== "active") {
     embedBridge.publishRunComplete(metrics);
     // Pin the completed contract into the launcher so the other controller's
@@ -228,8 +241,8 @@ async function requestAgentControl({ fresh = false } = {}) {
   // recurrent policy, not roll directly into its known procedural failure
   // tail. Live mid-contract handoffs still preserve the active human seed.
   const activeContract = currentMetrics?.status === "active" && Number(currentMetrics?.time || 0) > 0;
-  if (activeContract && currentMetrics?.contract === "GhostlineEnv-v3") {
-    showNotice("The published runner policy uses the frozen Classic contract. Finish this Adaptive run or launch Classic before takeover.", "info");
+  if (activeContract && currentMetrics?.contract === "GhostlineEnv-v2") {
+    showNotice("The published runner policy uses the frozen single-agent v1 contract. Finish this v2 run or launch the published game before takeover.", "info");
     return;
   }
   if (!activeContract && seed() === null && $("seed-input")) {

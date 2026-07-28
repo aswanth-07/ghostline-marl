@@ -7,19 +7,49 @@ Ghostline's browser release is a static Pygbag 0.9.3 build. The deterministic Py
 - `web/main.py` starts the same `GameApp` through its cooperative async loop.
 - `web/runtime.py` is the only Python adapter. It exposes tier/seed launch, current-run agent takeover, exact portfolio-run replay, return-to-human control, touch-device detection, and player-equivalent observation serialization. It queues inference from the exact state at each 10 Hz boundary; if a browser result misses the next render frame, simulation time waits instead of advancing with a fabricated neutral action.
 - `web/static/policy-bridge.mjs` owns asynchronous inference, legal-action enforcement, persistent GRU state, latency telemetry, and backend selection. Threaded WASM is the measured release default for this compact recurrent graph; `?backend=webgpu` retains the WebGPU comparison path with automatic WASM fallback.
-- `web/static/matched-runs.mjs` admits comparison cards only when both completed runs have the exact same tier and seed. Mismatched contracts are displayed as `NOT COMPARED` with an explicit refusal reason.
+- `web/static/matched-runs.mjs` admits comparison cards only when both completed
+  runs have the exact same tier and seed; the shell additionally requires the
+  same public environment version. A v2 human run is never compared with the
+  published-v1 takeover policy. Refused comparisons display `NOT COMPARED`
+  with an explicit reason.
 - `web/static/embed-bridge.mjs` owns the versioned, origin-scoped portfolio message contract. It never accepts gameplay commands from the parent page.
 - `web/ghostline.tmpl` and `web/static/ghostline.css` provide the responsive loading, focus, fullscreen, Agent Lab, and human-versus-agent shell.
-- `scripts/build_web.py` SHA-256-locks and self-hosts Pygbag's 0.9.3 CPython 3.12 runtime, locks and verifies the ONNX Runtime and BrowserFS npm tarballs, validates the selected model's ONNX input/output shapes and dtypes plus its v2 environment-source fingerprint, derives the GRU width instead of assuming it, generates content-addressed model filenames, invokes Pygbag, and writes `bundle-report.json`.
+- `scripts/build_web.py` SHA-256-locks and self-hosts Pygbag's 0.9.3
+  CPython 3.12 runtime, locks and verifies the ONNX Runtime and BrowserFS npm
+  tarballs, validates the selected published-v1 model's input/output shapes,
+  dtypes, and historical internal-v2 environment fingerprint, derives the GRU
+  width instead of assuming it, generates content-addressed model filenames,
+  invokes Pygbag, and writes `bundle-report.json`.
 - `.vercelignore` excludes local virtual environments, training artifacts, evidence ledgers, QA output, caches, and desktop packages from the remote build upload. Vercel receives only the locked build inputs, selected deployment model, runtime source/assets, license documents, and web shell.
 - `vercel.json` explicitly selects the `Other` framework preset (`framework: null`) and disables Vercel's inferred install phase. This prevents the repository's packaging `pyproject.toml` from being mistaken for a Python Function; the locked custom build command remains the only install/build authority.
 - The custom command creates `.vercel-venv` and installs through that isolated interpreter. Vercel's uv-managed Python image enforces PEP 668, so the release never mutates the system environment or uses `--break-system-packages`.
-- The Pygbag archive is assembled from an explicit twelve-module game-runtime allowlist and the exact three runtime atlases declared by `assets/licenses.json`. Training, evaluation, export, packaging, recording, screenshots, source drafts, retired key art, and unused web derivatives are never copied into the browser stage.
+- The Pygbag archive is assembled from an explicit runtime-module allowlist,
+  including the public v1 adapter and the v2 config, types, generation,
+  simulation, and environment modules, plus the exact three runtime atlases
+  declared by `assets/licenses.json`. Training, evaluation, export, packaging,
+  recording, screenshots, source drafts, retired key art, and unused web
+  derivatives are never copied into the browser stage.
 
 The model is never fetched on ordinary human play. ONNX Runtime and the content-addressed model are requested only after `AGENT TAKEOVER`, `REPLAY PORTFOLIO AGENT RUN`, or `?autoplay=1`. The replay action always starts a fresh tier-6 seed-2,000,000 run, while ordinary takeover preserves an already active human contract.
 Campaign progression and settings use the desktop JSON contract inside the Python runtime and are mirrored to browser `localStorage`, so refreshes retain unlocked tiers without introducing a second save schema. Storage denial in a restricted iframe falls back to a fresh in-memory profile.
 
-Coarse-pointer phones enable the in-canvas movement stick, dash, pulse, and pause contacts before the first mission frame; a hybrid touch laptop that still reports a fine primary pointer remains in the desktop layout. The canvas uses `touch-action: none` so browser panning cannot steal a held direction; HTML contract controls remain native pointer/touch targets. Mouse and touch selection inside the Pygame menus is mapped through the same letterbox transform used for rendering. Portrait phones receive an explicit rotate-to-landscape readability gate rather than a silently compressed playfield. Landscape uses dynamic viewport height and safe-area insets, offers fullscreen from the launch gesture, and contains the fixed 16:9 framebuffer instead of stretching it to the phone's physical aspect ratio. Because phones downsample the 1280x720 backing canvas into a smaller CSS viewport, they select browser-quality interpolation instead of nearest-neighbour CSS downscaling; desktop retains the crisp pixel presentation. Contract and telemetry controls remain in a dismissible `RUN SETUP` drawer that behaves as a modal while open, makes the background inert, and restores focus to the initiating control or game canvas when it closes.
+Coarse-pointer phones enable the in-canvas movement stick, dash, pulse, pause,
+v2 sneak, decoy, and context-use contacts before the first mission frame; a
+hybrid touch laptop that still reports a fine primary pointer remains in the
+desktop layout. The canvas uses `touch-action: none` so browser panning cannot
+steal a held direction; HTML contract controls remain native pointer/touch
+targets. Mouse and touch selection inside the Pygame menus is mapped through
+the same letterbox transform used for rendering. Portrait phones receive an
+explicit rotate-to-landscape readability gate rather than a silently compressed
+playfield. Landscape uses dynamic viewport height and safe-area insets, offers
+fullscreen from the launch gesture, and contains the fixed 16:9 framebuffer
+instead of stretching it to the phone's physical aspect ratio. Because phones
+downsample the 1280x720 backing canvas into a smaller CSS viewport, they select
+browser-quality interpolation instead of nearest-neighbour CSS downscaling;
+desktop retains the crisp pixel presentation. Contract and telemetry controls
+remain in a dismissible `RUN SETUP` drawer that behaves as a modal while open,
+makes the background inert, and restores focus to the initiating control or
+game canvas when it closes.
 
 ## Portfolio embed contract
 
@@ -256,7 +286,10 @@ Recommended portfolio embed:
 ></iframe>
 ```
 
-Final publication requires a policy exported from the frozen `GhostlineEnv-v2` contract. Never substitute an older smoke checkpoint merely to make the Agent button active.
-The ONNX graph must carry `ghostline.contract=GhostlineEnv-v2` and the current
-`ghostline.environment_fingerprint`; the builder rejects stale or unlabelled
-graphs even when their tensor dimensions happen to match.
+Final publication currently requires the published-v1 policy. Its immutable
+ONNX metadata uses the historical internal contract label
+`ghostline.contract=GhostlineEnv-v2` plus the published environment
+fingerprint. The shell presents that exact graph as public v1; the builder must
+not rewrite its metadata. It rejects stale or unlabelled graphs even when their
+tensor dimensions happen to match, and it never offers that 36-action policy
+for a live developmental-v2 contract.

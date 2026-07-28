@@ -1,6 +1,6 @@
-"""Facility layout variation for the multi-agent (Env-v3) track.
+"""Facility layout variation for the multi-agent (Env-v2) track.
 
-`generation.py` is hashed into the frozen `GhostlineEnv-v2` contract, so it is
+`generation.py` is hashed into the published `GhostlineEnv-v1` contract, so it is
 never touched here. This module takes a fully generated, already valid level and
 reshapes its geometry: uniform 11x9 boxes become rooms with alcoves, recessed
 corners, interior partitions and pillars, and corridors gain junctions and
@@ -26,10 +26,12 @@ Design intent, in priority order:
 
 from __future__ import annotations
 
+from collections import deque
+
 import numpy as np
 
 from ghostline.config import TILE_SIZE
-from ghostline.config_v3 import (
+from ghostline.config_v2 import (
     HACK_DEVICES_PER_TIER,
     VENT_MIN_PAIR_DISTANCE_TILES,
     VENT_PAIRS_PER_TIER,
@@ -37,7 +39,7 @@ from ghostline.config_v3 import (
 from ghostline.generation import LevelGenerator, flood_fill, world_to_tile
 from ghostline.generation import tile_center
 from ghostline.types import GeneratedLevel, Prop, Tile
-from ghostline.types_v3 import HackableDevice, Vent
+from ghostline.types_v2 import HackableDevice, Vent
 
 # Per-tier carving budget. Later tiers are larger, so they can absorb more
 # structure before the facility starts to feel like a maze.
@@ -60,29 +62,38 @@ ROOM_ARCHETYPES = {
 }
 # Free-standing decor that never blocks: floor markings, signage, cabling.
 DECOR_BUDGET = {1: 6, 2: 9, 3: 14, 4: 18, 5: 22, 6: 28}
-DECOR_KINDS = ("floor_marking", "wall_sign", "cable_run", "vent_grate")
+DECOR_KINDS = ("floor_marking", "wall_sign", "cable_run")
+
+# Only these tiers create lockable security doors in ``simulation_v2``.
+# Keeping the table here lets generation avoid presenting an interaction that
+# cannot have an effect, without importing the simulation into content code.
+SECURITY_DOORS_PER_TIER = {1: 0, 2: 0, 3: 0, 4: 1, 5: 2, 6: 3}
+MAX_RESHAPE_ATTEMPTS = 8
 
 
-class FacilityLayoutV3(LevelGenerator):
-    """Env-v3 generator: the classic facility, reshaped for character."""
+class FacilityLayoutV2(LevelGenerator):
+    """Env-v2 generator with deterministic content-readiness validation."""
 
     def generate(self, *, seed: int, tier: int) -> GeneratedLevel:
-        base = super().generate(seed=seed, tier=tier)
-        for attempt in range(8):
+        # ``LevelGenerator.generate`` calls ``self.validate``.  V2 validation
+        # intentionally requires vents and devices, which the classic level
+        # does not have yet, so build the frozen baseline through its own
+        # generator before applying the V2 passes.
+        base = LevelGenerator().generate(seed=seed, tier=tier)
+        for attempt in range(MAX_RESHAPE_ATTEMPTS):
             rng = np.random.default_rng(
                 int(np.random.SeedSequence([seed, tier, 0x5A17, attempt]).generate_state(1)[0])
             )
             candidate = self._reshape(base, rng)
             if self.validate(candidate):
                 return candidate
-        # Variation is a presentation and tactics improvement, never a
-        # correctness requirement: an unusually tight seed keeps its original
-        # rectangular layout rather than failing to produce a level at all.
-        # The v3 attributes are still attached so consumers never branch on
-        # whether reshaping happened.
-        base.vents = []
-        base.hackable = []
-        return base
+        # Missing field systems are a contract failure, not a presentation
+        # fallback.  Failing deterministically is safer than admitting a seed
+        # whose mechanics silently differ from the training distribution.
+        raise RuntimeError(
+            f"could not generate a valid Env-v2 tier {tier} level for seed {seed} "
+            f"after {MAX_RESHAPE_ATTEMPTS} deterministic attempts"
+        )
 
     # -- geometry -----------------------------------------------------------
 
@@ -153,11 +164,13 @@ class FacilityLayoutV3(LevelGenerator):
         self._carve_room_character(level, rng, protected, blocked, start, required)
         self._add_room_archetypes(level, rng, protected, blocked, start, required)
         self._add_interior_structure(level, rng, protected, blocked, start, required)
-        self._add_decor(level, rng)
-        # Vents and hackable devices are placed last so they can only take
-        # tiles the structural passes left walkable.
-        level.vents = self._place_vents(level, rng, protected)
-        level.hackable = self._place_hackables(level, rng, protected)
+        # Every visible object, blocking or not, participates in one placement
+        # reservation contract.  Essential field systems claim their cells
+        # before flavour decor so a cosmetic pass can never hide an interaction.
+        reserved = self._occupied_tiles(level)
+        level.vents = self._place_vents(level, rng, protected, reserved)
+        level.hackable = self._place_hackables(level, rng, protected, reserved)
+        self._add_decor(level, rng, reserved)
         return level
 
     @staticmethod
@@ -399,20 +412,140 @@ class FacilityLayoutV3(LevelGenerator):
         self,
         level: GeneratedLevel,
         protected: set[tuple[int, int]],
+        reserved: set[tuple[int, int]],
     ) -> list[tuple[int, int]]:
         blocked = self._blocked_by_props(level)
+        reachable = flood_fill(level.grid, world_to_tile(level.spawn), blocked)
         return [
             (x, y)
             for y in range(1, level.grid.shape[0] - 1)
             for x in range(1, level.grid.shape[1] - 1)
-            if level.grid[y, x] == Tile.FLOOR and (x, y) not in blocked and (x, y) not in protected
+            if level.grid[y, x] == Tile.FLOOR
+            and (x, y) in reachable
+            and (x, y) not in blocked
+            and (x, y) not in protected
+            and (x, y) not in reserved
+            and self._safe_interaction_tile(level, (x, y), blocked)
         ]
+
+    @staticmethod
+    def _occupied_tiles(level: GeneratedLevel) -> set[tuple[int, int]]:
+        """All rendered prop cells, including nonblocking flavour."""
+
+        return {
+            (prop.tile_x + dx, prop.tile_y + dy)
+            for prop in level.props
+            for dx in range(prop.width)
+            for dy in range(prop.height)
+        }
+
+    @staticmethod
+    def _walkable_tile(
+        level: GeneratedLevel,
+        tile: tuple[int, int],
+        blocked: set[tuple[int, int]],
+    ) -> bool:
+        x, y = tile
+        return (
+            0 <= y < level.grid.shape[0]
+            and 0 <= x < level.grid.shape[1]
+            and tile not in blocked
+            and level.grid[y, x] != Tile.WALL
+        )
+
+    @classmethod
+    def _safe_interaction_tile(
+        cls,
+        level: GeneratedLevel,
+        tile: tuple[int, int],
+        blocked: set[tuple[int, int]],
+    ) -> bool:
+        """Require a reachable floor cell with more than one escape edge."""
+
+        if not cls._walkable_tile(level, tile, blocked):
+            return False
+        x, y = tile
+        exits = sum(
+            cls._walkable_tile(level, (x + dx, y + dy), blocked)
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+        )
+        return exits >= 2
+
+    @classmethod
+    def _distance_map(
+        cls,
+        level: GeneratedLevel,
+        start: tuple[int, int],
+        blocked: set[tuple[int, int]],
+    ) -> dict[tuple[int, int], int]:
+        """Cardinal geodesic distances over the simulation collision grid."""
+
+        distances = {start: 0}
+        pending = deque([start])
+        while pending:
+            x, y = pending.popleft()
+            distance = distances[(x, y)] + 1
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                tile = (x + dx, y + dy)
+                if tile in distances or not cls._walkable_tile(level, tile, blocked):
+                    continue
+                distances[tile] = distance
+                pending.append(tile)
+        return distances
+
+    @staticmethod
+    def _room_id_for_tile(level: GeneratedLevel, tile: tuple[int, int]) -> int | None:
+        x, y = tile
+        for room in level.rooms:
+            if room.x <= x < room.x + room.width and room.y <= y < room.y + room.height:
+                return int(room.room_id)
+        return None
+
+    @staticmethod
+    def _edge_is_redundant(level: GeneratedLevel, room_a: int, room_b: int) -> bool:
+        visited = {room_a}
+        pending = [room_a]
+        while pending:
+            room = pending.pop()
+            for neighbour in level.adjacency[room]:
+                if {room, neighbour} == {room_a, room_b}:
+                    continue
+                if neighbour not in visited:
+                    visited.add(neighbour)
+                    pending.append(neighbour)
+        return room_b in visited
+
+    @classmethod
+    def _lockable_door_indices(cls, level: GeneratedLevel) -> list[int]:
+        requested = SECURITY_DOORS_PER_TIER.get(level.tier, 0)
+        if requested <= 0:
+            return []
+        candidates = [
+            index
+            for index, door in enumerate(level.doors)
+            if cls._edge_is_redundant(level, door.room_a, door.room_b)
+        ]
+        candidates.sort(
+            key=lambda index: (
+                level.doors[index].tile[1],
+                level.doors[index].tile[0],
+                level.doors[index].room_a,
+                level.doors[index].room_b,
+            )
+        )
+        if candidates:
+            offset = int(
+                np.random.SeedSequence([level.seed, level.tier, 3001]).generate_state(1)[0]
+            ) % len(candidates)
+            candidates = candidates[offset:] + candidates[:offset]
+        return candidates[:requested]
 
     def _place_vents(
         self,
         level: GeneratedLevel,
         rng: np.random.Generator,
         protected: set[tuple[int, int]],
+        reserved: set[tuple[int, int]],
     ) -> list[Vent]:
         """Pair up maintenance ducts across distant rooms.
 
@@ -424,10 +557,16 @@ class FacilityLayoutV3(LevelGenerator):
         wanted = VENT_PAIRS_PER_TIER.get(level.tier, 2)
         if wanted <= 0:
             return []
-        candidates = self._open_tiles(level, protected)
+        blocked = self._blocked_by_props(level)
+        candidates = [
+            tile
+            for tile in self._open_tiles(level, protected, reserved)
+            if self._room_id_for_tile(level, tile) is not None
+        ]
         if len(candidates) < 4:
             return []
         rng.shuffle(candidates)
+        rank = {tile: index for index, tile in enumerate(candidates)}
         vents: list[Vent] = []
         used: set[tuple[int, int]] = set()
         for entry in candidates:
@@ -435,23 +574,28 @@ class FacilityLayoutV3(LevelGenerator):
                 break
             if entry in used:
                 continue
-            partner = next(
-                (
-                    other
-                    for other in candidates
-                    if other not in used
-                    and other != entry
-                    and abs(other[0] - entry[0]) + abs(other[1] - entry[1]) >= VENT_MIN_PAIR_DISTANCE_TILES
-                ),
-                None,
-            )
-            if partner is None:
+            entry_room = self._room_id_for_tile(level, entry)
+            distances = self._distance_map(level, entry, blocked)
+            partners = [
+                other
+                for other in candidates
+                if other not in used
+                and other != entry
+                and self._room_id_for_tile(level, other) != entry_room
+                and distances.get(other, -1) >= VENT_MIN_PAIR_DISTANCE_TILES
+            ]
+            if not partners:
                 continue
+            # Prefer the largest real route skip. Candidate shuffle order is a
+            # deterministic tie-breaker, so the same seed always gets the same
+            # network without settling for the first merely-valid endpoint.
+            partner = max(partners, key=lambda other: (distances[other], -rank[other]))
             used.update({entry, partner})
             vents.append(Vent(len(vents), entry, partner, tile_center(partner)))
             vents.append(Vent(len(vents), partner, entry, tile_center(entry)))
             level.props.append(Prop("vent_shaft", entry[0], entry[1], 1, 1, False))
             level.props.append(Prop("vent_shaft", partner[0], partner[1], 1, 1, False))
+            reserved.update({entry, partner})
         return vents
 
     def _place_hackables(
@@ -459,46 +603,86 @@ class FacilityLayoutV3(LevelGenerator):
         level: GeneratedLevel,
         rng: np.random.Generator,
         protected: set[tuple[int, int]],
+        reserved: set[tuple[int, int]],
     ) -> list[HackableDevice]:
         """Wall panels wired to a camera, a door, or the room lights."""
 
         wanted = HACK_DEVICES_PER_TIER.get(level.tier, 3)
         if wanted <= 0:
             return []
-        candidates = self._open_tiles(level, protected)
+        candidates = self._open_tiles(level, protected, reserved)
         rng.shuffle(candidates)
+        cameras_by_id = {int(camera.camera_id): camera for camera in level.cameras}
+        camera_ids = list(cameras_by_id)
+        lockable_indices = self._lockable_door_indices(level)
+        used_targets: set[tuple[str, int]] = set()
         devices: list[HackableDevice] = []
         for tile in candidates:
             if len(devices) >= wanted:
                 break
-            roll = rng.random()
-            if roll < 0.4 and level.cameras:
-                camera = level.cameras[int(rng.integers(0, len(level.cameras)))]
-                kind, target = "camera", int(camera.camera_id)
-            elif roll < 0.75 and level.doors:
-                kind, target = "door", int(rng.integers(0, len(level.doors)))
-            else:
-                # The panel darkens the room it is in. Wiring it to a random
-                # room made the hack unreadable: the player could not tell what
-                # they had just switched off.
-                room = next(
-                    (
-                        item
-                        for item in level.rooms
-                        if item.x <= tile[0] < item.x + item.width
-                        and item.y <= tile[1] < item.y + item.height
+            room_id = self._room_id_for_tile(level, tile)
+            weighted_kinds: list[str] = []
+            if camera_ids:
+                weighted_kinds.extend(("camera",) * 4)
+            if lockable_indices:
+                weighted_kinds.extend(("door",) * 3)
+            if room_id is not None:
+                weighted_kinds.extend(("lights",) * 3)
+            if not weighted_kinds:
+                continue
+            kind = weighted_kinds[int(rng.integers(0, len(weighted_kinds)))]
+            target_tile: tuple[int, int] | None = None
+            if kind == "camera":
+                ordered = sorted(
+                    camera_ids,
+                    key=lambda camera_id: (
+                        (world_to_tile(cameras_by_id[camera_id].position)[0] - tile[0]) ** 2
+                        + (world_to_tile(cameras_by_id[camera_id].position)[1] - tile[1]) ** 2,
+                        camera_id,
                     ),
-                    None,
                 )
-                if room is None:
-                    continue
-                kind, target = "lights", int(room.room_id)
-            devices.append(HackableDevice(len(devices), kind, tile, tile_center(tile), target))
+                target = next(
+                    (camera_id for camera_id in ordered if ("camera", camera_id) not in used_targets),
+                    ordered[0],
+                )
+            elif kind == "door":
+                ordered = sorted(
+                    lockable_indices,
+                    key=lambda door_index: (
+                        (level.doors[door_index].tile[0] - tile[0]) ** 2
+                        + (level.doors[door_index].tile[1] - tile[1]) ** 2,
+                        door_index,
+                    ),
+                )
+                target = next(
+                    (door_index for door_index in ordered if ("door", door_index) not in used_targets),
+                    ordered[0],
+                )
+                target_tile = level.doors[target].tile
+            else:
+                target = int(room_id)
+            used_targets.add((kind, target))
+            devices.append(
+                HackableDevice(
+                    len(devices),
+                    kind,
+                    tile,
+                    tile_center(tile),
+                    target,
+                    target_tile=target_tile,
+                )
+            )
             level.props.append(Prop("hack_panel", tile[0], tile[1], 1, 1, False))
+            reserved.add(tile)
         return devices
 
-    def _add_decor(self, level: GeneratedLevel, rng: np.random.Generator) -> None:
-        """Add non-blocking flavour: floor markings, signage, cabling, vents.
+    def _add_decor(
+        self,
+        level: GeneratedLevel,
+        rng: np.random.Generator,
+        reserved: set[tuple[int, int]],
+    ) -> None:
+        """Add non-blocking flavour: floor markings, signage, and cabling.
 
         Decor never blocks movement or sight, so it cannot affect navigation,
         detection or any policy observation. It exists purely so a room reads as
@@ -506,26 +690,148 @@ class FacilityLayoutV3(LevelGenerator):
         """
 
         budget = DECOR_BUDGET.get(level.tier, 12)
-        occupied = {
-            (prop.tile_x + dx, prop.tile_y + dy)
-            for prop in level.props
-            for dx in range(prop.width)
-            for dy in range(prop.height)
-        }
         for _ in range(budget):
             room = level.rooms[int(rng.integers(0, len(level.rooms)))]
             x = int(rng.integers(room.x + 1, max(room.x + 2, room.x + room.width - 1)))
             y = int(rng.integers(room.y + 1, max(room.y + 2, room.y + room.height - 1)))
             if not (0 <= y < level.grid.shape[0] and 0 <= x < level.grid.shape[1]):
                 continue
-            if level.grid[y, x] != Tile.FLOOR or (x, y) in occupied:
+            if level.grid[y, x] != Tile.FLOOR or (x, y) in reserved:
                 continue
             kind = DECOR_KINDS[int(rng.integers(0, len(DECOR_KINDS)))]
             level.props.append(Prop(kind, x, y, 1, 1, False))
-            occupied.add((x, y))
+            reserved.add((x, y))
+
+    # -- V2 contract validation --------------------------------------------
+
+    def validate(self, level: GeneratedLevel) -> bool:
+        """Validate classic guarantees plus every authored V2 field system."""
+
+        return not self.readiness_errors(level)
+
+    def readiness_errors(self, level: GeneratedLevel) -> tuple[str, ...]:
+        """Return deterministic, machine-readable V2 contract failures."""
+
+        errors: list[str] = []
+        if not super().validate(level):
+            errors.append("classic_contract")
+            return tuple(errors)
+
+        vents = getattr(level, "vents", None)
+        devices = getattr(level, "hackable", None)
+        if vents is None:
+            errors.append("missing_vents")
+            vents = []
+        if devices is None:
+            errors.append("missing_hackable")
+            devices = []
+
+        expected_vents = VENT_PAIRS_PER_TIER.get(level.tier, 0) * 2
+        expected_devices = HACK_DEVICES_PER_TIER.get(level.tier, 0)
+        if len(vents) != expected_vents:
+            errors.append("vent_count")
+        if len(devices) != expected_devices:
+            errors.append("device_count")
+
+        # A prop tile has exactly one visual owner. This catches not only a
+        # vent hidden by a panel, but also cosmetic decals obscuring either.
+        occupied: dict[tuple[int, int], str] = {}
+        for prop in level.props:
+            for dx in range(prop.width):
+                for dy in range(prop.height):
+                    tile = (prop.tile_x + dx, prop.tile_y + dy)
+                    if tile in occupied:
+                        errors.append("prop_overlap")
+                    else:
+                        occupied[tile] = prop.kind
+
+        blocked = self._blocked_by_props(level)
+        reachable = flood_fill(level.grid, world_to_tile(level.spawn), blocked)
+        vent_tiles = [vent.tile for vent in vents]
+        device_tiles = [device.tile for device in devices]
+        if len(set(vent_tiles)) != len(vent_tiles):
+            errors.append("duplicate_vent_tile")
+        if len(set(device_tiles)) != len(device_tiles):
+            errors.append("duplicate_device_tile")
+        if set(vent_tiles) & set(device_tiles):
+            errors.append("field_overlap")
+        if len({vent.vent_id for vent in vents}) != len(vents):
+            errors.append("duplicate_vent_id")
+        if len({device.device_id for device in devices}) != len(devices):
+            errors.append("duplicate_device_id")
+
+        vent_props = {
+            (prop.tile_x, prop.tile_y)
+            for prop in level.props
+            if prop.kind == "vent_shaft" and prop.width == 1 and prop.height == 1
+        }
+        panel_props = {
+            (prop.tile_x, prop.tile_y)
+            for prop in level.props
+            if prop.kind == "hack_panel" and prop.width == 1 and prop.height == 1
+        }
+        if vent_props != set(vent_tiles):
+            errors.append("vent_prop_binding")
+        if panel_props != set(device_tiles):
+            errors.append("panel_prop_binding")
+
+        active_tiles = [*vent_tiles, *device_tiles]
+        if any(tile not in reachable for tile in active_tiles):
+            errors.append("unreachable_interaction")
+        if any(not self._safe_interaction_tile(level, tile, blocked) for tile in active_tiles):
+            errors.append("unsafe_interaction")
+
+        by_tile = {vent.tile: vent for vent in vents}
+        distance_cache: dict[tuple[int, int], dict[tuple[int, int], int]] = {}
+        for vent in vents:
+            partner = by_tile.get(vent.exit_tile)
+            if partner is None or partner.exit_tile != vent.tile:
+                errors.append("unpaired_vent")
+                continue
+            if not np.allclose(vent.exit_position, tile_center(vent.exit_tile), atol=1e-5):
+                errors.append("vent_exit_position")
+            room = self._room_id_for_tile(level, vent.tile)
+            exit_room = self._room_id_for_tile(level, vent.exit_tile)
+            if room is None or exit_room is None or room == exit_room:
+                errors.append("vent_room_pair")
+            distances = distance_cache.setdefault(
+                vent.tile,
+                self._distance_map(level, vent.tile, blocked),
+            )
+            if distances.get(vent.exit_tile, -1) < VENT_MIN_PAIR_DISTANCE_TILES:
+                errors.append("vent_geodesic")
+
+        camera_ids = {int(camera.camera_id) for camera in level.cameras}
+        room_ids = {int(room.room_id) for room in level.rooms}
+        lockable_indices = set(self._lockable_door_indices(level))
+        for device in devices:
+            if device.kind == "camera":
+                if device.target_id not in camera_ids:
+                    errors.append("camera_target")
+                if device.target_tile is not None:
+                    errors.append("camera_target_tile")
+            elif device.kind == "door":
+                if SECURITY_DOORS_PER_TIER.get(level.tier, 0) <= 0:
+                    errors.append("useless_door_panel")
+                if device.target_id not in lockable_indices:
+                    errors.append("door_target")
+                elif device.target_tile != level.doors[device.target_id].tile:
+                    errors.append("door_target_tile")
+            elif device.kind == "lights":
+                if device.target_id not in room_ids:
+                    errors.append("lights_target")
+                if self._room_id_for_tile(level, device.tile) != device.target_id:
+                    errors.append("lights_panel_room")
+                if device.target_tile is not None:
+                    errors.append("lights_target_tile")
+            else:
+                errors.append("unknown_device_kind")
+
+        # Keep output stable and compact for fuzz tooling.
+        return tuple(dict.fromkeys(errors))
 
 
-def generate_v3_level(*, seed: int, tier: int) -> GeneratedLevel:
+def generate_v2_level(*, seed: int, tier: int) -> GeneratedLevel:
     """Convenience entry point mirroring ``LevelGenerator.generate``."""
 
-    return FacilityLayoutV3().generate(seed=seed, tier=tier)
+    return FacilityLayoutV2().generate(seed=seed, tier=tier)

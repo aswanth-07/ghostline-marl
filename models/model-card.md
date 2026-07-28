@@ -1,40 +1,79 @@
-# Ghostline Universal Policy - Model Card
+# Ghostline Published-v1 Universal Policy - Model Card
 
 ## Status
 
-Release candidate selected and independently audited. The frozen neural policy
-passes the six-tier acceptance gate, matches its FP32 ONNX export on 1,000
-recurrent transitions, runs in the Windows and web builds, and is tied to the
-environment fingerprint below. No superhuman claim is made because the planned
-matched-seed human cohort has not yet been collected.
+This card describes the immutable neural policy shipped with the published
+single-agent game, now named public `GhostlineEnv-v1`. The checkpoint was
+selected and independently audited: it passes the six-tier acceptance gate,
+matches its FP32 ONNX export on 1,000 recurrent transitions, runs in the
+Windows and web builds, and is tied to the environment fingerprint below. No
+superhuman claim is made because the planned matched-seed human cohort has not
+yet been collected.
+
+The checkpoint and its benchmark reports predate the public version migration,
+so their signed metadata still names the same contract `GhostlineEnv-v2`.
+That string is retained as `historical_internal_contract` provenance and is
+not evidence for the new multi-agent public v2 environment. Rewriting those
+immutable artifacts would invalidate their hashes.
 
 ## Model
 
-- Inputs: player-equivalent `GhostlineEnv-v2` dictionary observation, including the explicit objective vector.
+- Inputs: player-equivalent public `GhostlineEnv-v1` dictionary observation,
+  including the explicit objective vector. The immutable model graph retains
+  the historical internal `GhostlineEnv-v2` label.
 - Actions: masked `Discrete(36)` movement, dash, and pulse combinations.
 - Encoders: local-grid convolution, ego/objective/ray MLPs, and masked-attention target/entity pooling.
 - Memory: configurable 256- or 384-unit GRU over recurrent sequences; 384 is the default candidate.
 - Heads: separate 256-unit policy/value decoders plus goal-bearing and visible-danger auxiliaries.
 - Learning: pure in-project PyTorch behavior cloning from the observation-only teacher, four DAgger recovery rounds, and low-rate consolidation. PPO/GAE/RND are implemented and tested, but the current release checkpoint does not claim a PPO improvement.
 
-## Optional adaptive-security policy
+## Developmental multi-agent v2
 
-Env-v3 also bundles a distinct 256-unit parameter-shared GRU policy for up to
-five security operatives. Actors receive only local/perception-gated records;
-the fixed 64-value global state is used by the centralized critic during
-training only. Strategic observation-only imitation is followed by recurrent
-MAPPO with adaptive weakest-tier replay and a 50% scripted-opponent curriculum.
-The frozen checkpoint hash is
-`c7d717d16b6a60c580e3d909043bf9dd107a6a1c6cf009dd77d3c0804308c839`.
-On the untouched 13M final slice it stopped the Env-v2 neural runner on
-`4/0/8/16%` of tier 3-6 contracts (25 per tier). This is an optional adversarial
-research result; tier 4 remains unsolved, and lightweight builds fall back to
-the same deterministic observation-only tactical controller when PyTorch is
-not included.
+Public `GhostlineEnv-v2` is a separate, in-development contract with new maps,
+runner actions, observations, mechanics, and multi-agent security control. It
+does not reuse this card's acceptance result. Its security environment is
+`GhostlineSecurityParallel-v2`: up to five operatives use a parameter-shared
+recurrent actor, while training uses an agent-specific 72-value centralized
+critic state. The security policy selects one of ten semantic intents and one
+of ten context-dependent tactical targets through a joint legal-action mask.
+
+The previously bundled security checkpoint, SHA-256
+`c7d717d16b6a60c580e3d909043bf9dd107a6a1c6cf009dd77d3c0804308c839`,
+and its `4/0/8/16%` tier 3-6 result belong to the retired
+`GhostlineSecurityParallel-v0` / pre-migration research contract. They are
+preserved as historical negative evidence only. Changes to the observation,
+conditional action mask, critic state, rewards, generation, and fingerprint
+make that checkpoint invalid for v2; the launcher rejects it and uses the
+deterministic tactical fallback when no compatible learned policy is present.
+No learned-security or v2-runner acceptance result is claimed yet.
+
+The developmental runner environment is frozen at fingerprint
+`be4a280a0d629cadabec08d038497eef331a14650c3e5fd23e97d4afca61efdd`;
+the current security learning contract is
+`3574a87dab53cfd2b116f97894e5bfda5a269c976681573b735188efb5b21218`.
+Readiness evidence includes 10,000 valid generated facilities, exact
+fresh/resume runner and security smokes, and 1,000/1,000 deterministic v2
+runner PyTorch/ONNX actions. These are correctness gates, not performance
+results. The v2 20M final-test slice remains reserved and unopened.
+The current-v2 security ledger likewise reserves 14M against the immutable
+published-v1 runner and remains unopened.
+
+The retired security checkpoint remains in the source archive so its negative
+result can be audited. It is deliberately absent from the lightweight player
+wheel and cannot be selected by the v2 launcher.
 
 ## Data and fairness
 
-No human demonstrations, human trajectories, hidden generator state, or privileged critic state are used. The automated teacher receives the same public v2 observation and action mask as the neural policy. Live facility telemetry is deliberately shared with both the human HUD and policy; physical detection remains occlusion-based. Training seeds are below 1,000,000, validation uses 1,000,000-1,049,999, and final evaluation begins at 2,000,000. All attempted final-test slices are immutable: 2M-7M are historical evidence, and the tracked 8M slice was consumed exactly once by the selected current-fingerprint neural champion. Its report and artifact hashes are bound in [`benchmarks/final-test-slices.json`](../benchmarks/final-test-slices.json).
+No human demonstrations, human trajectories, hidden generator state, or
+privileged critic state are used. The automated teacher receives the same
+public-v1 observation and action mask as the neural policy. Live facility
+telemetry is deliberately shared with both the human HUD and policy; physical
+detection remains occlusion-based. Training seeds are below 1,000,000,
+validation uses 1,000,000-1,049,999, and final evaluation begins at 2,000,000.
+All attempted final-test slices are immutable: 2M-7M are historical evidence,
+and the tracked 8M slice was consumed exactly once by the selected
+current-fingerprint neural champion. Its report and artifact hashes are bound
+in [`benchmarks/final-test-slices.json`](../benchmarks/final-test-slices.json).
 
 The failed 2.98-million-decision pure-PPO attempt is retained as historical negative evidence only; it predates the final environment fingerprint and is not represented as an equal-budget current-distribution ablation. A current-fingerprint conservative PPO pilot was also rejected: it scored `84/94/98/92/90/86%`, while the immutable DAgger rollback scored `96/96/90/98/92/94%` on the same seeds. The release therefore uses the better BC+DAgger checkpoint and does not mislabel it as PPO-trained.
 
@@ -102,7 +141,13 @@ before the final slice was opened. Exact reports and lineage are indexed in
 
 ## Intended use and limitations
 
-This is a portfolio/research policy for procedural, partially observed game RL. Results are tied to the frozen v2 mechanics and observation contract. Deterministic success does not imply optimal trace, optional-data collection, or route efficiency, and no comparison with real players is valid until the planned matched-seed human cohort is complete.
+This is a portfolio/research policy for procedural, partially observed game
+RL. Results are tied only to the frozen public-v1 mechanics and observation
+contract (historically labeled `GhostlineEnv-v2` inside the immutable
+artifacts). They do not transfer automatically to developmental v2.
+Deterministic success does not imply optimal trace, optional-data collection,
+or route efficiency, and no comparison with real players is valid until the
+planned matched-seed human cohort is complete.
 
 ## Deployment precision gate
 

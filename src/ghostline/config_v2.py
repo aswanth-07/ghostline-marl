@@ -1,3 +1,5 @@
+"""Configuration for the in-development multi-agent v2 contract."""
+
 from __future__ import annotations
 
 DECOY_THROW_DISTANCE = 96.0
@@ -20,13 +22,19 @@ SUPPRESSOR_MIN_RANGE = 96.0
 SUPPRESSOR_MAX_RANGE = 240.0
 SUPPRESSOR_PROJECTILE_RADIUS = 4.0
 
-MAX_SECURITY_TARGETS = 8
+SECURITY_INTENT_COUNT = 10
+MAX_SECURITY_TARGETS = 10
 MAX_RADIO_MESSAGES = 4
 MAX_TEAMMATES = 4
+MAX_FIELD_TARGETS = 16
+# Five public target kinds plus relative geometry, readiness/state, and an
+# optional known vent-exit vector.
+FIELD_TARGET_FEATURES = 13
 
-# One target-kind code per tactical slot. Extraction and doors previously
-# shared a code, so the policy could not tell an exit from a chokepoint.
-SECURITY_TARGET_KINDS = 8
+# One target-kind code per tactical slot.  Escape-route cutoffs are explicit
+# public facility geometry, allowing a policy to coordinate a pincer without
+# receiving the hidden runner objective, heading, or exact unseen position.
+SECURITY_TARGET_KINDS = 9
 # Three relative geometry values plus the target-kind one-hot.
 SECURITY_TARGET_FEATURES = 3 + SECURITY_TARGET_KINDS
 # Centralized critic state: mission block (with remaining time, alert tier,
@@ -45,7 +53,7 @@ WALK_FOOTSTEP_RADIUS = 118.0
 DASH_TRACE_COST_PER_SECOND = 7.5
 COVER_TRACE_DECAY_BONUS = 2.6
 
-# Env-v3 stealth economy.
+# Multi-agent v2 stealth economy.
 #
 # Potential-based shaping (Ng, Harada & Russell 1999) is policy-invariant by
 # construction, which is exactly why it is the wrong tool for stealth here: we
@@ -93,18 +101,17 @@ DECOY_LURE_SECONDS = 3.4
 DECOY_LURE_RADIUS = 168.0
 DECOY_CROUCH_THROW_SCALE = 0.62
 
-# Predictive chokepoints. Security seals ahead of the runner's route rather than
-# on top of it. Every guarantee from the reactive lock still applies: only
-# redundant room-graph edges are eligible, the door warns first, an occupied
-# door never closes, and the runner keeps a pulse and a hack override.
-CHOKEPOINT_LOOKAHEAD_TILES = 14.0
+# Policy-selected chokepoints. Security chooses from public, contact-derived
+# doorway cutoffs rather than reading the runner's hidden objective or heading.
+# Every guarantee from the reactive lock still applies: only redundant
+# room-graph edges are eligible, the door warns first, an occupied door never
+# closes, and the runner keeps a pulse and a hack override.
 CHOKEPOINT_MIN_RUNNER_DISTANCE = 72.0
 CHOKEPOINT_TEAM_COOLDOWN_SECONDS = 7.5
 
-# Coordinated pincers. Operatives take complementary approach arcs around the
-# contact so a strictly slower team can still close from multiple bearings.
-PINCER_ARC_RADIANS = 1.15
-PINCER_STANDOFF = 132.0
+# Coordinated pincers choose distinct doorway cutoffs included in each
+# operative's ordinary target table. Multiple agents may share a cutoff when a
+# room exposes fewer exits than the team has members.
 
 # Non-lethal field tools. Sensors report a crossing; they never damage.
 FIELD_SENSOR_ARM_SECONDS = 1.0

@@ -1,41 +1,48 @@
 # Adaptive-security evidence
 
-This directory is reserved for `GhostlineSecurityParallel-v0` evaluation
-artifacts. Adaptive security is an optional Env-v3 research track and does not
-replace or revise the frozen Env-v2 runner result.
+This directory preserves immutable evidence from the retired
+`GhostlineSecurityParallel-v0` research contract. Those reports were produced
+before the public version migration, when the shipped single-agent game was
+called internal `GhostlineEnv-v2` and the experimental multi-agent track was
+called Env-v3.
 
-The security team is evaluated against the published Env-v2 recurrent runner
-checkpoint (`models/ghostline-policy.pt`, SHA-256
-`76baa30af55cdaa2e71bb6ba06672bd9203455552358017505685827240b2e47`).
-The runner retains its original 36 actions and receives only its original
-player-equivalent observation fields. Temporary v3 locks enter its normal
-occupancy grid; it is not given the v3 decoy action.
+The public names are now unambiguous:
 
-Seed namespaces are disjoint:
+- `GhostlineEnv-v1` is the published single-agent game and frozen runner.
+- `GhostlineEnv-v2` is the current developmental runner, map, and multi-agent
+  contract.
+- `GhostlineSecurityParallel-v2` is the current PettingZoo security contract.
+- There is no public Env-v3.
 
-- training starts at `10,000,000`;
-- checkpoint validation starts at `11,000,000`;
-- the one-time final test starts at `12,000,000`.
+The JSON and CSV files already tracked here are historical records. Their
+contract strings, hashes, fingerprints, outcomes, and seed ranges must not be
+edited or relabeled. The current verifier accepts them only as internally
+consistent historical evidence; it never promotes them to v2 release evidence.
 
-`ghostline evaluate-security` writes three sibling artifacts: the complete
-JSON report, an aggregate per-tier CSV, and a per-episode CSV. Reports include
-95% Wilson intervals and bind the opponent hash, observation contract, and
-security-environment fingerprint. A missing `--model` is explicitly labeled
-as the deterministic observation-only tactical baseline.
+## Historical pre-migration result
 
-## Selected learned-security result
+The retired experiment evaluated security against the immutable published
+runner checkpoint `models/ghostline-policy.pt`, SHA-256
+`76baa30af55cdaa2e71bb6ba06672bd9203455552358017505685827240b2e47`.
+That runner used the same 36-action, player-equivalent contract now exposed as
+public v1; its immutable metadata retains the historical internal
+`GhostlineEnv-v2` name.
 
-The selected mixed-opponent recurrent MAPPO checkpoint is bundled as
-`models/ghostline-security.pt` (SHA-256
-`c7d717d16b6a60c580e3d909043bf9dd107a6a1c6cf009dd77d3c0804308c839`).
-It uses security fingerprint
-`96275bac09bd6fb321510e1bd23d0e025d157b4cdeeb919aded9bb38b850721b`
-and was selected only against the frozen Env-v2 runner above.
+Seed namespaces were disjoint:
 
-Two disjoint validation gates measured `4/0/4/12%` over 25 contracts per tier
-and `0/0/10/10%` over 10 contracts per tier. The first 12M final candidate was
-honestly retired after scoring zero stops. After the opponent-curriculum model
-was selected from both validation windows, the untouched 13M slice was opened once:
+- training started at `10,000,000`;
+- checkpoint validation started at `11,000,000`;
+- one-time final tests started at `12,000,000`.
+
+The selected historical checkpoint was `models/ghostline-security.pt`,
+SHA-256
+`c7d717d16b6a60c580e3d909043bf9dd107a6a1c6cf009dd77d3c0804308c839`,
+with security fingerprint
+`96275bac09bd6fb321510e1bd23d0e025d157b4cdeeb919aded9bb38b850721b`.
+Two validation windows measured `4/0/4/12%` over 25 contracts per tier and
+`0/0/10/10%` over 10 contracts per tier. The first 12M candidate report was
+retained after scoring zero stops. After opponent-curriculum selection, the
+untouched 13M slice was opened once:
 
 | Tier | Stops | Wilson 95% interval | Mean damage | Mean detections |
 |---|---:|---:|---:|---:|
@@ -44,29 +51,66 @@ was selected from both validation windows, the untouched 13M slice was opened on
 | 5 | 2/25 (8%) | 2.2%-25.0% | 1.16 | 46.96 |
 | 6 | 4/25 (16%) | 6.4%-34.7% | 1.60 | 60.32 |
 
-This is a measured 7% mean containment rate against an already strong runner,
-not a claim that every tier is solved. Tier 4 is the clearest limitation. The
-canonical report is [`adaptive-security-final-13m-25.json`](adaptive-security-final-13m-25.json),
-with aggregate and episode CSV siblings. The failed 12M report remains tracked
-as negative evidence and is never reused.
+This was a measured 7% mean containment rate, not a solved benchmark. The
+canonical historical report is
+[`adaptive-security-final-13m-25.json`](adaptive-security-final-13m-25.json),
+with aggregate and episode CSV siblings. The failed 12M report remains
+negative evidence and its seeds are never reused.
 
-Training uses an observation-only tactical behavior warm-up followed by
-recurrent MAPPO. Warm-up accuracy and entropy are written to
-`behavior-warmup.json`; rollout entropy, throughput, reward, and episode outcome
-are written to `training-metrics.jsonl`. Security `info` contains an exact
-reward-component ledger, and changing the reward implementation changes the
-environment fingerprint so stale checkpoints cannot resume.
-After a held-out gate, the default curriculum assigns 70% of new contracts to
-the weakest tier set and preserves 30% uniform replay. The checkpoint and each
-rollout record include the resulting probability vector; `--uniform-curriculum`
-is reserved for an equal-budget ablation.
-Repeated radio messages cannot farm shaping: positive radio credit is exhausted
-after the first possible teammate broadcasts in an episode, and this bound has
-a dedicated regression test.
-Each `validation-<steps>.json` has a corresponding immutable
-`policy-<steps>.pt`; later training can update `latest.pt` and `champion.pt` but
-cannot erase the policy that produced an earlier report.
-Opponent curricula may mix the easier scripted runner into training, but every
-validation and final report remains exclusively against the provenance-bound
-Env-v2 neural checkpoint. The mix fraction is stored in training arguments and
-is never inferred from validation outcomes.
+## Why the old checkpoint is invalid for v2
+
+The current `GhostlineSecurityParallel-v2` contract changes the learning
+problem materially:
+
+- ten semantic intents and ten tactical target slots use an explicit
+  intent-by-target legality mask;
+- actor observations include the revised public target, field-target, radio,
+  teammate, and readiness records;
+- the centralized critic receives a 72-value state with agent-specific
+  operative blocks and an explicit presence mask;
+- generation includes the developmental v2 maps, route guarantees, doors,
+  vents, field tools, and runner mechanics;
+- per-agent formation and progress shaping is capped and exactly accounted;
+- the model contract and environment fingerprint bind all of the above.
+
+Loading the retired checkpoint into this contract would produce neither a
+valid resume nor a fair comparison. Runtime policy loading therefore fails
+closed and the game uses its deterministic observation-only tactical
+controller until a compatible v2 checkpoint passes the release gates.
+
+## Current v2 protocol
+
+Training uses a parameter-shared recurrent actor with an agent-specific
+centralized critic, active-agent masks, generalized advantage estimation, and
+recurrent MAPPO. Behavior warm-up may initialize the actor, after which the
+curriculum can mix the frozen published-v1 runner, native v2 runner snapshots,
+and scripted opponents. Validation and final reports must identify one exact
+opponent, runner hash, security fingerprint, model contract, seed slice, and
+curriculum configuration.
+
+The seed namespaces remain:
+
+- training: `10,000,000+`;
+- validation: `11,000,000+`;
+- current-v2 final: the reserved `14,000,000` slice.
+
+Each validation report must have a corresponding immutable checkpoint.
+Selection uses held-out results only; final slices are opened once. Reports
+must include per-tier Wilson intervals, failure and reward-component
+accounting, policy entropy, throughput, opponent provenance, and the exact
+joint action-mask contract.
+
+The tracked [`v2-final-test-slices.json`](v2-final-test-slices.json) ledger is
+still `reserved_unopened`. `evaluate-security` validates the model and frozen
+runner first, locks the ledger before the first episode, and then marks the
+slice consumed or aborted-retired. It has no overwrite or reopen option. The
+historical 12M/13M files above remain immutable under their retired fingerprint.
+
+`scripts/verify_security_release_evidence.py` is intentionally fail-closed but
+version-aware. It checks the pre-migration files against their own retired
+contract and reports `historical: true`; a green result means the archive is
+unaltered, not that it qualifies for v2. A separate current-v2 candidate needs
+a newly trained `GhostlineSecurityParallel-v2` checkpoint and canonical
+validation/final reports. The historical files themselves remain untouched.
+
+No current v2 learned-security result is claimed in this repository yet.

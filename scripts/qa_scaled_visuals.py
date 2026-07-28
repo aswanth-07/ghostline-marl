@@ -116,7 +116,7 @@ def _configure_gameplay(sim: GhostlineSimulation) -> None:
         )
     ]
     if hasattr(sim, "security_doors"):
-        from ghostline.types_v3 import Decoy, ShockProjectile
+        from ghostline.types_v2 import Decoy, ShockProjectile
 
         if sim.security_doors:
             sim.security_doors[0].lock_remaining = 3.0
@@ -472,14 +472,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("artifacts/visual-qa/scaled-final"))
     parser.add_argument("--benchmark-frames", type=int, default=180)
-    parser.add_argument("--adaptive", action="store_true", help="stage Env-v3 doors, decoy, and projectile cues")
+    parser.add_argument(
+        "--adaptive",
+        action="store_true",
+        help="stage multi-agent v2 doors, field tools, decoy, and projectile cues",
+    )
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
 
     if args.adaptive:
-        from ghostline.simulation_v3 import GhostlineSimulationV3
+        from ghostline.simulation_v2 import GhostlineSimulationV2
 
-        sim = GhostlineSimulationV3(seed=2_000_123, tier=6, directive="ghost")
+        sim = GhostlineSimulationV2(seed=2_000_123, tier=6, directive="ghost")
     else:
         sim = GhostlineSimulation(seed=2_000_123, tier=6)
     _configure_gameplay(sim)

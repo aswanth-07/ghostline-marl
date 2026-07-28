@@ -277,7 +277,7 @@ class GhostlineWebRuntime:
             self.app.seed = seed
             self.app.adaptive_mode = adaptive
             directive_type = getattr(
-                __import__("ghostline.types_v3", fromlist=["ContractDirective"]),
+                __import__("ghostline.types_v2", fromlist=["ContractDirective"]),
                 "ContractDirective",
             )
             self.app.directive = directive_type.parse(directive_name)
@@ -330,9 +330,9 @@ class GhostlineWebRuntime:
         )
         if adaptive_active and not fresh:
             self.host.ghostlineShell.setControlMode("human")
-            self.host.ghostlineShell.setPolicyState("ready", "Runner policy ready for Classic")
+            self.host.ghostlineShell.setPolicyState("ready", "Published v1 runner ready")
             self.host.ghostlineShell.showNotice(
-                "Runner takeover is frozen to Classic Env-v2; the active Adaptive contract remains under human control.",
+                "Runner takeover uses the published single-agent v1 policy; the active multi-agent v2 contract remains under human control.",
                 "info",
             )
             return
@@ -469,7 +469,7 @@ class GhostlineWebRuntime:
             "damage": int(sim.damage_taken),
             "detections": int(sim.detections),
             "distance": round(float(sim.distance_travelled), 1),
-            "contract": "GhostlineEnv-v3" if hasattr(sim, "decoy_charges") else "GhostlineEnv-v2",
+            "contract": "GhostlineEnv-v2" if hasattr(sim, "decoy_charges") else "GhostlineEnv-v1",
             "directive": getattr(getattr(sim, "directive", None), "name", "STANDARD").lower(),
             "security_policy": getattr(getattr(self.app, "security_controller", None), "policy_name", None),
         }

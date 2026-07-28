@@ -6,6 +6,91 @@ from pathlib import Path
 from ghostline import __version__
 
 
+def _add_runner_v2_training_arguments(
+    parser: argparse.ArgumentParser,
+) -> None:
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("artifacts/runner-v2/ppo"),
+    )
+    parser.add_argument("--resume", action="store_true")
+    initialization = parser.add_mutually_exclusive_group()
+    initialization.add_argument("--init-checkpoint", type=Path)
+    initialization.add_argument("--published-v1-init", type=Path)
+    parser.add_argument("--allow-scratch", action="store_true")
+    parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--envs", type=int, default=8)
+    parser.add_argument("--rollout", type=int, default=128)
+    parser.add_argument("--epochs", type=int, default=4)
+    parser.add_argument("--minibatch-envs", type=int, default=2)
+    parser.add_argument(
+        "--recurrent-size",
+        type=int,
+        choices=(256, 384, 512),
+        default=384,
+    )
+    parser.add_argument("--learning-rate", type=float, default=2.5e-4)
+    parser.add_argument("--gamma", type=float, default=0.995)
+    parser.add_argument("--gae-lambda", type=float, default=0.95)
+    parser.add_argument("--clip-ratio", type=float, default=0.2)
+    parser.add_argument("--value-clip-ratio", type=float, default=0.2)
+    parser.add_argument("--value-coefficient", type=float, default=0.5)
+    parser.add_argument("--entropy-coefficient", type=float, default=0.01)
+    parser.add_argument("--objective-aux-coefficient", type=float, default=0.15)
+    parser.add_argument("--danger-aux-coefficient", type=float, default=0.10)
+    parser.add_argument("--max-grad-norm", type=float, default=0.5)
+    parser.add_argument("--target-kl", type=float, default=0.03)
+    parser.add_argument("--training-seed-start", type=int, default=0)
+    parser.add_argument("--tiers", default="1,2,3,4,5,6")
+    parser.add_argument("--directives", default="standard,ghost,speed,greed")
+    parser.add_argument(
+        "--no-curriculum",
+        dest="adaptive_curriculum",
+        action="store_false",
+    )
+    parser.set_defaults(adaptive_curriculum=True)
+    parser.add_argument(
+        "--initial-curriculum-tier",
+        type=int,
+        choices=range(1, 7),
+        default=1,
+    )
+    parser.add_argument(
+        "--sync-envs",
+        dest="async_envs",
+        action="store_false",
+    )
+    parser.set_defaults(async_envs=True)
+    parser.add_argument("--validation-interval", type=int, default=100)
+    parser.add_argument("--validation-episodes", type=int, default=25)
+    parser.add_argument("--validation-batch-size", type=int, default=16)
+    parser.add_argument("--initial-validation-cursor", type=int, default=0)
+    parser.add_argument("--checkpoint-interval", type=int, default=1)
+    parser.add_argument(
+        "--security-opponent",
+        type=Path,
+        action="append",
+        default=[],
+    )
+    parser.add_argument("--security-pool-salt", type=int, default=0)
+    parser.add_argument("--max-updates", type=int, default=0)
+    parser.add_argument("--max-decisions", type=int, default=0)
+    parser.add_argument("--seconds", type=float, default=0.0)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="validate the complete campaign and write its manifest without starting workers",
+    )
+    parser.add_argument(
+        "--continue-after-acceptance",
+        dest="stop_on_acceptance",
+        action="store_false",
+    )
+    parser.set_defaults(stop_on_acceptance=True)
+    parser.add_argument("--cpu", action="store_true")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ghostline", description="Ghostline game and reinforcement-learning benchmark")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -13,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     play = subparsers.add_parser("play", help="Launch the game")
     play.add_argument("--tier", type=int, choices=range(1, 7))
     play.add_argument("--seed", type=int)
-    play.add_argument("--adaptive", action="store_true", help="use optional Env-v3 coordinated security")
+    play.add_argument("--adaptive", action="store_true", help="use developmental Env-v2 coordinated security")
     play.add_argument("--directive", choices=("standard", "ghost", "speed", "greed"), default="standard")
     lab = subparsers.add_parser("lab", help="Launch Agent Lab")
     lab.add_argument("--tier", type=int, choices=range(1, 7), default=6)
@@ -30,6 +115,11 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--initial-curriculum-tier", type=int, choices=range(1, 7), default=1)
     train.add_argument("--no-resume", action="store_true")
     train.add_argument("--dry-run", action="store_true")
+    train_runner_v2 = subparsers.add_parser(
+        "train-runner-v2",
+        help="Train the developmental 288-action runner against v2 security",
+    )
+    _add_runner_v2_training_arguments(train_runner_v2)
     train_security = subparsers.add_parser(
         "train-security",
         help="Train the parameter-shared recurrent adaptive-security team",
@@ -63,7 +153,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--runner-model",
         type=Path,
         default=Path("models/ghostline-policy.pt"),
-        help="frozen Env-v2 opponent checkpoint",
+        help="frozen published-v1 opponent checkpoint",
+    )
+    train_security.add_argument(
+        "--runner-pool",
+        type=Path,
+        action="append",
+        default=[],
+        help="repeatable published-v1 or v2 runner checkpoint for league training",
     )
     train_security.add_argument(
         "--init-model",
@@ -99,20 +196,54 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluate_security = subparsers.add_parser(
         "evaluate-security",
-        help="Evaluate adaptive security on a disjoint held-out seed range",
+        help="Consume one reserved v2 security final-test slice exactly once",
     )
-    evaluate_security.add_argument("--model", type=Path)
+    evaluate_security.add_argument("--model", type=Path, required=True)
     evaluate_security.add_argument("--tiers", default="3,4,5,6")
-    evaluate_security.add_argument("--episodes-per-tier", type=int, default=100)
-    evaluate_security.add_argument("--seed-start", type=int, default=12_000_000)
+    evaluate_security.add_argument("--episodes-per-tier", type=int, default=500)
+    evaluate_security.add_argument("--seed-start", type=int, default=14_000_000)
     evaluate_security.add_argument("--device")
     evaluate_security.add_argument("--runner-model", type=Path, default=Path("models/ghostline-policy.pt"))
     evaluate_security.add_argument("--scripted-runner", action="store_true")
+    evaluate_security.add_argument(
+        "--slice-manifest",
+        type=Path,
+        default=Path("benchmarks/security/v2-final-test-slices.json"),
+        help="tracked one-way v2 security final-test ledger",
+    )
     evaluate_security.add_argument(
         "--output",
         type=Path,
         default=Path("benchmarks/security/final-test.json"),
     )
+    evaluate_runner_v2 = subparsers.add_parser(
+        "evaluate-runner-v2",
+        help="Evaluate a v2 runner on an explicit held-out final-test slice",
+    )
+    evaluate_runner_v2.add_argument("--model", type=Path, required=True)
+    evaluate_runner_v2.add_argument(
+        "--output",
+        type=Path,
+        default=Path("benchmarks/runner-v2/final-test-20m.json"),
+    )
+    evaluate_runner_v2.add_argument("--episodes-per-tier", type=int, default=500)
+    evaluate_runner_v2.add_argument("--tiers", default="1,2,3,4,5,6")
+    evaluate_runner_v2.add_argument("--directives", default="standard")
+    evaluate_runner_v2.add_argument("--seed-start", type=int, default=20_000_000)
+    evaluate_runner_v2.add_argument("--workers", type=int, default=0)
+    evaluate_runner_v2.add_argument(
+        "--slice-manifest",
+        type=Path,
+        default=Path("benchmarks/runner-v2/final-test-slices.json"),
+        help="one-way v2 final-test slice ledger",
+    )
+    evaluate_runner_v2.add_argument(
+        "--security-opponent",
+        type=Path,
+        action="append",
+        default=[],
+    )
+    evaluate_runner_v2.add_argument("--security-pool-salt", type=int, default=0)
     imitate = subparsers.add_parser("imitate", help="Collect fair-teacher data, behavior-clone, or run DAgger")
     imitate_commands = imitate.add_subparsers(dest="imitation_command", required=True)
     collect = imitate_commands.add_parser("collect", help="Collect observation-only teacher labels")
@@ -221,6 +352,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="copy the accepted INT8 graph here, or verified FP32 when INT8 is rejected",
     )
+    export_runner_v2 = subparsers.add_parser(
+        "export-runner-v2",
+        help="Export a v2 recurrent runner to ONNX and enforce action parity",
+    )
+    export_runner_v2.add_argument("--model", type=Path, required=True)
+    export_runner_v2.add_argument("--output", type=Path, required=True)
+    export_runner_v2.add_argument("--parity-samples", type=int, default=1_000)
     return parser
 
 
@@ -258,6 +396,11 @@ def main() -> None:
                 dry_run=args.dry_run,
             )
         )
+    if command == "train-runner-v2":
+        from ghostline.runner_train_v2 import train as train_runner_v2
+
+        print(train_runner_v2(args))
+        return
     if command == "train-security":
         from ghostline.marl_train import train_security
 
@@ -283,6 +426,11 @@ def main() -> None:
                 resume=not args.no_resume,
                 dry_run=args.dry_run,
                 runner_checkpoint=None if args.scripted_runner else args.runner_model,
+                runner_pool=(
+                    None
+                    if args.scripted_runner
+                    else args.runner_pool
+                ),
                 init_checkpoint=args.init_model,
                 scripted_opponent_fraction=args.scripted_opponent_fraction,
             )
@@ -314,6 +462,25 @@ def main() -> None:
                 seed_start=args.seed_start,
                 device=args.device,
                 runner_checkpoint=None if args.scripted_runner else args.runner_model,
+                slice_manifest=args.slice_manifest,
+            )
+        )
+        return
+    if command == "evaluate-runner-v2":
+        from ghostline.evaluation_v2 import evaluate_runner_v2_checkpoint
+
+        print(
+            evaluate_runner_v2_checkpoint(
+                args.model,
+                args.output,
+                episodes_per_tier=args.episodes_per_tier,
+                tiers=args.tiers,
+                directives=args.directives,
+                seed_start=args.seed_start,
+                workers=args.workers,
+                security_checkpoints=args.security_opponent,
+                security_pool_salt=args.security_pool_salt,
+                slice_manifest=args.slice_manifest,
             )
         )
         return
@@ -411,6 +578,17 @@ def main() -> None:
                 quantize=args.quantize,
                 quantized_output=args.quantized_output,
                 deployment_output=args.deployment_output,
+            )
+        )
+        return
+    if command == "export-runner-v2":
+        from ghostline.exporting_v2 import export_runner_v2_checkpoint
+
+        print(
+            export_runner_v2_checkpoint(
+                args.model,
+                args.output,
+                parity_samples=args.parity_samples,
             )
         )
         return

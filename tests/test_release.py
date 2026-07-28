@@ -476,3 +476,13 @@ def test_workflows_use_locked_installs_and_release_smoke() -> None:
     assert "benchmarks/system/headless-throughput.json" in release
     assert "gh release create" in release
     assert "--verify-tag" in release
+
+
+def test_player_wheel_omits_retired_security_checkpoint() -> None:
+    setup_source = (ROOT / "setup.py").read_text(encoding="utf-8")
+    clean_install_source = (ROOT / "scripts" / "verify_clean_install.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'Path("models/ghostline-security.pt")' not in setup_source
+    assert 'runtime_asset_path("models/ghostline-security.pt")' in clean_install_source
+    assert "assert retired_security_policy is None" in clean_install_source

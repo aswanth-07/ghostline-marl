@@ -1,272 +1,272 @@
 ---
 title: Ghostline Implementation
-updated: 2026-07-26
+updated: 2026-07-28
 status: active
 ---
 
 # Architecture
 
-Ghostline is a clean break from the legacy `neon_arena` package.
+Ghostline has two deliberate public contracts and no public v3:
 
-## Layers
+- `GhostlineEnv-v1` is the released single-agent game and policy benchmark.
+- `GhostlineEnv-v2` is the in-development multi-agent game, new facility
+  distribution, field-systems runner, and adversarial security benchmark.
+- `GhostlineLegacyEnv-v0` is a compatibility-only predecessor.
 
-- `simulation.py`: deterministic fixed-timestep movement, hacking, trace, integrity, guard/camera/drone AI, pulse, timer, and event stream.
-- `generation.py`: modular room graph, authored furniture arrangements, security placement, tile collision, and validation.
-- `presentation.py` and `app.py`: scrolling 640x360 pixel world canvas, native-resolution typography, cinematic menus, camera, lighting, props, HUD, minimap, effects, accessibility, run telemetry, and game flow.
-- `env.py`, `model.py`, and the training pipeline: versioned Gymnasium contract, entity-aware recurrent policy, action masking, rewards, curriculum, imitation learning, and PPO integration.
-- `simulation_v3.py` and `env_v3.py`: additive Adaptive Contracts mechanics and the `GhostlineEnv-v3` player contract; Env-v2 source and checkpoints remain untouched.
-- `security_env.py`, `security_model.py`, and `marl_train.py`: PettingZoo parallel security benchmark, decentralized shared recurrent actor, centralized training critic, recurrent MAPPO, held-out evaluation, and fail-closed checkpoints.
+The released source and artifacts historically called their contract
+`GhostlineEnv-v2`. Their immutable checkpoint, ONNX graph, 3,000-episode audit,
+parity report, and throughput evidence retain that internal label. The
+zero-mechanics `env_v1.py` wrapper gives the exact released environment its
+stable public v1 name without changing the fingerprint
+`521c449a8bd9a540977a918f5b094dd3aeff44cc579a55f75e22a74bab20e129`.
 
-Simulation and generation do not import Pygame. Human and agent controllers both produce `Action(move, dash, pulse)`. Replays are deterministic from seed, tier, and action sequence.
+## Layer boundaries
 
-Env-v3 extends the semantic action to `RunnerActionV3(move, dash, pulse,
-decoy)` without changing Env-v2. Adaptive security chooses a semantic intent,
-one of eight locally described tactical targets, a discrete radio message, and
-a role-gated ability at 5 Hz. Deterministic base navigation, collision, sight,
-and animation remain the motor layer. The actor never receives the centralized
-state used by the MAPPO critic.
+- `simulation.py`, `generation.py`, `types.py`, and `config.py` are the frozen
+  published-v1 simulation and facility contract.
+- `env_v1.py` is the public-name adapter for the exact published environment.
+- `simulation_v2.py`, `generation_v2.py`, `types_v2.py`, and `config_v2.py`
+  own all new v2 mechanics and content. They inherit stable v1 rules without
+  modifying the fingerprinted files.
+- `env_v2.py` is the player-equivalent Gymnasium runner contract.
+- `security_env.py` is the PettingZoo Parallel API contract for simultaneous
+  security control.
+- `security_types.py` contains the dependency-light tactical target enum used
+  by the player fallback. This prevents importing PettingZoo merely to run
+  deterministic adaptive security in the base wheel; a parity test keeps its
+  values synchronized with the training environment.
+- `model_v2.py` owns the v2 runner network. `security_model.py` owns the shared
+  recurrent operative actor and centralized training critic.
+- `presentation.py`, `app.py`, and `audio.py` consume simulation state and event
+  streams. Pygame never enters simulation or generation imports.
+- Human, scripted, and neural controllers emit the same semantic actions.
 
-## Adaptive Contracts field systems
+Simulation runs at 60 Hz. Runner policies decide at 10 Hz through six-tick
+action repeat. Security policies decide at 5 Hz through twelve-tick tactical
+repeat. Replays are deterministic from contract, tier, seed, and action
+sequence.
 
-Env-v3 carries six field mechanics beyond the classic contract. The runner
-action is `RunnerActionV3(move, dash, pulse, decoy, crouch, interact)` for 288
-masked actions; `interact` is context-sensitive rather than one bit per verb,
-because entering a vent and hacking a device are never both legal on the same
-tile. All 144 previous codes keep their exact meaning.
+## Published v1 contract
 
-- **Vents** are a runner-only transit network. Transit freezes the runner for
-  1.15 s and cannot be steered, so a vent is a committed escape from a sealed
-  route rather than a dodge; entering one in sight is a real tell. Operatives
-  have no vent verb.
-- **Environmental hacking** spends shared charges on a camera (disabled),
-  a security door (all seals forced open), or the room lights. Darkness is
-  applied by overriding the shared `visible` predicate, so guard awareness, the
-  operative observation, and the rendered cone can never disagree about how far
-  an operative can see in a hacked room.
-- **Upgraded distraction**: a decoy now holds operative attention at its landing
-  point for a lure window instead of emitting one discardable ping, and a
-  crouched throw is quieter but carries less far.
-- **Predictive chokepoints** seal a redundant door ahead of the runner's
-  projected route rather than the nearest one. Every existing guarantee still
-  applies: only redundant room-graph edges are eligible, the door telegraphs
-  before closing, an occupied door never closes, and the runner keeps both a
-  pulse override and a door hack. A seal is never placed within 72 px of the
-  runner, because that is the case that reads as arbitrary rather than outplayed.
-- **Coordinated pincers** (`SecurityIntent.PINCER`) rewrite each operative's own
-  target into a complementary approach arc so a team that cannot win a tail
-  chase still converges from several bearings.
-- **Non-lethal field tools**: Patrol and Interceptor operatives spend the shared
-  ability bit on a deployable sensor that reports a crossing and seeds the heard
-  estimate. Sensors never damage. Suppressors keep their telegraphed shock round,
-  so the ability slot is now meaningful for the whole team.
+`GhostlineEnv-v1` exposes `Discrete(36)`:
 
-The runner observation gains an eight-value `field` record covering charges,
-reach, transit and darkness. Everything in it is state the player can already
-read from their own HUD; no hidden security state is exposed.
+`9 movement x 2 dash x 2 pulse`
 
-## Multi-agent network architecture
+Its observation dictionary contains the released ego, objective, local-grid,
+terminal, security-entity, ray, and action-mask records. Information shared
+with the runner is also readable in the human HUD, minimap, or facility
+telemetry. The actor and critic receive no hidden live enemy coordinates.
 
-`model.py` is the frozen Env-v2 network and is untouched. `model_v3.py` owns the
-Env-v3 runner, which sees a wider observation (27-value ego, 11-channel local
-grid, 16-feature entity rows, a directive record) and chooses from 144 masked
-actions.
+The published v1 game remains the source of the bundled runner checkpoint and
+web takeover policy. The wrapper reports:
 
-- Orthogonal initialisation with per-layer gains now applies to both the runner
-  and the operative networks; the project previously used PyTorch defaults
-  everywhere. Hidden layers use `sqrt(2)`, value heads `1.0`, and action heads
-  `0.01`. The measured effect is that every policy starts at exactly the uniform
-  entropy over its legal actions with zero probability mass on illegal ones,
-  instead of beginning already committed to a random preference.
-- The runner conditions on its directive through feature-wise linear modulation
-  rather than concatenation. Concatenating six values into a 384-wide fusion
-  lets the network ignore them; scaling and shifting every fused feature lets
-  Ghost, Speed and Greed re-purpose the shared representation.
-- Actor and critic keep separate decoders after the recurrent core so the much
-  larger value gradient does not interfere with the policy trunk.
-- The operative critic gained a LayerNorm trunk, and MAPPO now normalises value
-  targets against a running return scale. Only the scale is tracked, never the
-  mean: subtracting a drifting mean would shift advantages too and change the
-  sign of the containment terminal. Measured effect in a 5,000-step smoke, value
-  loss fell from the 10-45 range to roughly 0.1-1.4 and declined instead of
-  oscillating.
+- `contract: GhostlineEnv-v1`
+- `historical_internal_contract: GhostlineEnv-v2`
 
-## Multi-agent facility layout
+Evidence validators continue to check the historical internal label because
+rewriting those records would break provenance.
 
-`generation_v3.py` builds the multi-agent track's facilities. `generation.py` is
-hashed into the frozen `GhostlineEnv-v2` contract and is never modified; the
-swap happens inside `GhostlineSimulationV3.reset`, which runs before the base
-class generates a level, so the single-agent track keeps its original layouts.
+## Developmental v2 runner contract
 
-The generator is subtractive and conservative: it reshapes an already valid
-level and re-runs the original `LevelGenerator.validate`, so reachability, route
-redundancy, door throats and every security clearance still hold rather than
-being reimplemented. Three passes run in order, each behind a single batched
-connectivity check because per-tile flood fills cost roughly a 10x slowdown on a
-path that runs at every training reset.
+`GhostlineEnv-v2` exposes masked `Discrete(288)`:
 
-- Corner carving recesses room corners into L-shaped, stepped and alcoved
-  silhouettes so a room's shape is no longer predictable from its position.
-- Room archetypes lay structured runs with walkable gaps: server aisles, desk
-  rows, shelving, vault cases. This is what actually breaks the empty-rectangle
-  read, and the parallel runs create the short sightlines, corner peeking and
-  cover that the crouch stealth layer and the security interception shaping both
-  depend on.
-- Pillars, glass partitions and non-blocking decor (floor markings, signage,
-  cable runs, vent grates) finish the space. Decor never blocks movement or
-  sight, so it cannot reach navigation, detection or any policy observation.
+`9 movement x 2 dash x 2 pulse x 2 decoy x 2 crouch x 2 interact`
 
-New structure and decor render code-natively rather than through the release
-atlases, so they add no binary asset and cannot change the packaged manifest.
-Crouching squashes the runner silhouette and draws a ground marker that turns
-green in cover, because both states are mechanical rather than cosmetic.
+The context-sensitive `interact` bit enters a vent or operates a nearby field
+panel. Both actions can never be legal on the same tile; the action mask
+selects the meaningful interpretation. Every integer from 0 through 287 has a
+unique semantic decode.
 
-## Adaptive Contracts fairness contract
+The v2 observation is:
 
-- Env-v3 runners have a stealth state. `RunnerActionV3` carries a fifth `crouch`
-  bit for 144 masked actions; the original 72 codes keep their exact meaning.
-  Crouching moves at 52% speed, drops footstep noise from 118 px to 46 px, fills
-  guard awareness at 55% rate, and cools trace faster. It never makes the runner
-  invisible and it is masked out with dash, so it cannot silence a loud move.
-- Movement is audible in Env-v3. The frozen simulation only broadcast a dash
-  wave, so walking everywhere was free; footsteps now emit on a fixed cadence at
-  a stealth-dependent radius. Dashing additionally costs trace per second, which
-  is what makes a loud route expensive rather than strictly better.
-- Cover is read from the existing collision grid rather than authored volumes,
-  so every generated facility supports it without a second source of truth.
-- Env-v3 carries a stealth reward economy. Exposure costs a fraction of a
-  decision proportional to live trace, each new detection costs a fixed amount,
-  and data secured while the network is still cold pays a bonus. These are
-  objective terms rather than potential-based shaping, deliberately: shaping is
-  policy-invariant by construction, and the intent here is to move the optimum
-  away from racing rather than to guide search toward the same one. A naive
-  potential `-k * trace/TRACE_MAX` is also actively wrong, because a constant
-  negative potential makes `gamma*Phi - Phi` positive and would pay a bonus for
-  sitting at maximum trace.
-- The measured defect this replaces: the old gain-only trace term gave the whole
-  stealth budget 4.7% of a successful run, so playing loud for an entire mission
-  cost less reward than spending 75 extra seconds. Route progress remains
-  potential-based, where preserving the optimum is the correct goal.
-- Holding still while crouched, in cover and unseen is no longer penalised as
-  idling. The time cost still applies, so cover cannot be farmed indefinitely.
+| Key | Shape | Meaning |
+|---|---:|---|
+| `ego` | `27` | runner resources, integrity, trace, timer, quota, alert |
+| `objective` | `8` | public phase, bearing, range, next door, link state |
+| `directive` | `6` | Standard, Ghost, Speed, or Greed contract context |
+| `field` | `8` | owned charges and directly readable interaction state |
+| `field_targets` | `16 x 13` | explored vents/panels and directly visible sensors |
+| `local_grid` | `15 x 15 x 15` | occupancy, doors, objectives, hazards, field content |
+| `targets` | `5 x 10` | known terminal records |
+| `entities` | `12 x 16` | visible or audibly inferred security with confidence |
+| `rays` | `24 x 4` | geometry, occlusion, and danger distances |
+| `action_mask` | `288` | legal flattened actions |
 
-- Adaptive play is optional and never replaces the classic campaign or the published runner benchmark.
-- Acoustic decoys have limited charges, a two-second lifetime, deterministic placement, and perception-gated noise pulses.
-- Only one security door can lock at a time. Every eligible door is a redundant room-graph edge, warns for 0.65 seconds, remains locked for 3.5 seconds, and can be pulse-overridden for five seconds. Occupied doors never close.
-- Tier-5/6 Suppressors use a 0.70-second visible aim telegraph, line-of-sight and range checks, friendly-fire blocking, a cooldown, and a nonlethal integrity projectile. They do not receive a hitscan weapon.
-- Pulse still disables electronics and now also jams learned radio messages and forces nearby adaptive locks open.
-- External tactical waypoints are clamped and deterministically projected onto a valid navigation cell before they reach the shared guard pathfinder. Flank offsets cannot escape the generated world or crash a boundary rollout.
-- Standard, Ghost, Speed, and Greed directives are deterministic. The speed par is derived once from the seed's minimum quota-satisfying Euclidean route, link time, and a fixed interaction allowance.
-- Desktop and web launchers expose Adaptive mode and directives. The web blocks the frozen Env-v2 runner policy from taking over a live Env-v3 contract instead of silently feeding it an incompatible observation.
+Field observations never expose global unseen devices, sensors, projectiles,
+or operative coordinates. Static field content appears after map exploration;
+dynamic field sensors require direct visibility. Audio supplies quantized
+bearing/range rather than a hidden-state lookup.
 
-## Fairness and interaction contract
+## V2 field and stealth systems
 
-- Terminal linking continues while the runner moves anywhere inside its visible interaction ring; leaving pauses progress without erasing it. The outer ring uses the literal 40 px simulation radius, while the smaller inner pulse remains decorative.
-- Damage preserves partial terminal progress and has a 1.35-second global recovery window.
-- Guard and camera sight accumulates awareness before confirmation and decays when line of sight breaks.
-- Guard tackles require a visible 0.42-second strike wind-up and disengage into search after impact; response-drone contact requires a 0.55-second charge cue followed by one second of recoil. A 1.35-second global damage-recovery window prevents contact dogpiles while preserving chase pressure.
-- Security generation reserves space around spawn, extraction, and terminals; validation rejects objective/security overlaps.
-- Every terminal now has at least three collision-safe tile-centre link positions and at least one position outside the complete sweep envelope of every camera. Camera mounts stay five Manhattan tiles from objectives, point along useful room sightlines while explicitly minimizing objective exposure, and never sweep the spawn or extraction relay. Guards keep a four-tile objective buffer and all security stays two tiles away from doorway throats.
-- Facility graphs guarantee alternate-route loops as difficulty grows: one loop on Surveillance/Patrol, two on Countermeasure/Lockdown, and three on Ghostline. This prevents a single cone or patrol from turning the only route into a forced detection check while preserving deterministic seed composition.
-- Terminals are distributed across distinct rooms with open authored interaction pockets. Server, security, and vault terminals carry predictable higher-value potential; quota repair deterministically promotes specialist targets instead of rejecting seeds until random values happen to add up.
-- Countermeasure uses three human guards plus its networked cameras, doors, and guarded terminals. The earlier four-guard curve created a non-monotonic integrity-loss spike above the drone-backed Lockdown tier; the corrected curve preserves the lesson while restoring a readable escape window.
-- Tier 5 emphasizes systemic lockdown with four cameras, three roaming patrols, four pulses, and a response drone at full trace (100); tier 6 raises this to five cameras and a five-operative threat pyramid while reducing the runner to three pulses and deploying its drone at elevated trace (72), preserving a readable step into the full-system contract.
-- Guards have explicit Standard, Interceptor, and Elite grades. Tier 3 introduces Standard patrols, tier 4 promotes only its final patrol to Interceptor, tier 5 deliberately mixes all three, and tier 6 fields three Standard, one Interceptor, and one Elite. Chase speeds are 95/97/99% of the runner's normal 126 px/s speed, so an Elite can maintain pressure without overtaking an undashed runner; dash remains the decisive escape tool. Patrol and search retain the `1.04x/1.10x/1.16x` grade curve and deterministic `0.78/0.52/0.36` second scan pauses. Small `I/II/III` floor badges communicate grade without relying on color; `EYE`, `SOUND`, and `RADIO` labels communicate the current stimulus.
-- The recalibrated fair teacher uses a Tier-6 directional-inertia scale of 1.8x with objective/clearance/escape/sight weights `20/1/0.8/0.8`. It was selected only on validation seeds and changes controller decisions, not observations, simulation rules, or security behavior.
-- The observation-only teacher treats the projected runner footprint as the authoritative local collision test, with adjacent blocked cells used only as soft clearance preferences. It interprets live facility telemetry, `RETURN` as recovery rather than maximum alert, public guard grade as a risk signal, and entity distances using the shared 390 px normalization constant. Two disjoint current-fingerprint 100-seed-per-tier gates cleared the teacher thresholds at `100/100/99/99/99/86%` and `100/100/99/99/99/89%`.
-- Guard navigation uses radius-checked five-cell path look-ahead, combined/axis fallback movement, choke-aware separation, close-waypoint invalidation, smooth collision recovery, and stuck detection. Authored patrols now contain distinct local, doorway, and neighbouring-room points. A 1,146-traversal directed doorway audit found zero jamb stalls.
-- Exploration reveals the exposed face of blocking furniture and walls as soon as LOS reaches a nearer adjacent floor tile. The persistent explored mask is retained for player-equivalent policy sensing, reward accounting, and map knowledge, but it no longer dims world art; furniture, floors, and walls always render at authored brightness.
-- Partial guard sightings enter a visible suspicious pause before confirmation. Search guards scan the last-known position, and one successful tackle disperses nearby chasers into a short search window so a three-guard doorway dogpile cannot chain unavoidable integrity loss.
-- Simulation owns a deterministic, renderer-free facility-telemetry cache. The breached security network publishes current guard, camera, and drone positions to the renderer and all Env-v2 controllers, preventing operatives from disappearing at arbitrary wall boundaries. This is a shared tactical-game rule, not a renderer-only wallhack: human play, the minimap, Python policies, ONNX takeover, recording, and replay receive the same live entity rows. Physical detection still uses true occlusion, distance, facing, and awareness.
-- Presentation keeps guards, cameras, drones, and their current state readable at all times. Hostile sight envelopes remain physical rather than tile-based: cameras use 220 px and `acos(0.72)`, while guards use `205 + 18 * alert tier` px and `acos(0.62)`. Sixty-five occlusion-refined rays create a smooth continuous fan and stop it at the first wall or blocking prop; live operative telemetry does not let a cone see through that occluder.
-- Dash emits one restrained ring showing its literal 185 px sound radius. Only one wave exists per continuous dash, dash-trail particles are emitted four times less often, particles are capped at 72, and the decorative twelve-spoke burst was removed. Detection feedback exposes the recoverable loop as `SPOTTED -> LINE BROKEN -> SEARCHING -> CLEAR`; trace bars mark the 25/50/75 escalation steps and drone-backed tiers show their deployment threshold before arrival.
-- Acquire-phase objective selection is sticky: once a terminal is selected it remains the shared HUD/policy target until completed, quota is met, or the runner deliberately enters another terminal's link ring. This hysteresis prevents equidistant terminals from flipping the route bearing at tile boundaries.
-- The objective observation's next-waypoint bearing follows the distance-map gradient for up to six line-of-sight tiles. The look-ahead remains player-equivalent to the HUD route hint while avoiding one-tile left/right oscillation around furniture and doors.
+- Crouch moves at 52% speed, reduces footstep radius, scales awareness gain,
+  and improves trace cooling. It does not make the runner invisible and cannot
+  silence a dash.
+- Walking emits deterministic cadence-based footsteps. Dashing is fast and
+  loud and carries a trace cost.
+- Vents are reciprocal, runner-only, cross-room pairs with a 1.15-second
+  committed transit. The runner cannot steer, hack, extract, take damage, or
+  trigger a field sensor in transit, while the mission clock and full security
+  world continue to advance.
+- Field hacks share limited charges. Camera panels disable their camera, light
+  panels darken their own room, and a door panel opens only its bound security
+  door. No panel can silently affect a random or global target.
+- Darkness scales the shared physical visibility predicate for observers and
+  targets in the affected room. Detection, policy observations, and rendered
+  cones therefore use the same range.
+- Decoys create a bounded lure window at their landing point. A crouched throw
+  is shorter and quieter.
+- Patrol and Interceptor operatives can deploy one non-damaging sensor.
+  Sensors require line of sight to trip. Suppressors retain a telegraphed,
+  nonlethal projectile instead.
+- PINCER and SEAL consume explicit public escape-route or door targets. They do
+  not infer the runner's hidden objective, heading, or unseen exact position.
+- Direct visual pursuit is a motor-level safety reflex and cannot be demoted by
+  a repeated HOLD order. This removes the old detection-reward loop.
 
-## Procedural facilities and presentation
+## V2 facility generation
 
-Facilities use 11x9-tile room modules on a connected graph. Roles include office, lounge, lab, server, security, vault, utility, corridor, and extraction. Roles are dealt without replacement before repeating so compact maps do not collapse into duplicate room themes. Each furnished role now selects one of three authored arrangements containing desks, tables, chairs, sofas, TVs, monitors, racks, consoles, lockers, plants, crates, generators, or vault cases. Modular server and locker banks plus incompatible vertical sofa and thin console runs are emitted as deterministic one-tile visual modules: the union of blocking cells is unchanged, but every blocked tile receives visible art instead of relying on one bottom-pivoted atlas crop at the end of a long footprint. Presentation adds deterministic role-specific materials, decals, wall trim, and animated equipment without entering generation or simulation imports.
+`FacilityLayoutV2` starts from a valid published layout, reshapes it
+deterministically, adds field content, and validates the final result. It does
+not reimplement base reachability rules.
 
-The post-freeze procedural audit validated 10,000/10,000 seeds under these stronger rules at 99.0 levels/second, with exact security counts, reachable quota/extraction, unobstructed doors, valid multi-point patrols, minimum route redundancy, and zero camera-locked terminals.
+Geometry passes add alcoves, corner recesses, role-specific aisles, pillars,
+partitions, and nonblocking environmental detail. Placement uses one reserved
+tile contract: essential vents and panels claim space before decorative props,
+so a cosmetic object cannot hide or overlap an interaction.
 
-The renderer builds a cached tile-to-room-role lookup for each level. It uses original runtime eight-direction actors, smooth occlusion-clipped cones, terminal/extraction glow, directional threat indicators, event particles, captions, and cinematic effects. The old square explored-space fog layer was removed because it obscured furniture and made vision feel tile-based. Surveillance has three deliberately distinct visual states: a faint amber true sight envelope, amber-to-danger acquire feedback, and a high-contrast confirmed-detection state. Camera cones carry a dashed centre beam and square glyph; guard cones use boundary notches and a triangle glyph. Four-segment entity badges, an eight-segment top-centre acquire meter, and labeled edge arrows communicate the same escalation through color, shape, and text. Menus use the same flat code-native facility schematic as the 2D game; the retired pseudo-isometric key art is provenance-only and never packaged.
+Every accepted seed must satisfy both base validity and v2 readiness:
 
-## Game flow, accessibility, and local data
+- reachable quota and extraction, safe spawn, valid patrols, and route loops;
+- exact reciprocal vent counts with distinct-room, geodesically separated,
+  reachable endpoints;
+- exact device counts, valid target type and id, and reachable panel tiles;
+- door panels bound to the exact generated security-door tile;
+- no overlap among doors, objectives, vents, panels, props, and protected
+  doorway throats;
+- graph-safe security doors and a positive directive speed par.
 
-Gameplay chrome and the world occupy disjoint regions. A reserved status band spans the top of the logical canvas, its height derives from the active HUD fonts, and every world layer is clipped strictly below it, so no persistent readout can cover the runner, an operative, or a prop. The camera centres the runner inside that viewport rather than in the whole canvas. The band is a single row carrying tier, objective phase and quota, integrity, the trace bar with its exact value and escalation ticks, dash, utility charges, alert tier, and the mission clock. It replaces a three-row floating plate plus a top-right map that together covered roughly a sixth of the playfield.
+Generation makes eight deterministic reshape attempts and then fails loudly.
+There is no feature-silent fallback. The release gate is a 10,000-seed audit
+through `scripts/fuzz_ghostline_levels.py --adaptive`.
 
-The map and the live agent card form one bottom-right cluster inside the viewport. Both fade to low opacity whenever the runner, a guard, or a drone passes beneath them, which keeps policy runs inspectable. Static terminals and the extraction relay deliberately do not trigger the fade, because they are already drawn on the map and would otherwise dim it permanently. The touch layout keeps its device-verified full-bleed canvas, where the single decision band remains an intentional overlay so a phone does not lose playfield height.
+## V2 runner network
 
-Presentation is strictly downstream of simulation: no chrome geometry, fade state, or layout value reaches the runner observation, the action contract, or the deterministic rules. The redesign was verified by replaying the frozen tier-6 seed-2,000,000 ONNX contract and reproducing its exact 366-decision, 36.5333-second extraction.
+`RunnerPolicyV2` uses:
 
-The status band and its internal columns are measured from their own content at every HUD scale, so the objective, integrity, mission clock, pulse/decoy charges, and alert tier remain separated and backed rather than colliding or drawing onto world art. Adaptive utility text stacks its alert row above the fixed detection lane. The HUD carries the objective phase (`ACQUIRE`/`EXTRACT`) and the exact trace value beside its bar, because trace escalates at fixed 25/50/75 steps that a bar alone cannot express. Link progress lives only on the terminal ring the runner is standing inside: the ring's countdown now decreases, and the duplicate bottom-centre `LINKING` bar was removed. The minimap distinguishes the single sticky objective terminal from the remaining ones and gives the runner marker a heading tick.
+- a convolutional encoder for the 15-channel local grid;
+- masked attention pooling for terminals, perceived entities, and field
+  targets;
+- MLP encoders for ego, objective, rays, and field status;
+- FiLM conditioning for the contract directive;
+- a 256-, 384-, or 512-unit GRU;
+- separate policy and value decoders;
+- objective-bearing and danger heads reserved for an auxiliary-loss ablation;
+- exact action masking before sampling or argmax.
 
-Every menu panel carries its own title instead of a uniform `LIVE DOSSIER` label, and panel copy is bounded by an explicit line capacity. The Field Manual legend previously wrapped past that capacity and silently dropped its suppressor-telegraph entry — the only in-game explanation of that cue. Line wrapping now returns a fitting line untouched, so the aligned label/value columns in every panel, briefing, and debrief body survive rendering.
+Hidden layers use orthogonal initialization, action logits use gain `0.01`,
+and value heads use gain `1.0`. The v2 checkpoint stores observation contract,
+action count, recurrent width, and a normalized source fingerprint covering
+all inherited and v2 transition/observation files. Loading fails closed on any
+mismatch. No v1 runner checkpoint can load as a v2 runner.
 
-The executable includes title, main menu, contract selection, briefing, play, pause, field manual, grouped settings, credits, debrief, Agent Lab selection, and Agent Lab playback. Agent Lab exposes deterministic seed controls, runtime identity, action, latency, objective phase, and matched local human/agent summaries. Live playback now uses a compact 218x44 telemetry card instead of the former 230x104 lower-left panel; full recurrent/run diagnostics remain in the debrief and external web shell. Menu choices are full-row pointer targets with a persistent border, active rail, and shape marker rather than relying on a tiny text caret.
+## V2 multi-agent security contract
 
-The versioned profile at `%LOCALAPPDATA%/Ghostline/progression-v1.json` stores unlocks, scores, audio mix, display/accessibility settings, and keyboard bindings. Every gameplay/menu action is remappable; conflicting assignments swap instead of silently disabling an action. Menus also expose scaled cursor/touch hit targets. Touch play maps an on-screen eight-direction stick plus independent dash, pulse, and pause contacts into the same 36 semantic actions as keyboard play; it never enters simulation or changes the RL contract. Full benchmark records append to `%LOCALAPPDATA%/Ghostline/runs-v1.jsonl`, including sampled position/trace curves, actions, idle rate, distance, efficiency, outcomes, and agent latency.
+`GhostlineSecurityParallel-v2` exposes up to five simultaneous operatives.
+Each actor action is factorized as:
 
-Audio volumes adjust with Left/Right and clamp at the ends; Confirm retains its wrap-around `+10%` cycle for keyboard-only and pointer players, who previously had to pass through silence to lower any volume.
+1. ten semantic intents: patrol, investigate, search, pursue, intercept,
+   flank-left, flank-right, hold, pincer, or seal;
+2. one of ten public tactical target rows;
+3. a discrete radio message;
+4. a role-gated ability bit.
 
-Accessibility includes independent master/music/SFX volume, sound captions, high contrast, color-safe cues, reduced motion, reduced flashes, three HUD scales, an opt-in 35% human timer assist, timer warnings, tutorial hints, screen shake, fullscreen, and remappable keyboard controls. Assisted runs are explicitly tagged in telemetry and do not alter the default environment or agent contract. The authored world remains nearest-neighbour pixel art, while every menu, HUD, caption, warning, and Agent Lab glyph is rerasterized at the real desktop/browser framebuffer resolution. Native glyph surfaces use a bounded reuse cache. At native 16:9 resolutions the compositor scales directly into the display surface instead of allocating and copying a second full-size framebuffer. Desktop uses precise 60 Hz pacing; Emscripten retains cooperative pacing through the asynchronous browser loop. Desktop preserves crisp integer world scaling and letterboxes non-native ratios. Phone browsers instead use high-quality compositor downscaling for the 1280x720 framebuffer, avoiding oversized nearest-neighbour blocks and preserving native glyph edges inside the contained 16:9 canvas. Touch-first human and agent playback use one calm phone-readable HUD band: tier/phase/quota, integrity, trace, dash, pulse, clock, and alert remain visible without duplicating the desktop minimap, while world markers, captions, and contextual link feedback occupy the playfield.
+The target set includes patrol, perceived contact, heard contact, terminal,
+extraction, door, flank, and public escape-route cutoff records. PINCER accepts
+an escape-route target. SEAL accepts a door or escape-route target. Invalid
+factor combinations fall back safely and are penalized once. An explicit
+intent-by-target conditional mask prevents sampling an individually legal
+intent and individually legal target that are illegal together.
 
-The default Watch Agent entries use one curated passing contract per tier from the held-out validation namespace (`1,007,004` through `1,047,023`). The first desktop Agent Lab entry and the web's explicit `REPLAY PORTFOLIO AGENT RUN` action instead use tier 6, seed `2,000,000`: the exact contract recorded in `videos/ghostline-demo.mp4`. A regression binds the bundled ONNX graph to its 366-decision action hash and 36.53-second extraction. This is presentation curation, not a replacement for the immutable 500-seed-per-tier final report: users can still step to any seed, and failures remain visible. Runtime policy lookup is source/wheel/PyInstaller-relative rather than working-directory-relative, preventing an accidental silent fallback when Agent Lab is launched outside the repository root.
+Actors receive an 8-channel local grid, their own state, perception-gated
+runner information, masked teammates, masked targets, and recent radio. The
+training-only central state is 72 values: mission context, five fixed-width
+operative blocks, facility/door context, and an explicit presence mask.
 
-## Public contract
+## Security network and credit assignment
 
-- Current Gym id: `GhostlineEnv-v2`; `GhostlineEnv-v1` is the documented baseline.
-- Action: `Discrete(36)` = `9 movement x 2 dash x 2 pulse`.
-- Simulation: 60 Hz; policy control: 10 Hz through six-tick repeat.
-- Observation: ego, explicit objective, local structured grid, known targets, live shared facility-security telemetry, directional rays, masks, and legal actions. The 12 entity rows contain 13 values: kind one-hot; relative x/y/distance; velocity; facing; alert; confidence/status; and explicit guard grade. The human HUD/minimap and policy receive the same current operative records with confidence one.
-- Facility occupancy, doors, known terminal locations, and extraction geometry match the always-visible minimap; the separate explored channel remains a route-memory and reward signal. Pulse count is normalized across the literal zero-to-four charge range with no clipping.
-- Objective vector: phase, goal dx/dy, route distance, next-waypoint dx/dy, link progress, and target value.
-- Terminal telemetry: success/reason, tier/seed, quota/data, duration, trace, detections, guard/drone damage attribution, pulse use, path distance, action histogram, idle decisions, efficiency, and exact reward components.
+The default learner is parameter-shared recurrent MAPPO:
 
-The 2026-07-27 security rebaseline changed the operative contract. Sight now
-uses the simulation's own `GUARD_VISION_*` envelope instead of a hardcoded
-245 px / cos 0.45 cone, so the observation's visibility flag and the `PURSUE`
-mask agree with the detection model that produces awareness. Every tactical
-target slot carries a distinct kind code, so the extraction relay and a security
-door are no longer indistinguishable. Heard contacts use the same twelve-sector,
-48 px quantisation the runner's own audio cue uses, replacing a fixed
-per-operative offset from the exact runner position. The centralized critic
-state is 72 values and carries remaining mission time, alert tier, live link
-progress, completed-terminal fraction, and an explicit operative presence mask.
+- one decentralized GRU actor is shared across roles;
+- the target head is a pointer over the current target rows rather than a fixed
+  index classifier;
+- the centralized critic uses a shared operative encoder and masked pooling;
+- the critic emits one value per operative, conditioned on global context,
+  unordered team context, and that operative's own block;
+- active masks exclude padded, absent, and terminated agents from GAE, policy,
+  entropy, and value losses;
+- rollout hidden state resets exactly at episode boundaries.
 
-Credit is now split: damage, detection, data, radio, formation, and the terminal
-stay team-wide, while discount-matched containment shaping is attributed to the
-operative that earned it, and the trainer runs per-operative GAE against the
-shared team value as a baseline. The shaping potential scores interception
-geometry — progress along the runner's own route to its current objective, in a
-corridor around that line — rather than raw proximity. Guards move at 95-99% of
-runner speed, so a tail chase can never close, and rewarding closeness trained
-exactly that losing behaviour.
+The reward ledger separates shared outcomes from attributed shaping. Shared
+terms include damage, first contact acquisition, runner data, bounded radio
+assist, invalid actions, formation, discount-matched team potential, and
+terminal containment/extraction. A small bounded, discount-matched
+per-operative potential attributes route coverage and awareness to the agent
+that earned it. Components are clipped individually, summed exactly, and
+reported in `info`.
 
-These changes move the security contract identity. `models/ghostline-security.pt`
-and the 11M/12M/13M evidence are historical: the checkpoint no longer loads and
-Adaptive Contracts falls back to the deterministic tactical team, which is the
-documented fail-closed path. No learned-security claim is made under the new
-contract until a fresh campaign and held-out evaluation exist.
+The team potential uses geodesic escape-route coverage, awareness, trace, and
+runner mission progress. It is not Euclidean tail-chasing. Detection credit is
+awarded once per operative per episode, so issuing HOLD cannot manufacture new
+contact bonuses.
 
-The optional public additions are `GhostlineEnv-v3` and
-`GhostlineSecurityParallel-v0`. Env-v3 has 72 masked runner actions and adds a
-six-value directive record, three local-grid channels, three entity fields,
-one projectile ray field, and decoy state. The parallel security environment
-uses up to five parameter-sharing operatives, factorized `MultiDiscrete([8,
-8, 5, 2])` actions, local actor observations, and a fixed 72-value centralized
-critic state. Security training seeds start at 10M, validation at 11M, and
-final test at 12M so no Env-v2 release slice is reused.
+## Checkpoint compatibility
 
-The security observation builder caches the six facility-wide spatial planes
-once per topology or objective change and crops them for each operative. Action
-validation reuses the exact observation that produced the action. This removes
-duplicate map work without sharing hidden runner state or changing a public
-observation value.
+The following artifact families are intentionally separate:
 
-Training-only lessons simplify mechanics in seven reverse-curriculum stages; final validation never applies those modifications. Human play writes a corresponding local telemetry schema for the later locked matched-seed benchmark.
+- published v1 runner checkpoint/ONNX/evidence: valid and immutable, with
+  historical internal `GhostlineEnv-v2` metadata;
+- pre-migration adaptive security checkpoint and 13M evidence: historical
+  only, invalid for the current v2 fingerprint;
+- developmental v2 runner checkpoints: must carry the current
+  `runner-recurrent-field-policy-v2` fingerprint;
+- developmental v2 security checkpoints: must carry the current observation,
+  mechanics, generation, reward, and model fingerprint.
 
-The fair teacher uses only this public contract. Its final tier-5 movement curve increases mission commitment against the persistent Lockdown drone while leaving electronic/pursuit relief to pulse timing; it does not add privileged state. BC, DAgger, RND, recurrent PPO, optimizer state, and curriculum checkpointing are implemented directly in PyTorch rather than through an external RL framework.
+No result from an invalidated checkpoint may be described as a current v2
+result. Until new training and held-out evaluation finish, v2 uses the
+deterministic tactical fallback in player builds.
 
-The live-operative telemetry, faster chase curve, five-operative tier-6 pyramid, and recalibrated teacher changed the training-environment fingerprint again on 2026-07-14. Every earlier BC/DAgger corpus and neural checkpoint is rejected for final selection; only fresh trajectories whose manifest matches fingerprint `521c449a...e129` may enter current training.
+## Presentation contract
 
-Final-test audit slices are immutable after inspection. The 3M, 4M, and 5M slices are retained as failed generalization evidence; the teacher passed the then-current curve on the untouched 6M slice. The later route/security/patrol freeze deliberately changed the procedural distribution, so all 2M–6M results are now historical and a later untouched slice is reserved for the selected frozen-distribution champion. None of these results establishes neural-policy acceptance.
+The renderer presents a 640x360 world with native-resolution UI, integer
+desktop scaling, smooth physical cones, eight-direction locomotion, persistent
+security readability, compact HUD, minimap, captions, and touch controls.
+Darkness is composited after world props but before objectives, prompts,
+sensors, and actors so the mechanical state remains readable. Rendered cone
+lengths call the same darkness scaling used by simulation visibility.
+
+Desktop v2 controls add `Q` decoy, `Left Ctrl` crouch, and `E` interact.
+Touch adds dedicated sneak, decoy, and use buttons. The web shell labels the
+released game as v1 and the multi-agent game as v2, and refuses to hand the
+published v1 ONNX policy a v2 observation.
+
+## Verification gates
+
+- Gymnasium checker, PettingZoo parallel API, observation bounds, and masks.
+- Deterministic replay, collision, LOS/cone parity, hacking, vents, trace,
+  damage, guard orders, sensors, reward sums, and termination tests.
+- Exact 288-action round-trip through the Gym wrapper.
+- 10,000 v2 seeds with zero readiness failures.
+- Runner PPO and MAPPO smoke runs with finite losses and resume checks.
+- Headless throughput measured after the distribution freezes.
+- Held-out runner and security evaluation from disjoint namespaces.
+- Browser and Vercel QA in Chrome only; no in-app browser.
+
+The frozen developmental runner fingerprint is
+`be4a280a0d629cadabec08d038497eef331a14650c3e5fd23e97d4afca61efdd`.
+Its reserved 20M final-test entry remains unopened. The 2026-07-28 readiness
+pass completed 10,000 generated facilities, runner and security fresh/resume
+smokes, an isolated clean install, source-archive audits, and 1,000/1,000 v2
+runner ONNX action parity. No long v2 campaign or learned-policy acceptance
+claim has been made.

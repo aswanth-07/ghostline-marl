@@ -37,6 +37,10 @@ TOUCH_PULSE_CENTER = (516, 255)
 TOUCH_PULSE_RADIUS = 23
 TOUCH_DECOY_CENTER = (548, 318)
 TOUCH_DECOY_RADIUS = 22
+TOUCH_CROUCH_CENTER = (486, 318)
+TOUCH_CROUCH_RADIUS = 20
+TOUCH_INTERACT_CENTER = (610, 318)
+TOUCH_INTERACT_RADIUS = 20
 TOUCH_PAUSE_RECT = pygame.Rect(592, 82, 38, 25)
 WINDOW_SIZE = (1280, 720)
 
@@ -94,7 +98,7 @@ GREEN = (108, 255, 177)
 
 # Color-Safe replacement pair, shared by the world pixel mask and the native
 # text path so one rule set governs both.
-_V3_DECOR_KINDS = ("floor_marking", "wall_sign", "cable_run", "vent_grate")
+_V2_DECOR_KINDS = ("floor_marking", "wall_sign", "cable_run")
 
 COLOR_SAFE_DANGER = (255, 92, 190)
 COLOR_SAFE_SAFE = (82, 184, 255)
@@ -103,7 +107,7 @@ COLOR_SAFE_SAFE = (82, 184, 255)
 # tinting under world lighting: every entry sits in the 28-53 luminance band, so
 # at the minimap's ~1.8 px per tile all nine roles collapsed into one grey wash.
 # These are presentation-only and deliberately do not live in ``config.py``,
-# which is hashed into the frozen Env-v2 environment fingerprint. Each value
+# which is hashed into the published-v1 environment fingerprint. Each value
 # stays below the Color-Safe red/green mask thresholds so room fills read the
 # same in every colour mode, and corridors stay darkest so rooms read as rooms.
 # Gameplay chrome geometry.  The status strip owns a reserved band at the top of
@@ -573,6 +577,14 @@ class GhostlineRenderer:
             "door_forced_open": ("[PULSE] Security lock overridden", CYAN),
             "suppressor_aim": ("[WARNING] Suppressor is lining up a shot", VIOLET),
             "suppressor_fire": ("[PROJECTILE] Shock round fired", VIOLET),
+            "vent_enter": ("[DUCT] Transit committed", CYAN),
+            "vent_exit": ("[DUCT] Exit reached", CYAN),
+            "hack_camera": ("[FIELD] Camera link disabled", CYAN),
+            "hack_door": ("[FIELD] Security door overridden", CYAN),
+            "hack_lights": ("[FIELD] Room lighting suppressed", VIOLET),
+            "sensor_deployed": ("[SECURITY] Field sensor deployed", AMBER),
+            "sensor_trip": ("[SENSOR] Crossing reported", RED),
+            "footstep": ("[STEPS] Movement is audible", MUTED),
         }
         for event in events:
             position = np.asarray(event.position, dtype=np.float32)
@@ -619,6 +631,13 @@ class GhostlineRenderer:
                 "suppressor_aim": VIOLET,
                 "suppressor_fire": VIOLET,
                 "projectile_impact": VIOLET,
+                "vent_enter": CYAN,
+                "vent_exit": CYAN,
+                "hack_camera": CYAN,
+                "hack_door": CYAN,
+                "hack_lights": VIOLET,
+                "sensor_deployed": AMBER,
+                "sensor_trip": RED,
             }.get(event.kind)
             if color is None:
                 continue
@@ -666,8 +685,9 @@ class GhostlineRenderer:
         self._draw_security_cones()
         self._draw_walls()
         self._draw_props()
+        self._draw_v2_darkness()
         self._draw_objectives()
-        self._draw_v3_field_state()
+        self._draw_v2_field_state()
         self._draw_stealth_state()
         self._draw_adaptive_mechanics()
         self._draw_security()
@@ -1065,17 +1085,17 @@ class GhostlineRenderer:
             self._blit_accessible_sprite(atlas_sprite, destination)
             return
         kind = prop.kind
-        # Env-v3 facility structure and flavour. These are drawn code-natively
+        # V2 facility structure and flavour. These are drawn code-natively
         # rather than added to the release atlases so they need no new binary
         # asset, stay deterministic, and cannot change the packaged manifest.
-        if kind in _V3_DECOR_KINDS:
-            self._draw_v3_decor(kind, rect)
+        if kind in _V2_DECOR_KINDS:
+            self._draw_v2_decor(kind, rect)
             return
         if kind in ("pillar", "partition"):
-            self._draw_v3_structure(kind, rect)
+            self._draw_v2_structure(kind, rect)
             return
         if kind in ("vent_shaft", "hack_panel"):
-            self._draw_v3_field_prop(kind, rect)
+            self._draw_v2_field_prop(kind, rect)
             return
         pygame.draw.rect(self.logical, (6, 10, 14), rect.move(3, 5), border_radius=2)
         if kind in ("desk", "meeting_table", "coffee_table", "lab_bench"):
@@ -1134,7 +1154,7 @@ class GhostlineRenderer:
             pygame.draw.rect(self.logical, (79, 98, 101), rect, 1, border_radius=2)
             pygame.draw.line(self.logical, (26, 35, 40), rect.topleft, rect.bottomright)
 
-    def _draw_v3_structure(self, kind: str, rect: pygame.Rect) -> None:
+    def _draw_v2_structure(self, kind: str, rect: pygame.Rect) -> None:
         """Load-bearing interior structure: concrete pillars and partitions.
 
         Both block sight and movement, so they read as heavy architecture rather
@@ -1160,7 +1180,7 @@ class GhostlineRenderer:
             pygame.draw.line(self.logical, (74, 118, 126), (offset, glass.y + 1), (offset, glass.bottom - 2))
         pygame.draw.rect(self.logical, (74, 82, 92), (rect.x, rect.bottom - 3, rect.width, 3))
 
-    def _draw_v3_decor(self, kind: str, rect: pygame.Rect) -> None:
+    def _draw_v2_decor(self, kind: str, rect: pygame.Rect) -> None:
         """Non-blocking flavour that gives a room a purpose.
 
         None of this affects navigation, sight, or any policy observation; it
@@ -1183,14 +1203,8 @@ class GhostlineRenderer:
             for index, tint in enumerate(((44, 58, 66), (38, 70, 76), (60, 48, 40))):
                 y = base + index * 2 - 2
                 pygame.draw.line(self.logical, tint, (rect.x, y), (rect.right, y))
-        else:  # vent_grate
-            grate = rect.inflate(-6, -10)
-            pygame.draw.rect(self.logical, (26, 32, 38), grate)
-            pygame.draw.rect(self.logical, (58, 66, 74), grate, 1)
-            for offset in range(grate.y + 2, grate.bottom - 1, 3):
-                pygame.draw.line(self.logical, (44, 52, 60), (grate.x + 1, offset), (grate.right - 2, offset))
 
-    def _draw_v3_field_prop(self, kind: str, rect: pygame.Rect) -> None:
+    def _draw_v2_field_prop(self, kind: str, rect: pygame.Rect) -> None:
         """Vent shafts and hackable panels.
 
         Both are interactive, so they carry a shared visual grammar: a bright
@@ -1209,18 +1223,31 @@ class GhostlineRenderer:
             glow = int(40 + 40 * pulse)
             pygame.draw.rect(self.logical, (glow, glow + 30, glow + 46), housing, 1)
             return
-        # Hack panel: a wall terminal with a live status light.
-        body = rect.inflate(-6, -10)
-        pygame.draw.rect(self.logical, (14, 20, 26), body)
-        pygame.draw.rect(self.logical, (86, 74, 120), body, 1)
-        screen = body.inflate(-4, -6)
-        pygame.draw.rect(self.logical, (30, 26, 52), screen)
+        # Grounded control pedestal.  Panels are valid floor interaction cells,
+        # so drawing a wall-mounted object in the room centre was misleading.
+        pygame.draw.ellipse(
+            self.logical,
+            (4, 8, 12),
+            (rect.x + 5, rect.bottom - 10, rect.width - 10, 7),
+        )
+        base = pygame.Rect(rect.x + 9, rect.y + 13, rect.width - 18, rect.height - 17)
+        pygame.draw.rect(self.logical, (25, 31, 39), base, border_radius=2)
+        pygame.draw.rect(self.logical, (73, 78, 91), base, 1, border_radius=2)
+        body = pygame.Rect(rect.x + 6, rect.y + 5, rect.width - 12, 14)
+        pygame.draw.polygon(
+            self.logical,
+            (14, 20, 26),
+            (body.bottomleft, body.topleft, body.topright, body.bottomright),
+        )
+        pygame.draw.rect(self.logical, (86, 74, 120), body, 1, border_radius=2)
+        screen = body.inflate(-5, -5)
+        pygame.draw.rect(self.logical, (30, 26, 52), screen, border_radius=1)
         for offset in range(screen.y + 1, screen.bottom - 1, 2):
             pygame.draw.line(self.logical, (60, 52, 96), (screen.x + 1, offset), (screen.right - 2, offset))
         light = (VIOLET[0], int(VIOLET[1] * (0.55 + 0.45 * pulse)), VIOLET[2])
         pygame.draw.rect(self.logical, light, (body.right - 4, body.y + 2, 2, 2))
 
-    def _draw_v3_field_state(self) -> None:
+    def _draw_v2_field_state(self) -> None:
         """Live overlays for the new mechanics.
 
         Every one of these is a mechanical state the player must be able to
@@ -1230,6 +1257,8 @@ class GhostlineRenderer:
 
         # Deployed operative sensors.
         for sensor in getattr(self.sim, "field_sensors", ()):  # non-lethal
+            if not self.sim.player_can_see(sensor.position):
+                continue
             sx, sy = self._world(sensor.position)
             armed = sensor.armed_in <= 0.0
             colour = RED if sensor.triggered else (AMBER if armed else MUTED)
@@ -1271,7 +1300,9 @@ class GhostlineRenderer:
             self.logical.blit(overlay, (0, 0))
             self._text("IN DUCT", sx - self.font_small.size("IN DUCT")[0] // 2, sy - 30, self.font_small, CYAN)
 
-        # Darkened rooms read as a cool wash so the hack is visible at range.
+    def _draw_v2_darkness(self) -> None:
+        """Draw room darkness below objectives, prompts, sensors, and actors."""
+
         darkened = getattr(self.sim, "darkened_rooms", {})
         if darkened:
             overlay = pygame.Surface(LOGICAL_SIZE, pygame.SRCALPHA)
@@ -1345,11 +1376,16 @@ class GhostlineRenderer:
             if camera.disabled_for > 0.0 or not self._visible_from_player(camera.position):
                 continue
             pressure = 1.0 if camera.detected else camera.awareness
+            vision_scale = float(
+                getattr(self.sim, "security_vision_scale", lambda _origin: 1.0)(
+                    camera.position
+                )
+            )
             self._cone(
                 layer,
                 camera.position,
                 camera.angle,
-                CAMERA_VIEW_DISTANCE,
+                CAMERA_VIEW_DISTANCE * vision_scale,
                 CAMERA_VIEW_HALF_ANGLE,
                 self._vision_color(pressure),
                 14 + int(30 * pressure),
@@ -1360,11 +1396,18 @@ class GhostlineRenderer:
             if not self._visible_from_player(guard.position):
                 continue
             pressure = 1.0 if guard.mode == GuardMode.CHASE else guard.awareness
+            vision_scale = float(
+                getattr(self.sim, "guard_vision_scale", lambda _guard: 1.0)(guard)
+            )
             self._cone(
                 layer,
                 guard.position,
                 guard.facing,
-                GUARD_VIEW_BASE_DISTANCE + GUARD_VIEW_ALERT_DISTANCE * self.sim.alert_tier,
+                (
+                    GUARD_VIEW_BASE_DISTANCE
+                    + GUARD_VIEW_ALERT_DISTANCE * self.sim.alert_tier
+                )
+                * vision_scale,
                 GUARD_VIEW_HALF_ANGLE,
                 self._vision_color(pressure),
                 10 + int(28 * pressure),
@@ -1374,7 +1417,7 @@ class GhostlineRenderer:
         self.logical.blit(layer, (0, 0))
 
     def _draw_adaptive_mechanics(self) -> None:
-        """Render Env-v3 mechanics without coupling presentation to its types."""
+        """Render v2 mechanics without coupling presentation to its types."""
 
         for door in getattr(self.sim, "security_doors", ()):
             if not (door.locked or door.warning_remaining > 0.0):
@@ -2435,6 +2478,8 @@ class GhostlineRenderer:
         utility = f"PULSE {self.sim.pulse_charges}"
         if hasattr(self.sim, "decoy_charges"):
             utility += f"  DECOY {self.sim.decoy_charges}"
+        if hasattr(self.sim, "hack_charges"):
+            utility += f"  HACK {self.sim.hack_charges}"
         self._text("UTILITY", cursor, label_y, self.font_small, MUTED)
         self._text(
             utility,
@@ -2519,27 +2564,38 @@ class GhostlineRenderer:
             font=hud_small,
         )
         self._bar(181, 38, 72, 6, self.sim.dash_energy / 100.0, CYAN, "DASH", font=hud_small)
-        self._text(
-            f"PULSE {self.sim.pulse_charges}",
-            270,
-            31,
-            hud_small,
-            VIOLET if self.sim.pulse_charges else MUTED,
-        )
-        if hasattr(self.sim, "decoy_charges"):
+        if hasattr(self.sim, "hack_charges"):
             self._text(
-                f"DECOY {self.sim.decoy_charges}",
-                326,
+                (
+                    f"P{self.sim.pulse_charges}  "
+                    f"D{self.sim.decoy_charges}  "
+                    f"H{self.sim.hack_charges}"
+                ),
+                270,
                 31,
                 hud_small,
-                CYAN if self.sim.decoy_charges else MUTED,
+                CYAN
+                if (
+                    self.sim.pulse_charges
+                    or self.sim.decoy_charges
+                    or self.sim.hack_charges
+                )
+                else MUTED,
+            )
+        else:
+            self._text(
+                f"PULSE {self.sim.pulse_charges}",
+                270,
+                31,
+                hud_small,
+                VIOLET if self.sim.pulse_charges else MUTED,
             )
 
         seconds = int(math.ceil(self.sim.remaining_seconds))
         clock_color = RED if seconds < 25 else INK
         alert_text = ("CLEAR", "WATCH", "ALERT", "HUNT", "LOCKDOWN")[self.sim.alert_tier]
         alert_color = RED if self.sim.alert_tier >= 2 else MUTED
-        self._text(alert_text, 376, 30, hud_small, alert_color)
+        self._text(alert_text, 392, 30, hud_small, alert_color)
         self._text(f"{seconds // 60:02d}:{seconds % 60:02d}", 543, 16, hud_font, clock_color)
 
         objective_y = 225
@@ -2709,8 +2765,30 @@ class GhostlineRenderer:
             (TOUCH_DASH_CENTER, TOUCH_DASH_RADIUS, "DASH", bool(state.get("dash")), CYAN),
             (TOUCH_PULSE_CENTER, TOUCH_PULSE_RADIUS, "PULSE", bool(state.get("pulse")), VIOLET),
             *(
-                ((TOUCH_DECOY_CENTER, TOUCH_DECOY_RADIUS, "DECOY", bool(state.get("decoy")), CYAN),)
-                if state.get("show_decoy")
+                (
+                    (
+                        TOUCH_CROUCH_CENTER,
+                        TOUCH_CROUCH_RADIUS,
+                        "SNEAK",
+                        bool(state.get("crouch")),
+                        GREEN,
+                    ),
+                    (
+                        TOUCH_DECOY_CENTER,
+                        TOUCH_DECOY_RADIUS,
+                        "DECOY",
+                        bool(state.get("decoy")),
+                        CYAN,
+                    ),
+                    (
+                        TOUCH_INTERACT_CENTER,
+                        TOUCH_INTERACT_RADIUS,
+                        "USE",
+                        bool(state.get("interact")),
+                        AMBER,
+                    ),
+                )
+                if state.get("show_field_controls")
                 else ()
             ),
         ):

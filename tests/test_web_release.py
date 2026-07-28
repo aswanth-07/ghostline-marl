@@ -673,6 +673,7 @@ def test_agent_bundle_rejects_missing_onnx_runtime(
 
 
 def test_web_stage_is_an_explicit_runtime_and_asset_allowlist(monkeypatch, tmp_path: Path) -> None:
+    assert "security_types.py" in build_web.WEB_RUNTIME_MODULES
     stage = tmp_path / "ghostline-stage"
     monkeypatch.setattr(build_web, "STAGE", stage)
 

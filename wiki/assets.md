@@ -1,6 +1,6 @@
 ---
 title: Ghostline Assets
-updated: 2026-07-26
+updated: 2026-07-28
 status: active
 ---
 
@@ -57,7 +57,12 @@ Default hazards use amber for suspicion and red for confirmed danger. Electronic
 
 One rule set governs both colour paths. Native text is composited after the world pixel filter, so glyphs never pass through that mask; `_accessible_color` applies the identical Color-Safe replacement and High Contrast expansion to every recorded text command. Previously High Contrast reached no glyph at all and Color-Safe reached text only through an exact red/green match that the interpolated acquire blends could never satisfy.
 
-Minimap room fills are presentation-only and separate from `config.ROLE_COLORS`, whose 28-53 luminance band is tuned for full-size floor tinting under world lighting and collapses into one grey wash at the minimap's ~1.8 px per tile. They are deliberately not in `config.py`, which is hashed into the frozen Env-v2 environment fingerprint.
+Minimap room fills are presentation-only and separate from
+`config.ROLE_COLORS`, whose 28-53 luminance band is tuned for full-size floor
+tinting under world lighting and collapses into one grey wash at the minimap's
+~1.8 px per tile. They are deliberately not in `config.py`, which is hashed
+into the published-v1 fingerprint. Historical evidence calls that internal
+contract `GhostlineEnv-v2`.
 
 ## Release-scale QA
 

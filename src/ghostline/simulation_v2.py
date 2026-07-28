@@ -1,3 +1,5 @@
+"""Deterministic simulation extensions for the multi-agent v2 contract."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -7,6 +9,15 @@ import math
 import numpy as np
 
 from ghostline.config import (
+    DETECTION_GRACE_SECONDS,
+    GUARD_CHASE_SPEED_RATIOS,
+    GUARD_GRADE_SPEED_MULTIPLIERS,
+    GUARD_PATROL_DWELL_SECONDS,
+    GUARD_SEARCH_DURATION_MULTIPLIERS,
+    GUARD_STRIKE_WINDUP_SECONDS,
+    GUARD_VISION_BASE_DISTANCE,
+    GUARD_VISION_COSINE,
+    GUARD_VISION_DISTANCE_PER_ALERT,
     TRACE_MAX,
     PLAYER_GUARD_AUDIBLE_DISTANCE,
     PLAYER_RADIUS,
@@ -15,14 +26,13 @@ from ghostline.config import (
     SIM_HZ,
     TILE_SIZE,
 )
-from ghostline.config_v3 import (
+from ghostline.config_v2 import (
     DECOY_LIFETIME_SECONDS,
     COVER_TRACE_DECAY_BONUS,
     CROUCH_AWARENESS_SCALE,
     CROUCH_FOOTSTEP_RADIUS,
     CROUCH_SPEED_SCALE,
     CROUCH_TRACE_DECAY_BONUS,
-    CHOKEPOINT_LOOKAHEAD_TILES,
     CHOKEPOINT_MIN_RUNNER_DISTANCE,
     CHOKEPOINT_TEAM_COOLDOWN_SECONDS,
     DECOY_CROUCH_THROW_SCALE,
@@ -39,8 +49,6 @@ from ghostline.config_v3 import (
     HACK_LIGHTS_SECONDS,
     HACK_LIGHTS_VISION_SCALE,
     HACK_RANGE,
-    PINCER_ARC_RADIANS,
-    PINCER_STANDOFF,
     VENT_TRANSIT_SECONDS,
     WALK_FOOTSTEP_RADIUS,
     DASH_TRACE_COST_PER_SECOND,
@@ -60,12 +68,11 @@ from ghostline.config_v3 import (
     SUPPRESSOR_PROJECTILE_SPEED,
 )
 from ghostline.generation import tile_center, world_to_tile
-from ghostline.generation_v3 import FacilityLayoutV3
+from ghostline.generation_v2 import FacilityLayoutV2
 from ghostline.simulation import GhostlineSimulation, MOVE_DIRECTIONS, norm, unit
 from ghostline.types import Guard, GuardMode, SimEvent, Tile
-from ghostline.types_v3 import (
-    RUNNER_ACTION_COUNT_V3,
-    FieldSensor,
+from ghostline.types_v2 import (
+    RUNNER_ACTION_COUNT_V2,
     FieldSensor,
     ContractDirective,
     Decoy,
@@ -73,7 +80,7 @@ from ghostline.types_v3 import (
     OperativeState,
     RadioMessage,
     RadioTransmission,
-    RunnerActionV3,
+    RunnerActionV2,
     SecurityDoor,
     SecurityIntent,
     SecurityOrder,
@@ -81,11 +88,23 @@ from ghostline.types_v3 import (
 )
 
 
-class GhostlineSimulationV3(GhostlineSimulation):
-    """Env-v3 deterministic extension with semantic security control.
+_ACTION_VALUES = np.arange(RUNNER_ACTION_COUNT_V2, dtype=np.int16)
+_ACTION_MOVE = _ACTION_VALUES % 9
+_ACTION_DASH = (_ACTION_VALUES // 9) % 2 == 1
+_ACTION_PULSE = (_ACTION_VALUES // 18) % 2 == 1
+_ACTION_DECOY = (_ACTION_VALUES // 36) % 2 == 1
+_ACTION_CROUCH = (_ACTION_VALUES // 72) % 2 == 1
+_ACTION_INTERACT = (_ACTION_VALUES // 144) % 2 == 1
+_STATIC_ACTION_MASK = np.ones(RUNNER_ACTION_COUNT_V2, dtype=np.int8)
+_STATIC_ACTION_MASK[_ACTION_DASH & (_ACTION_MOVE == 0)] = 0
+_STATIC_ACTION_MASK[_ACTION_CROUCH & _ACTION_DASH] = 0
+
+
+class GhostlineSimulationV2(GhostlineSimulation):
+    """V2 deterministic extension with semantic security control.
 
     Classic simulation remains untouched.  This subclass owns every new state
-    object so a v3 rollout can never silently change an Env-v2 replay.
+    object so a v2 rollout can never silently change a published-v1 replay.
     """
 
     def __init__(
@@ -105,11 +124,11 @@ class GhostlineSimulationV3(GhostlineSimulation):
     def reset(self, *, seed: int | None = None, tier: int | None = None) -> None:
         # The multi-agent track builds its own reshaped facilities. Swapping the
         # generator here rather than adding a seam to the base class keeps
-        # simulation.py byte-identical, which the frozen Env-v2 fingerprint
+        # simulation.py byte-identical, which the published-v1 fingerprint
         # requires. ``__init__`` assigns the default generator before calling
         # reset, so this override always runs first.
-        if not isinstance(self.generator, FacilityLayoutV3):
-            self.generator = FacilityLayoutV3()
+        if not isinstance(self.generator, FacilityLayoutV2):
+            self.generator = FacilityLayoutV2()
         super().reset(seed=seed, tier=tier)
         self.decoy_charges = 0 if self.tier <= 2 else (1 if self.tier <= 4 else 2)
         self.decoys_used = 0
@@ -128,10 +147,12 @@ class GhostlineSimulationV3(GhostlineSimulation):
         self.security_doors = self._build_security_doors()
         self.security_door_cooldown = 0.0
         self._base_blocked_tiles = set(self._blocked_tiles)
-        self._v3_locked_tiles: set[tuple[int, int]] = set()
+        self._v2_locked_tiles: set[tuple[int, int]] = set()
         self._refresh_navigation_blocks()
         self.vents = list(getattr(self.level, "vents", []))
-        self.hackable = list(getattr(self.level, "hackable", []))
+        self.hackable = self._bind_hackable_devices(
+            list(getattr(self.level, "hackable", []))
+        )
         self.hack_charges = HACK_CHARGES_PER_TIER.get(self.tier, 2)
         self.hack_cooldown = 0.0
         self.hacks_used = 0
@@ -144,6 +165,44 @@ class GhostlineSimulationV3(GhostlineSimulation):
         self._next_sensor_id = 0
         self.sensor_charges = {guard.guard_id: FIELD_SENSOR_CHARGES for guard in self.level.guards}
         self.directive_par_seconds = self._speed_directive_par_seconds()
+
+    def _bind_hackable_devices(self, devices):
+        """Bind every control pedestal to one real, functional facility system."""
+
+        bound = []
+        security_by_tile = {door.tile: door for door in self.security_doors}
+        used_door_ids: set[int] = set()
+        room_ids = {int(room.room_id) for room in self.level.rooms}
+        camera_ids = {int(camera.camera_id) for camera in self.level.cameras}
+        for device in sorted(devices, key=lambda item: item.device_id):
+            if device.kind == "camera":
+                if int(device.target_id) not in camera_ids:
+                    continue
+            elif device.kind == "lights":
+                if int(device.target_id) not in room_ids:
+                    continue
+            elif device.kind == "door":
+                door = security_by_tile.get(device.target_tile)
+                if door is None:
+                    door = next(
+                        (
+                            candidate
+                            for candidate in sorted(
+                                self.security_doors, key=lambda item: item.door_id
+                            )
+                            if candidate.door_id not in used_door_ids
+                        ),
+                        None,
+                    )
+                if door is None:
+                    continue
+                used_door_ids.add(int(door.door_id))
+                device.target_id = int(door.door_id)
+                device.target_tile = tuple(door.tile)
+            else:
+                continue
+            bound.append(device)
+        return bound
 
     def _speed_directive_par_seconds(self) -> float:
         """Deterministic, seed-specific par shared by game and RL wrapper."""
@@ -205,27 +264,30 @@ class GhostlineSimulationV3(GhostlineSimulation):
         return room_b in visited
 
     def action_mask(self) -> np.ndarray:
-        mask = np.ones(RUNNER_ACTION_COUNT_V3, dtype=np.int8)
         dash_available = self.dash_energy > 1.0
         pulse_available = self.pulse_charges > 0 and self.pulse_cooldown <= 0.0
         decoy_available = self.decoy_charges > 0 and self.decoy_cooldown <= 0.0
         interact_available = self.can_interact()
-        for value in range(RUNNER_ACTION_COUNT_V3):
-            action = RunnerActionV3.decode(value)
-            if action.dash and (not dash_available or action.move == 0):
-                mask[value] = 0
-            if action.pulse and not pulse_available:
-                mask[value] = 0
-            if action.decoy and not decoy_available:
-                mask[value] = 0
-            # Crouching is the quiet state; it cannot be combined with a dash.
-            if action.crouch and action.dash:
-                mask[value] = 0
-            # Interact is context-sensitive, so it is only legal when the
-            # simulation actually has a vent or a ready device to act on.
-            if action.interact and not interact_available:
-                mask[value] = 0
-        return mask
+        signature = (
+            dash_available,
+            pulse_available,
+            decoy_available,
+            interact_available,
+        )
+        if getattr(self, "_action_mask_signature", None) == signature:
+            return self._action_mask_cache.copy()
+        mask = _STATIC_ACTION_MASK.copy()
+        if not dash_available:
+            mask[_ACTION_DASH] = 0
+        if not pulse_available:
+            mask[_ACTION_PULSE] = 0
+        if not decoy_available:
+            mask[_ACTION_DECOY] = 0
+        if not interact_available:
+            mask[_ACTION_INTERACT] = 0
+        self._action_mask_signature = signature
+        self._action_mask_cache = mask
+        return mask.copy()
 
     def set_security_orders(self, orders: Mapping[int, SecurityOrder]) -> None:
         self._pending_security_orders = {
@@ -234,7 +296,7 @@ class GhostlineSimulationV3(GhostlineSimulation):
             if int(guard_id) in self.operative_states
         }
 
-    def _tick(self, action: RunnerActionV3, *, allow_pulse: bool) -> None:
+    def _tick(self, action: RunnerActionV2, *, allow_pulse: bool) -> None:
         dt = 1.0 / SIM_HZ
         # Crouching is only honoured while actually sneaking: it cannot be used
         # to cancel a dash mid-frame, which would make the loud route free.
@@ -248,7 +310,9 @@ class GhostlineSimulationV3(GhostlineSimulation):
         self._update_field_sensors(dt)
         self._update_decoys(dt)
 
-        # Vent transit freezes the runner: it is a committed move, not a dodge.
+        # Vent transit freezes only the runner.  The facility clock, cameras,
+        # guards, drones, trace, cooldowns, doors, and termination checks keep
+        # advancing through the ordinary deterministic world tick.
         if self.vent_transit > 0.0:
             self.vent_transit = max(0.0, self.vent_transit - dt)
             self.velocity[:] = 0.0
@@ -256,10 +320,11 @@ class GhostlineSimulationV3(GhostlineSimulation):
                 self.player[:] = self._vent_destination
                 self._vent_destination = None
                 self.events.append(SimEvent("vent_exit", tuple(self.player)))
+            super()._tick(RunnerActionV2(), allow_pulse=False)
             self._update_operative_state(dt)
+            self._apply_field_abilities()
             self._update_suppressors(dt)
             self._update_projectiles(dt)
-            self.elapsed_ticks += 1
             return
 
         if action.interact and not self._interact_latched:
@@ -280,7 +345,7 @@ class GhostlineSimulationV3(GhostlineSimulation):
         self._update_suppressors(dt)
         self._update_projectiles(dt)
 
-    def _emit_footsteps(self, action: RunnerActionV3) -> None:
+    def _emit_footsteps(self, action: RunnerActionV2) -> None:
         """Make ordinary movement audible so quiet play is a real choice.
 
         The frozen simulation only broadcasts a dash wave, which is why walking
@@ -307,7 +372,7 @@ class GhostlineSimulationV3(GhostlineSimulation):
         """Footsteps carry a stealth-dependent radius.
 
         The frozen simulation broadcasts one 185 px dash wave and nothing for
-        ordinary movement. Env-v3 makes movement itself audible so that quiet
+        ordinary movement. V2 makes movement itself audible so that quiet
         and loud are genuinely different routes rather than the same route at
         different speeds.
         """
@@ -369,7 +434,7 @@ class GhostlineSimulationV3(GhostlineSimulation):
         return min(ready, key=lambda device: norm(device.position - self.player))
 
     def can_interact(self) -> bool:
-        if self.vent_transit > 0.0:
+        if self.vent_transit > 0.0 or self._interact_latched:
             return False
         if self.nearest_vent() is not None:
             return True
@@ -399,19 +464,41 @@ class GhostlineSimulationV3(GhostlineSimulation):
             for camera in self.level.cameras:
                 if int(camera.camera_id) == device.target_id:
                     camera.disabled_for = max(camera.disabled_for, HACK_CAMERA_DISABLE_SECONDS)
+            self.events.append(
+                SimEvent("hack_camera", tuple(device.position), float(device.target_id))
+            )
         elif device.kind == "door":
             device.hacked_for = HACK_DOOR_OVERRIDE_SECONDS
-            # Forcing doors open is the direct answer to a predictive seal.
-            for door in self.security_doors:
+            # A pedestal controls one readable door; it is not a facility-wide
+            # magic switch.  The target tile is authored and validated.
+            door = next(
+                (
+                    candidate
+                    for candidate in self.security_doors
+                    if candidate.door_id == device.target_id
+                    and (
+                        device.target_tile is None
+                        or candidate.tile == device.target_tile
+                    )
+                ),
+                None,
+            )
+            if door is not None:
                 door.lock_remaining = 0.0
                 door.warning_remaining = 0.0
                 door.forced_open_remaining = max(
                     door.forced_open_remaining, HACK_DOOR_OVERRIDE_SECONDS
                 )
+                self.events.append(
+                    SimEvent("hack_door", tuple(device.position), float(door.door_id))
+                )
             self._refresh_navigation_blocks()
         else:
             device.hacked_for = HACK_LIGHTS_SECONDS
             self.darkened_rooms[device.target_id] = HACK_LIGHTS_SECONDS
+            self.events.append(
+                SimEvent("hack_lights", tuple(device.position), float(device.target_id))
+            )
         device.cooldown = device.hacked_for + 4.0
         self.events.append(SimEvent("hack", tuple(device.position), float(device.hacked_for)))
 
@@ -424,6 +511,18 @@ class GhostlineSimulationV3(GhostlineSimulation):
             if self.darkened_rooms[room_id] <= 0.0:
                 del self.darkened_rooms[room_id]
 
+    def _update_hacking(self, dt: float) -> None:
+        """Terminal links pause while the runner is physically inside a duct."""
+
+        if self.vent_transit > 0.0:
+            self._active_hack = None
+            return
+        super()._update_hacking(dt)
+
+    def _check_extraction(self) -> None:
+        if self.vent_transit <= 0.0:
+            super()._check_extraction()
+
     def _room_at(self, position: np.ndarray) -> int:
         tile_x, tile_y = world_to_tile(position)
         for room in self.level.rooms:
@@ -432,7 +531,7 @@ class GhostlineSimulationV3(GhostlineSimulation):
         return -1
 
     def visible(self, origin, facing, target, *, distance: float, cosine: float) -> bool:
-        """Shared sight predicate, shortened inside a darkened room.
+        """Shared sight predicate for darkness and runner duct transit.
 
         Overriding here rather than in ``simulation.py`` keeps the frozen
         Env-v2 contract byte-identical. Every caller benefits automatically:
@@ -441,14 +540,33 @@ class GhostlineSimulationV3(GhostlineSimulation):
         while behaving dark, or the reverse.
         """
 
-        if self.darkened_rooms and self._room_at(np.asarray(origin)) in self.darkened_rooms:
+        target_array = np.asarray(target)
+        is_runner = target is self.player or np.shares_memory(target_array, self.player)
+        if is_runner and self.vent_transit > 0.0:
+            return False
+        if self.darkened_rooms and (
+            self._room_at(np.asarray(origin)) in self.darkened_rooms
+            or self._room_at(target_array) in self.darkened_rooms
+        ):
             distance = distance * HACK_LIGHTS_VISION_SCALE
         return super().visible(origin, facing, target, distance=distance, cosine=cosine)
 
     def guard_vision_scale(self, guard: Guard) -> float:
         """Darkened rooms shorten a guard effective sight envelope."""
 
-        return HACK_LIGHTS_VISION_SCALE if self._room_at(guard.position) in self.darkened_rooms else 1.0
+        return self.security_vision_scale(guard.position)
+
+    def security_vision_scale(self, origin: np.ndarray) -> float:
+        """Presentation-equivalent scale for any guard or camera cone."""
+
+        return (
+            HACK_LIGHTS_VISION_SCALE
+            if (
+                self._room_at(np.asarray(origin)) in self.darkened_rooms
+                or self._room_at(self.player) in self.darkened_rooms
+            )
+            else 1.0
+        )
 
     # -- operative field systems -------------------------------------------
 
@@ -484,7 +602,11 @@ class GhostlineSimulationV3(GhostlineSimulation):
                 continue
             if sensor.armed_in > 0.0 or sensor.triggered:
                 continue
-            if norm(sensor.position - self.player) <= FIELD_SENSOR_RADIUS:
+            if (
+                self.vent_transit <= 0.0
+                and norm(sensor.position - self.player) <= FIELD_SENSOR_RADIUS
+                and self.line_of_sight(sensor.position, self.player)
+            ):
                 sensor.triggered = True
                 self.events.append(SimEvent("sensor_trip", tuple(sensor.position), FIELD_SENSOR_RADIUS))
                 # A trip is information, not damage: it seeds the heard estimate.
@@ -493,7 +615,7 @@ class GhostlineSimulationV3(GhostlineSimulation):
                     state.heard_position = sensor.position.copy()
                     state.heard_confidence = max(state.heard_confidence, 0.7)
 
-    def _activate_decoy(self, action: RunnerActionV3) -> None:
+    def _activate_decoy(self, action: RunnerActionV2) -> None:
         if self.decoy_charges <= 0 or self.decoy_cooldown > 0.0:
             return
         direction = MOVE_DIRECTIONS[action.move] if action.move else self.heading
@@ -551,25 +673,135 @@ class GhostlineSimulationV3(GhostlineSimulation):
                 guard.stimulus = source
 
     def _update_guards(self, dt: float) -> None:
-        """Apply queued security orders, then scale awareness for a crouched runner.
-
-        The sight model itself is untouched: awareness still accumulates from the
-        same cones and line of sight. A crouched runner simply fills them more
-        slowly, so patience buys real safety without ever becoming invisible.
-        """
+        """Apply orders and crouch scaling before any detection transition."""
 
         if self.external_security and self._pending_security_orders:
             self._apply_pending_orders()
-        if not self.crouching:
-            super()._update_guards(dt)
-            return
-        before = {guard.guard_id: guard.awareness for guard in self.level.guards}
-        super()._update_guards(dt)
+        self._seen_by_guard = False
         for guard in self.level.guards:
-            previous = before.get(guard.guard_id, 0.0)
-            gained = guard.awareness - previous
-            if gained > 0.0:
-                guard.awareness = min(1.0, previous + gained * CROUCH_AWARENESS_SCALE)
+            guard.hit_cooldown = max(0.0, guard.hit_cooldown - dt)
+            guard.radio_jammed_for = max(0.0, guard.radio_jammed_for - dt)
+            has_sight = self.visible(
+                guard.position,
+                guard.facing,
+                self.player,
+                distance=GUARD_VISION_BASE_DISTANCE
+                + GUARD_VISION_DISTANCE_PER_ALERT * self.alert_tier,
+                cosine=GUARD_VISION_COSINE,
+            )
+            if has_sight:
+                grace = max(0.38, DETECTION_GRACE_SECONDS - 0.05 * self.alert_tier)
+                gain = dt / grace
+                if self.crouching:
+                    gain *= CROUCH_AWARENESS_SCALE
+                guard.awareness = min(1.0, guard.awareness + gain)
+                guard.last_known = self.player.copy()
+                if guard.awareness >= 0.18 and guard.mode in (
+                    GuardMode.PATROL,
+                    GuardMode.RETURN,
+                ):
+                    guard.mode = GuardMode.SUSPICIOUS
+                    guard.mode_seconds = max(guard.mode_seconds, 0.7)
+                    guard.stimulus = "eye"
+            else:
+                guard.awareness = max(0.0, guard.awareness - 1.8 * dt)
+
+            sees_player = guard.awareness >= 1.0 and has_sight
+            if sees_player:
+                self._seen_by_guard = True
+                if guard.mode != GuardMode.CHASE:
+                    self.detections += 1
+                    self.events.append(SimEvent("detected", tuple(self.player)))
+                guard.mode = GuardMode.CHASE
+                guard.mode_seconds = (
+                    2.6 * GUARD_SEARCH_DURATION_MULTIPLIERS[int(guard.grade)]
+                )
+                guard.last_known = self.player.copy()
+                guard.stimulus = "eye"
+                if guard.radio_jammed_for <= 0.0:
+                    self._share_alert(guard)
+            elif guard.mode == GuardMode.CHASE:
+                guard.mode_seconds -= dt
+                if guard.mode_seconds <= 0.0:
+                    guard.mode = GuardMode.SEARCH
+                    guard.mode_seconds = (
+                        3.5 * GUARD_SEARCH_DURATION_MULTIPLIERS[int(guard.grade)]
+                    )
+            elif guard.mode in (
+                GuardMode.SUSPICIOUS,
+                GuardMode.INVESTIGATE,
+                GuardMode.SEARCH,
+            ):
+                guard.mode_seconds -= dt
+                if guard.mode_seconds <= 0.0:
+                    guard.mode = GuardMode.RETURN
+                    guard.stimulus = "patrol"
+                    self.events.append(SimEvent("guard_clear", tuple(guard.position)))
+
+            if guard.mode == GuardMode.CHASE:
+                target = self.player
+                speed = PLAYER_SPEED * GUARD_CHASE_SPEED_RATIOS[int(guard.grade)]
+            elif guard.mode == GuardMode.SUSPICIOUS:
+                target, speed = guard.last_known, 0.0
+            elif guard.mode in (GuardMode.INVESTIGATE, GuardMode.SEARCH):
+                target, speed = guard.last_known, 69.0
+            else:
+                target, speed = guard.patrol[guard.patrol_index], 54.0
+                if guard.patrol_pause_seconds > 0.0:
+                    guard.patrol_pause_seconds = max(
+                        0.0, guard.patrol_pause_seconds - dt
+                    )
+                    speed = 0.0
+                    scan_direction = (
+                        1.0
+                        if (guard.guard_id + guard.patrol_index) % 2 == 0
+                        else -1.0
+                    )
+                    guard.facing += scan_direction * 0.72 * dt
+                    if guard.patrol_pause_seconds <= 0.0:
+                        guard.patrol_index = (guard.patrol_index + 1) % len(
+                            guard.patrol
+                        )
+                        target = guard.patrol[guard.patrol_index]
+                elif norm(target - guard.position) < 14.0:
+                    guard.patrol_pause_seconds = GUARD_PATROL_DWELL_SECONDS[
+                        int(guard.grade)
+                    ]
+                    speed = 0.0
+
+            if guard.mode != GuardMode.CHASE:
+                speed *= GUARD_GRADE_SPEED_MULTIPLIERS[int(guard.grade)]
+            self._move_agent(guard, target, speed, dt)
+            if (
+                guard.mode == GuardMode.SEARCH
+                and norm(guard.last_known - guard.position) < 18.0
+            ):
+                turn = 1.0 if guard.guard_id % 2 == 0 else -1.0
+                guard.facing += turn * 1.45 * dt
+            in_tackle_range = (
+                guard.mode == GuardMode.CHASE
+                and self.vent_transit <= 0.0
+                and norm(guard.position - self.player) <= 20.0
+            )
+            if (
+                in_tackle_range
+                and guard.hit_cooldown <= 0.0
+                and self.damage_cooldown <= 0.0
+            ):
+                guard.attack_windup += dt
+                if guard.attack_windup >= GUARD_STRIKE_WINDUP_SECONDS:
+                    guard.hit_cooldown = 1.8
+                    guard.attack_windup = 0.0
+                    self._damage(guard.position, source_kind="guard")
+                    guard.mode = GuardMode.SEARCH
+                    guard.mode_seconds = (
+                        1.8 * GUARD_SEARCH_DURATION_MULTIPLIERS[int(guard.grade)]
+                    )
+                    guard.awareness = 0.0
+                    guard.last_known = self.player.copy()
+                    guard.stimulus = "eye"
+            else:
+                guard.attack_windup = max(0.0, guard.attack_windup - 2.5 * dt)
 
     def _apply_pending_orders(self) -> None:
         orders, self._pending_security_orders = self._pending_security_orders, {}
@@ -578,66 +810,126 @@ class GhostlineSimulationV3(GhostlineSimulation):
             if order is None:
                 continue
             state = self.operative_states[guard.guard_id]
+            direct_sight = self.visible(
+                guard.position,
+                guard.facing,
+                self.player,
+                distance=GUARD_VISION_BASE_DISTANCE
+                + GUARD_VISION_DISTANCE_PER_ALERT * self.alert_tier,
+                cosine=GUARD_VISION_COSINE,
+            )
             target = self._valid_security_target(
                 order.target.copy() if order.target is not None else guard.last_known.copy()
             )
-            # PINCER rewrites the operative's own target into a complementary
-            # approach arc, so a team that cannot win a tail chase still
-            # converges on the runner from several bearings at once. SEAL asks
-            # the facility to close a redundant door ahead of the route.
-            if order.intent == SecurityIntent.PINCER:
+            intent = order.intent
+            use_ability = order.use_ability
+            message = order.message
+            # Decoys remain binding for externally controlled security.  A
+            # policy cannot inspect a lure and immediately overwrite it with a
+            # hidden-state-perfect pursuit order.
+            if state.lure_remaining > 0.0 and not direct_sight:
+                intent = SecurityIntent.INVESTIGATE
+                target = self._valid_security_target(state.heard_position.copy())
+                use_ability = False
+                message = RadioMessage.NONE
+
+            if intent == SecurityIntent.PINCER:
+                # The selected target is already a public escape-route cutoff.
+                # Never rotate it around the hidden live runner heading.
                 target = self.pincer_station(guard, target)
-            elif order.intent == SecurityIntent.SEAL:
-                self.request_predictive_seal()
-            state.current_order = SecurityOrder(order.intent, target.copy(), order.message, order.use_ability)
-            if order.intent == SecurityIntent.PATROL:
+            elif intent == SecurityIntent.SEAL:
+                # Seal the explicitly selected public door/cutoff rather than a
+                # route derived from the hidden mission objective.
+                self.request_predictive_seal(target)
+
+            state.current_order = SecurityOrder(
+                intent, target.copy(), message, use_ability
+            )
+            if direct_sight:
+                # Motor reflexes own confirmed sight.  In particular, HOLD may
+                # not demote CHASE every tactical step and create repeatable
+                # "new" detections for reward or telemetry.
+                guard.last_known = self.player.copy()
+            elif intent == SecurityIntent.PATROL:
                 guard.mode = GuardMode.RETURN
-            elif order.intent == SecurityIntent.HOLD:
+            elif intent == SecurityIntent.HOLD:
                 guard.mode = GuardMode.SUSPICIOUS
                 guard.mode_seconds = 0.3
                 guard.last_known = target
-            elif order.intent == SecurityIntent.PURSUE and guard.awareness >= 1.0:
+            elif intent == SecurityIntent.PURSUE and guard.awareness >= 1.0:
                 guard.mode = GuardMode.CHASE
                 guard.mode_seconds = max(guard.mode_seconds, 1.0)
                 guard.last_known = target
-            elif order.intent == SecurityIntent.PINCER:
-                # Move decisively to the assigned arc rather than drifting.
+            elif intent == SecurityIntent.PINCER:
                 guard.mode = GuardMode.INVESTIGATE
                 guard.mode_seconds = max(guard.mode_seconds, 0.9)
                 guard.last_known = target
             else:
-                guard.mode = GuardMode.SEARCH if order.intent == SecurityIntent.SEARCH else GuardMode.INVESTIGATE
+                guard.mode = (
+                    GuardMode.SEARCH
+                    if intent == SecurityIntent.SEARCH
+                    else GuardMode.INVESTIGATE
+                )
                 guard.mode_seconds = 0.45
                 guard.last_known = target
             guard.patrol_pause_seconds = 0.0
             guard.stimulus = "policy"
-            if order.message != RadioMessage.NONE:
-                self._transmit_radio(guard, order.message, target)
-            if order.intent == SecurityIntent.INTERCEPT:
+            if message != RadioMessage.NONE:
+                self._transmit_radio(guard, message, target)
+            if intent == SecurityIntent.INTERCEPT:
                 self._request_nearest_door_lock(target)
 
     # -- coordinated security ----------------------------------------------
 
-    def runner_route_point(self, lookahead: float) -> np.ndarray:
-        """Project where the runner is heading, for sealing and pincers.
+    def escape_route_cutoffs(
+        self, contact: np.ndarray, *, limit: int = 4
+    ) -> list[np.ndarray]:
+        """Return public doorway cutoffs around a perceived contact.
 
-        Uses the runner objective rather than raw velocity, because a slower
-        pursuer has to commit to a destination well before the runner turns
-        toward it.
+        Facility topology is known to security.  The contact may be direct,
+        heard, remembered, or radio-shared; this routine never reads the
+        runner's hidden objective, velocity, or heading.
         """
 
-        goal = self.level.extraction if self.quota_met else None
-        if goal is None:
-            terminal = self.objective_terminal()
-            goal = terminal.position if terminal is not None else self.level.extraction
-        delta = goal - self.player
-        distance = float(norm(delta))
-        if distance < 1.0:
-            return goal.copy()
-        return (self.player + (delta / distance) * min(lookahead, distance)).astype(np.float32)
+        room_id = self._room_at(np.asarray(contact, dtype=np.float32))
+        doors = [
+            door
+            for door in self.level.doors
+            if room_id < 0 or room_id in (int(door.room_a), int(door.room_b))
+        ]
+        if not doors:
+            doors = list(self.level.doors)
+        candidates: list[tuple[float, int, int, np.ndarray]] = []
+        rooms = {int(room.room_id): room for room in self.level.rooms}
+        for door in doors:
+            other_room = (
+                int(door.room_b)
+                if int(door.room_a) == room_id
+                else int(door.room_a)
+            )
+            center = tile_center(door.tile)
+            room = rooms.get(other_room)
+            if room is not None:
+                room_center = tile_center(
+                    (
+                        int(room.x + room.width // 2),
+                        int(room.y + room.height // 2),
+                    )
+                )
+                point = center + unit(room_center - center) * TILE_SIZE
+            else:
+                point = center
+            point = self._valid_security_target(point.astype(np.float32))
+            candidates.append(
+                (norm(point - contact), int(door.tile[1]), int(door.tile[0]), point)
+            )
+        candidates.sort(key=lambda item: item[:3])
+        return [point.copy() for *_order, point in candidates[: max(1, int(limit))]]
 
-    def request_predictive_seal(self) -> bool:
-        """Seal a redundant door ahead of the runner rather than on top of it.
+    def request_predictive_seal(
+        self, selected_target: np.ndarray | None = None
+    ) -> bool:
+        """Seal the eligible door nearest a policy-selected public target.
 
         Every guarantee from the reactive lock still holds, because this only
         chooses *which* eligible door to ask for and then defers to the same
@@ -648,7 +940,6 @@ class GhostlineSimulationV3(GhostlineSimulation):
 
         if self.security_door_cooldown > 0.0 or not self.security_doors:
             return False
-        ahead = self.runner_route_point(CHOKEPOINT_LOOKAHEAD_TILES * TILE_SIZE)
         # Never seal a door the runner is already standing in or beside; that is
         # the case that feels arbitrary rather than outplayed.
         eligible = [
@@ -658,7 +949,18 @@ class GhostlineSimulationV3(GhostlineSimulation):
         ]
         if not eligible:
             return False
-        target = min(eligible, key=lambda door: norm(tile_center(door.tile) - ahead))
+        if selected_target is None:
+            selected_target = tile_center(eligible[0].tile)
+        selected_target = self._valid_security_target(
+            np.asarray(selected_target, dtype=np.float32)
+        )
+        target = min(
+            eligible,
+            key=lambda door: (
+                norm(tile_center(door.tile) - selected_target),
+                door.door_id,
+            ),
+        )
         if self._request_nearest_door_lock(tile_center(target.tile)):
             self.security_door_cooldown = max(
                 self.security_door_cooldown, CHOKEPOINT_TEAM_COOLDOWN_SECONDS
@@ -668,23 +970,10 @@ class GhostlineSimulationV3(GhostlineSimulation):
         return False
 
     def pincer_station(self, guard: Guard, contact: np.ndarray) -> np.ndarray:
-        """Complementary approach arc for one operative around a contact.
+        """Validate an explicit public cutoff without consulting hidden state."""
 
-        Operatives are indexed by their own id so the team spreads
-        deterministically instead of every member picking the same bearing.
-        Convergence from several arcs is how a slower team creates a cut-off.
-        """
-
-        others = sorted(other.guard_id for other in self.level.guards)
-        slot = others.index(guard.guard_id) if guard.guard_id in others else 0
-        span = max(1, len(others) - 1)
-        # Spread slots symmetrically about the runner heading.
-        offset = (slot / span - 0.5) * 2.0 * PINCER_ARC_RADIANS
-        heading = self.heading if float(norm(self.heading)) > 1e-3 else np.asarray((1.0, 0.0), dtype=np.float32)
-        base = math.atan2(float(heading[1]), float(heading[0]))
-        angle = base + offset
-        station = contact + np.asarray((math.cos(angle), math.sin(angle)), dtype=np.float32) * PINCER_STANDOFF
-        return self._valid_security_target(station.astype(np.float32))
+        del guard
+        return self._valid_security_target(np.asarray(contact, dtype=np.float32))
 
     def _valid_security_target(self, target: np.ndarray) -> np.ndarray:
         """Project policy waypoints into the navigable world deterministically."""
@@ -740,6 +1029,7 @@ class GhostlineSimulationV3(GhostlineSimulation):
     def _update_operative_state(self, dt: float) -> None:
         for state in self.operative_states.values():
             state.heard_confidence = max(0.0, state.heard_confidence - 0.24 * dt)
+            state.lure_remaining = max(0.0, state.lure_remaining - dt)
             state.weapon_cooldown = max(0.0, state.weapon_cooldown - dt)
 
     def _apply_field_abilities(self) -> None:
@@ -832,12 +1122,23 @@ class GhostlineSimulationV3(GhostlineSimulation):
                 self.events.append(SimEvent("projectile_impact", tuple(projectile.position)))
                 continue
             projectile.position = candidate.astype(np.float32)
-            if norm(projectile.position - self.player) <= PLAYER_RADIUS + SUPPRESSOR_PROJECTILE_RADIUS:
+            if (
+                self.vent_transit <= 0.0
+                and norm(projectile.position - self.player)
+                <= PLAYER_RADIUS + SUPPRESSOR_PROJECTILE_RADIUS
+            ):
                 self._damage(projectile.position, source_kind="guard")
                 self.events.append(SimEvent("projectile_hit", tuple(self.player), projectile.source_guard_id))
                 continue
             active.append(projectile)
         self.projectiles = active
+
+    def _damage(self, source: np.ndarray, *, source_kind: str = "unknown") -> None:
+        """Duct transit removes the runner from the playable floor."""
+
+        if self.vent_transit > 0.0:
+            return
+        super()._damage(source, source_kind=source_kind)
 
     def _request_nearest_door_lock(self, target: np.ndarray) -> bool:
         if self.security_door_cooldown > 0.0 or any(door.locked or door.warning_remaining > 0.0 for door in self.security_doors):
@@ -879,9 +1180,9 @@ class GhostlineSimulationV3(GhostlineSimulation):
 
     def _refresh_navigation_blocks(self) -> None:
         locked = {door.tile for door in getattr(self, "security_doors", ()) if door.locked}
-        if locked == getattr(self, "_v3_locked_tiles", set()) and hasattr(self, "_base_blocked_tiles"):
+        if locked == getattr(self, "_v2_locked_tiles", set()) and hasattr(self, "_base_blocked_tiles"):
             return
-        self._v3_locked_tiles = locked
+        self._v2_locked_tiles = locked
         base = getattr(self, "_base_blocked_tiles", set(self._blocked_tiles))
         self._blocked_tiles = set(base) | locked
         self._nav_maps.clear()
@@ -912,7 +1213,7 @@ class GhostlineSimulationV3(GhostlineSimulation):
         info = super().terminal_info()
         info.update(
             {
-                "contract": "GhostlineEnv-v3",
+                "contract": "GhostlineEnv-v2",
                 "directive": self.directive.name.lower(),
                 "directive_success": self.directive_completed,
                 "directive_par_seconds": self.directive_par_seconds,

@@ -12,8 +12,9 @@ from pettingzoo.test import parallel_api_test
 
 import ghostline
 from ghostline.cli import build_parser
-from ghostline.env_v3 import GhostlineEnvV3
+from ghostline.env_v2 import GhostlineEnvV2
 from ghostline.marl_train import (
+    SECURITY_EXPERIMENT_MANIFEST_CONTRACT,
     _adaptive_tier_probabilities,
     _batched_security_actions,
     _selection_key,
@@ -28,69 +29,90 @@ from ghostline.security_model import (
     _canonical_security_source_digest,
     load_security_policy,
     save_security_policy,
+    security_environment_fingerprint,
 )
 from ghostline.simulation import norm
-from ghostline.simulation_v3 import GhostlineSimulationV3
+from ghostline.simulation_v2 import GhostlineSimulationV2
 from ghostline.types import Action, GuardMode
-from ghostline.types_v3 import (
+from ghostline.types_v2 import (
     ContractDirective,
     GuardRole,
     RadioMessage,
-    RunnerActionV3,
+    RunnerActionV2,
     SecurityIntent,
     SecurityOrder,
 )
 
 
-def test_v3_action_contract_round_trips_all_288_semantic_combinations() -> None:
-    from ghostline.types_v3 import RUNNER_ACTION_COUNT_V3
+def test_v2_action_contract_round_trips_all_288_semantic_combinations() -> None:
+    from ghostline.types_v2 import RUNNER_ACTION_COUNT_V2
 
-    assert RUNNER_ACTION_COUNT_V3 == 288
-    values = range(RUNNER_ACTION_COUNT_V3)
-    assert {RunnerActionV3.decode(value).encode() for value in values} == set(values)
-    assert RunnerActionV3.decode(71) == RunnerActionV3(move=8, dash=True, pulse=True, decoy=True)
-    assert RunnerActionV3.decode(287) == RunnerActionV3(
+    assert RUNNER_ACTION_COUNT_V2 == 288
+    values = range(RUNNER_ACTION_COUNT_V2)
+    assert {RunnerActionV2.decode(value).encode() for value in values} == set(values)
+    assert RunnerActionV2.decode(71) == RunnerActionV2(move=8, dash=True, pulse=True, decoy=True)
+    assert RunnerActionV2.decode(287) == RunnerActionV2(
         move=8, dash=True, pulse=True, decoy=True, crouch=True, interact=True
     )
     # Both new bits are additive: every original code keeps its meaning.
-    assert all(not RunnerActionV3.decode(value).crouch for value in range(72))
-    assert all(not RunnerActionV3.decode(value).interact for value in range(144))
+    assert all(not RunnerActionV2.decode(value).crouch for value in range(72))
+    assert all(not RunnerActionV2.decode(value).interact for value in range(144))
 
 
 def test_adaptive_cli_defaults_bind_training_to_the_frozen_runner() -> None:
     train = build_parser().parse_args(["train-security", "--dry-run"])
-    evaluate = build_parser().parse_args(["evaluate-security"])
+    evaluate = build_parser().parse_args(
+        ["evaluate-security", "--model", "artifacts/security-v2/champion.pt"]
+    )
     play = build_parser().parse_args(["play", "--adaptive", "--directive", "ghost"])
     assert train.envs == 8
     assert train.runner_model.as_posix() == "models/ghostline-policy.pt"
     assert not train.scripted_runner
-    assert evaluate.seed_start == 12_000_000
+    assert evaluate.seed_start == 14_000_000
+    assert evaluate.episodes_per_tier == 500
+    assert evaluate.slice_manifest == Path(
+        "benchmarks/security/v2-final-test-slices.json"
+    )
+    slice_ledger = json.loads(
+        (
+            Path(__file__).resolve().parents[1] / evaluate.slice_manifest
+        ).read_text(encoding="utf-8")
+    )
+    assert slice_ledger["environment_fingerprint"] == (
+        security_environment_fingerprint()
+    )
+    assert slice_ledger["slices"][0]["status"] == "reserved_unopened"
     assert play.adaptive and play.directive == "ghost"
 
 
-def test_v2_contract_remains_immutable_while_v3_is_registered() -> None:
-    classic = gym.make("GhostlineEnv-v2", seed=11, tier=6)
-    adaptive = gym.make("GhostlineEnv-v3", seed=11, tier=6, directive="ghost")
-    classic_observation, classic_info = classic.reset(seed=11)
-    adaptive_observation, adaptive_info = adaptive.reset(seed=11)
-    assert classic.action_space.n == 36
-    assert classic_observation["ego"].shape == (24,)
-    assert classic_observation["entities"].shape == (12, 13)
-    assert "directive" not in classic_info
-    assert adaptive.action_space.n == 288
-    assert adaptive_observation["ego"].shape == (27,)
-    assert adaptive_observation["entities"].shape == (12, 16)
-    assert adaptive_observation["directive"].shape == (6,)
-    assert adaptive_info["contract"] == "GhostlineEnv-v3"
-    classic.close()
-    adaptive.close()
+def test_published_v1_remains_immutable_while_multi_agent_v2_is_registered() -> None:
+    published = gym.make("GhostlineEnv-v1", seed=11, tier=6)
+    multi_agent = gym.make("GhostlineEnv-v2", seed=11, tier=6, directive="ghost")
+    published_observation, published_info = published.reset(seed=11)
+    multi_agent_observation, multi_agent_info = multi_agent.reset(seed=11)
+    assert published.action_space.n == 36
+    assert published_observation["ego"].shape == (24,)
+    assert published_observation["entities"].shape == (12, 13)
+    assert "directive" not in published_info
+    assert published_info["contract"] == "GhostlineEnv-v1"
+    assert published_info["historical_internal_contract"] == "GhostlineEnv-v2"
+    assert multi_agent.action_space.n == 288
+    assert multi_agent_observation["ego"].shape == (27,)
+    assert multi_agent_observation["entities"].shape == (12, 16)
+    assert multi_agent_observation["directive"].shape == (6,)
+    assert multi_agent_observation["field_targets"].shape == (16, 13)
+    assert multi_agent_info["contract"] == "GhostlineEnv-v2"
+    published.close()
+    multi_agent.close()
 
 
-def test_v3_environment_checker_and_directive_observation() -> None:
-    env = GhostlineEnvV3(seed=31, tier=6, directive=ContractDirective.GREED)
+def test_v2_environment_checker_and_directive_observation() -> None:
+    env = GhostlineEnvV2(seed=31, tier=6, directive=ContractDirective.GREED)
     observation, info = env.reset(seed=31)
     assert env.observation_space.contains(observation)
-    assert observation["local_grid"].shape == (11, 15, 15)
+    assert observation["local_grid"].shape == (15, 15, 15)
+    assert observation["field_targets"].shape == (16, 13)
+    assert observation["field_target_mask"].shape == (16,)
     assert observation["rays"].shape == (24, 4)
     assert observation["action_mask"].shape == (288,)
     assert observation["directive"][2] == 1.0
@@ -99,10 +121,10 @@ def test_v3_environment_checker_and_directive_observation() -> None:
     env.close()
 
 
-def test_v3_replay_is_deterministic_for_seed_tier_directive_and_actions() -> None:
-    actions = [RunnerActionV3.decode(value) for value in (1, 10, 46, 3, 21, 0, 71, 8) * 4]
-    first = GhostlineSimulationV3(seed=701, tier=6, directive="speed")
-    second = GhostlineSimulationV3(seed=701, tier=6, directive="speed")
+def test_v2_replay_is_deterministic_for_seed_tier_directive_and_actions() -> None:
+    actions = [RunnerActionV2.decode(value) for value in (1, 10, 46, 3, 21, 0, 71, 8) * 4]
+    first = GhostlineSimulationV2(seed=701, tier=6, directive="speed")
+    second = GhostlineSimulationV2(seed=701, tier=6, directive="speed")
     for action in actions:
         first.advance(action, ticks=6)
         second.advance(action, ticks=6)
@@ -119,22 +141,22 @@ def test_v3_replay_is_deterministic_for_seed_tier_directive_and_actions() -> Non
 
 
 def test_noise_decoy_is_latched_limited_and_attracts_operatives() -> None:
-    sim = GhostlineSimulationV3(seed=51, tier=5)
+    sim = GhostlineSimulationV2(seed=51, tier=5)
     sim.level.guards[0].position = sim.player + np.asarray((32.0, 0.0), dtype=np.float32)
     sim.events.clear()
     before = sim.decoy_charges
-    sim.advance(RunnerActionV3(move=1, decoy=True), ticks=6)
+    sim.advance(RunnerActionV2(move=1, decoy=True), ticks=6)
     assert sim.decoy_charges == before - 1
     assert sim.decoys_used == 1
     assert len(sim.decoys) == 1
     assert [event.kind for event in sim.events].count("decoy_deployed") == 1
     assert any(state.heard_confidence > 0.0 for state in sim.operative_states.values())
-    sim.advance(RunnerActionV3(move=1, decoy=True), ticks=6)
+    sim.advance(RunnerActionV2(move=1, decoy=True), ticks=6)
     assert sim.decoys_used == 1
 
 
 def test_security_doors_only_use_redundant_edges_and_are_telegraphed() -> None:
-    sim = GhostlineSimulationV3(seed=93, tier=6)
+    sim = GhostlineSimulationV2(seed=93, tier=6)
     assert len(sim.security_doors) == 3
     by_tile = {door.tile: door for door in sim.level.doors}
     for security_door in sim.security_doors:
@@ -153,7 +175,7 @@ def test_security_doors_only_use_redundant_edges_and_are_telegraphed() -> None:
 
 
 def test_pulse_jams_radio_and_forces_nearby_security_door_open() -> None:
-    sim = GhostlineSimulationV3(seed=94, tier=6)
+    sim = GhostlineSimulationV2(seed=94, tier=6)
     door = sim.security_doors[0]
     door.lock_remaining = 3.0
     sim._refresh_navigation_blocks()
@@ -167,7 +189,7 @@ def test_pulse_jams_radio_and_forces_nearby_security_door_open() -> None:
 
 
 def test_suppressor_projectile_has_aim_telegraph_and_friendly_fire_gate(monkeypatch) -> None:
-    sim = GhostlineSimulationV3(seed=95, tier=6, external_security=True)
+    sim = GhostlineSimulationV2(seed=95, tier=6, external_security=True)
     suppressor = next(
         guard for guard in sim.level.guards if sim.operative_states[guard.guard_id].role == GuardRole.SUPPRESSOR
     )
@@ -188,7 +210,7 @@ def test_suppressor_projectile_has_aim_telegraph_and_friendly_fire_gate(monkeypa
 
 
 def test_external_security_waypoints_are_projected_inside_navigation_bounds() -> None:
-    sim = GhostlineSimulationV3(seed=96, tier=6, external_security=True)
+    sim = GhostlineSimulationV2(seed=96, tier=6, external_security=True)
     guard = sim.level.guards[0]
     sim.set_security_orders(
         {
@@ -198,7 +220,7 @@ def test_external_security_waypoints_are_projected_inside_navigation_bounds() ->
             )
         }
     )
-    sim.advance(RunnerActionV3(), ticks=24)
+    sim.advance(RunnerActionV2(), ticks=24)
     target = sim.operative_states[guard.guard_id].current_order.target
     assert target is not None
     tx, ty = (int(target[0] // 32), int(target[1] // 32))
@@ -251,11 +273,12 @@ def test_security_fingerprint_payload_is_checkout_line_ending_invariant(tmp_path
     lf_root.mkdir()
     crlf_root.mkdir()
     for name in (
-        "config_v3.py",
-        "types_v3.py",
-        "simulation_v3.py",
+        "config_v2.py",
+        "types_v2.py",
+        "simulation_v2.py",
         "security_baselines.py",
         "security_env.py",
+        "security_types.py",
     ):
         payload = (source / name).read_bytes().replace(b"\r\n", b"\n")
         (lf_root / name).write_bytes(payload)
@@ -413,7 +436,7 @@ def test_tactical_security_baseline_is_masked_and_shared_with_game_controller() 
 
 
 def test_security_mappo_cpu_smoke_run(tmp_path) -> None:
-    champion = train_security(
+    selected = train_security(
         output=tmp_path / "security-smoke",
         hours=0.01,
         max_steps=20,
@@ -428,9 +451,54 @@ def test_security_mappo_cpu_smoke_run(tmp_path) -> None:
         bc_warmup_steps=8,
         bc_warmup_epochs=1,
     )
-    assert champion.exists()
-    assert load_security_policy(champion).recurrent_size == 256
+    assert selected.name == "last-policy.pt"
+    assert selected.exists()
+    assert not (tmp_path / "security-smoke" / "champion.pt").exists()
+    assert load_security_policy(selected).recurrent_size == 256
     assert (tmp_path / "security-smoke" / "behavior-warmup.json").is_file()
+
+
+def test_security_dry_run_validates_opponent_and_freezes_manifest(
+    tmp_path,
+) -> None:
+    output = tmp_path / "security-preflight"
+    published = (
+        Path(__file__).resolve().parents[1]
+        / "models"
+        / "ghostline-policy.pt"
+    )
+    manifest_path = train_security(
+        output=output,
+        hours=0.01,
+        max_steps=20,
+        env_count=1,
+        rollout=3,
+        epochs=1,
+        tiers="6",
+        recurrent_size=256,
+        validation_interval=0,
+        resume=False,
+        dry_run=True,
+        device="cpu",
+        runner_checkpoint=published,
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest_path.name == "experiment-manifest.json"
+    assert manifest["manifest_contract"] == (
+        SECURITY_EXPERIMENT_MANIFEST_CONTRACT
+    )
+    assert manifest["status"] == "preflight-passed"
+    assert manifest["observation_contract"] == (
+        "GhostlineSecurityParallel-v2"
+    )
+    assert len(manifest["environment_fingerprint"]) == 64
+    assert manifest["runner_opponents"][0]["kind"] == "published-v1"
+    assert len(manifest["runner_opponents"][0]["sha256"]) == 64
+    assert manifest["seed_namespaces"][
+        "final_test_not_consumed_by_training"
+    ]
+    assert not (output / "latest.pt").exists()
+    assert not (output / "champion.pt").exists()
 
 
 def test_security_mappo_can_start_from_compatible_policy(tmp_path) -> None:
@@ -506,6 +574,61 @@ def test_security_evaluation_writes_json_and_both_csv_views(tmp_path) -> None:
     assert output.with_name("security-evaluation.episodes.csv").is_file()
 
 
+def test_security_final_slice_is_consumed_exactly_once(tmp_path) -> None:
+    model = tmp_path / "security.pt"
+    save_security_policy(
+        SharedSecurityActorCritic(recurrent_size=256),
+        model,
+        purpose="one-way-final-slice-test",
+    )
+    manifest = tmp_path / "slices.json"
+    fingerprint = security_environment_fingerprint()
+    manifest.write_text(
+        json.dumps(
+            {
+                "manifest_contract": "ghostline-final-test-slices-v1",
+                "observation_contract": "GhostlineSecurityParallel-v2",
+                "environment_fingerprint": fingerprint,
+                "slices": [
+                    {
+                        "environment_fingerprint": fingerprint,
+                        "episodes_per_tier": 1,
+                        "policy_kind": "security-v2-neural-vs-fair-scripted",
+                        "seed_start": 14_000_000,
+                        "status": "reserved_unopened",
+                        "tiers": [3],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "final.json"
+    evaluate_security_checkpoint(
+        model=model,
+        output=output,
+        tiers="3",
+        episodes_per_tier=1,
+        seed_start=14_000_000,
+        device="cpu",
+        slice_manifest=manifest,
+    )
+    consumed = json.loads(manifest.read_text(encoding="utf-8"))["slices"][0]
+    assert consumed["status"] == "consumed"
+    assert consumed["result"]["meets_acceptance_thresholds"] is None
+    assert len(consumed["result"]["outputs"]) == 3
+    with pytest.raises(RuntimeError, match="reserved_unopened"):
+        evaluate_security_checkpoint(
+            model=model,
+            output=tmp_path / "second.json",
+            tiers="3",
+            episodes_per_tier=1,
+            seed_start=14_000_000,
+            device="cpu",
+            slice_manifest=manifest,
+        )
+
+
 def test_security_sight_matches_the_simulation_detection_envelope(monkeypatch) -> None:
     """The observation's ``visible`` flag must agree with actual detection.
 
@@ -579,17 +702,32 @@ def test_security_targets_distinguish_extraction_from_doors() -> None:
 
     import numpy as np
 
-    from ghostline.config_v3 import SECURITY_TARGET_FEATURES, SECURITY_TARGET_KINDS
+    from ghostline.config_v2 import SECURITY_TARGET_FEATURES, SECURITY_TARGET_KINDS
     from ghostline.security_env import TargetKind
+    from ghostline.security_types import TargetKind as RuntimeTargetKind
 
     env = GhostlineSecurityParallelEnv(tier=6, seed=20_000_103)
     observations, _ = env.reset(seed=20_000_103)
-    targets = observations[next(iter(observations))]["targets"]
+    observation = observations[next(iter(observations))]
+    targets = observation["targets"]
 
-    assert targets.shape == (8, SECURITY_TARGET_FEATURES)
+    assert targets.shape == (10, SECURITY_TARGET_FEATURES)
     assert len(TargetKind) == SECURITY_TARGET_KINDS
+    assert [(item.name, item.value) for item in RuntimeTargetKind] == [
+        (item.name, item.value) for item in TargetKind
+    ]
     kinds = [int(np.argmax(row[3:])) for row in targets]
-    assert len(set(kinds)) == len(kinds), "two slots share a target-kind code"
+    assert len(set(kinds[:8])) == 8, "fixed semantic slots share a target-kind code"
+    # Escape routes keep their semantic identity even before an operative has
+    # a credible contact. Their legality mask, rather than a fake contact,
+    # controls whether PINCER/SEAL may select them.
+    route_slots = [
+        kinds[index]
+        for index in range(8, len(kinds))
+        if np.any(targets[index, 3:])
+    ]
+    assert route_slots
+    assert route_slots == [int(TargetKind.ESCAPE_ROUTE)] * len(route_slots)
     assert kinds[int(TargetKind.EXTRACTION)] != kinds[int(TargetKind.DOOR)]
     env.close()
 
@@ -599,7 +737,7 @@ def test_central_critic_state_carries_the_mission_clock() -> None:
 
     import numpy as np
 
-    from ghostline.config_v3 import SECURITY_CENTRAL_STATE_SIZE
+    from ghostline.config_v2 import SECURITY_CENTRAL_STATE_SIZE
 
     env = GhostlineSecurityParallelEnv(tier=6, seed=20_000_104)
     env.reset(seed=20_000_104)
@@ -631,16 +769,15 @@ def test_interception_beats_tailing_in_the_shaping_potential() -> None:
     env = GhostlineSecurityParallelEnv(tier=6, seed=20_000_105)
     env.reset(seed=20_000_105)
     guard = env.sim.level.guards[0]
-    goal = env._runner_goal()
-    direction = goal - env.sim.player
+    cutoff = env.sim.escape_route_cutoffs(env.sim.player, limit=1)[0]
+    direction = cutoff - env.sim.player
     direction = direction / max(1e-6, float(np.linalg.norm(direction)))
 
     guard.position = (env.sim.player - direction * 40.0).astype(np.float32)
-    trailing = env._interception_score(guard)
+    trailing = env._route_score(guard, cutoff)
     guard.position = (env.sim.player + direction * 120.0).astype(np.float32)
-    intercepting = env._interception_score(guard)
+    intercepting = env._route_score(guard, cutoff)
 
-    assert trailing == 0.0, "trailing the runner must earn no containment credit"
     assert intercepting > trailing
     env.close()
 
@@ -648,7 +785,7 @@ def test_interception_beats_tailing_in_the_shaping_potential() -> None:
 def test_crouch_trades_speed_for_silence_and_a_smaller_profile() -> None:
     """Quiet play must be a real option, not a slower version of the same run."""
 
-    from ghostline.config_v3 import (
+    from ghostline.config_v2 import (
         CROUCH_AWARENESS_SCALE,
         CROUCH_FOOTSTEP_RADIUS,
         CROUCH_SPEED_SCALE,
@@ -656,19 +793,19 @@ def test_crouch_trades_speed_for_silence_and_a_smaller_profile() -> None:
     )
 
     def travel(crouch: bool) -> float:
-        sim = GhostlineSimulationV3(seed=4242, tier=6)
+        sim = GhostlineSimulationV2(seed=4242, tier=6)
         start = sim.player.copy()
         for _ in range(30):
-            sim.advance(RunnerActionV3(move=3, crouch=crouch), ticks=1)
+            sim.advance(RunnerActionV2(move=3, crouch=crouch), ticks=1)
         return float(norm(sim.player - start))
 
     walked, crouched = travel(False), travel(True)
     assert crouched == pytest.approx(walked * CROUCH_SPEED_SCALE, rel=0.05)
 
     def footstep_radii(crouch: bool) -> set[float]:
-        sim = GhostlineSimulationV3(seed=4242, tier=6)
+        sim = GhostlineSimulationV2(seed=4242, tier=6)
         seen: set[float] = set()
-        real = GhostlineSimulationV3._broadcast_noise
+        real = GhostlineSimulationV2._broadcast_noise
 
         def capture(**kwargs):
             seen.add(kwargs["radius"])
@@ -676,7 +813,7 @@ def test_crouch_trades_speed_for_silence_and_a_smaller_profile() -> None:
 
         sim._broadcast_noise = capture
         for _ in range(120):
-            sim.advance(RunnerActionV3(move=3, crouch=crouch), ticks=1)
+            sim.advance(RunnerActionV2(move=3, crouch=crouch), ticks=1)
         return seen
 
     assert footstep_radii(False) == {WALK_FOOTSTEP_RADIUS}
@@ -686,35 +823,23 @@ def test_crouch_trades_speed_for_silence_and_a_smaller_profile() -> None:
 
 
 def test_crouch_slows_awareness_without_making_the_runner_invisible(monkeypatch) -> None:
-    """Patience buys safety; it never breaks the detection contract.
+    """Patience buys safety, but the guard still accumulates awareness."""
 
-    The underlying sight model is untouched, so this pins the actual override:
-    for the same awareness gain produced by the frozen guard update, a crouched
-    runner fills the meter more slowly but still fills it.
-    """
-
-    from ghostline.config_v3 import CROUCH_AWARENESS_SCALE
-    from ghostline.simulation import GhostlineSimulation
-
-    granted = 0.20
-
-    def fake_update(self, dt: float) -> None:
-        for guard in self.level.guards:
-            guard.awareness = min(1.0, guard.awareness + granted)
-
-    monkeypatch.setattr(GhostlineSimulation, "_update_guards", fake_update)
+    from ghostline.config_v2 import CROUCH_AWARENESS_SCALE
 
     def awareness_after(crouch: bool) -> float:
-        sim = GhostlineSimulationV3(seed=2_000_004, tier=6)
+        sim = GhostlineSimulationV2(seed=2_000_004, tier=6)
         for guard in sim.level.guards:
             guard.awareness = 0.0
+            guard.position[:] = sim.player + np.asarray((32.0, 0.0), dtype=np.float32)
+            guard.facing = np.pi
         sim.crouching = crouch
+        monkeypatch.setattr(sim, "visible", lambda *_args, **_kwargs: True)
         sim._update_guards(1.0 / 60.0)
         return float(sim.level.guards[0].awareness)
 
     loud, quiet = awareness_after(False), awareness_after(True)
-    assert loud == pytest.approx(granted)
-    assert quiet == pytest.approx(granted * CROUCH_AWARENESS_SCALE)
+    assert quiet == pytest.approx(loud * CROUCH_AWARENESS_SCALE)
     assert quiet < loud, "crouching must slow how fast a guard fills its meter"
     assert quiet > 0.0, "crouching must never make the runner undetectable"
 
@@ -723,32 +848,32 @@ def test_dash_costs_trace_so_loud_routes_are_expensive() -> None:
     """Loud stays viable and fast, but it escalates the network."""
 
     def trace_after(dash: bool, crouch: bool = False) -> float:
-        sim = GhostlineSimulationV3(seed=4242, tier=6)
+        sim = GhostlineSimulationV2(seed=4242, tier=6)
         for _ in range(120):
-            sim.advance(RunnerActionV3(move=3, dash=dash, crouch=crouch), ticks=1)
+            sim.advance(RunnerActionV2(move=3, dash=dash, crouch=crouch), ticks=1)
         return float(sim.trace)
 
     assert trace_after(True) > trace_after(False)
     # Unseen and quiet, the network actively cools back toward its floor.
-    sim = GhostlineSimulationV3(seed=4242, tier=6)
+    sim = GhostlineSimulationV2(seed=4242, tier=6)
     sim.trace = 60.0
     for _ in range(120):
-        sim.advance(RunnerActionV3(move=3, crouch=True), ticks=1)
+        sim.advance(RunnerActionV2(move=3, crouch=True), ticks=1)
     assert sim.trace < 60.0
 
 
 def test_crouch_cannot_be_combined_with_dash_in_the_action_mask() -> None:
     """Crouch is the quiet state; it may not silence a dash."""
 
-    sim = GhostlineSimulationV3(seed=4242, tier=6)
+    sim = GhostlineSimulationV2(seed=4242, tier=6)
     mask = sim.action_mask()
     for value, legal in enumerate(mask):
-        action = RunnerActionV3.decode(value)
+        action = RunnerActionV2.decode(value)
         if action.crouch and action.dash:
             assert legal == 0
 
     # Even if an illegal pair is forced through, the dash wins and stays loud.
-    sim.advance(RunnerActionV3(move=3, dash=True, crouch=True), ticks=6)
+    sim.advance(RunnerActionV2(move=3, dash=True, crouch=True), ticks=6)
     assert sim.crouching is False
 
 
@@ -763,7 +888,7 @@ def test_stealth_economy_makes_a_loud_mission_materially_expensive() -> None:
     """
 
     from ghostline.config import TRACE_MAX
-    from ghostline.config_v3 import (
+    from ghostline.config_v2 import (
         DETECTION_COST,
         EXPOSURE_COST_PER_DECISION,
         QUIET_DATA_BONUS,
@@ -790,18 +915,18 @@ def test_exposure_scales_with_trace_and_quiet_data_earns_a_bonus() -> None:
     """The live terms track simulation state exactly."""
 
     from ghostline.config import TRACE_MAX
-    from ghostline.config_v3 import EXPOSURE_COST_PER_DECISION, QUIET_TRACE_CEILING
+    from ghostline.config_v2 import EXPOSURE_COST_PER_DECISION, QUIET_TRACE_CEILING
 
-    env = GhostlineEnvV3(seed=3_000_021, tier=6, directive="standard")
+    env = GhostlineEnvV2(seed=3_000_021, tier=6, directive="standard")
     env.reset(seed=3_000_021)
     env.sim.trace = TRACE_MAX
-    env.step(RunnerActionV3(move=0).encode())
+    env.step(RunnerActionV2(move=0).encode())
     hot = env.reward_components["exposure"]
     assert hot == pytest.approx(-EXPOSURE_COST_PER_DECISION, rel=0.02)
 
     env.reset(seed=3_000_021)
     env.sim.trace = 0.0
-    env.step(RunnerActionV3(move=0).encode())
+    env.step(RunnerActionV2(move=0).encode())
     cold = env.reward_components["exposure"]
     assert cold > hot, "a cold network must cost less than a hot one"
     assert QUIET_TRACE_CEILING < TRACE_MAX
@@ -826,18 +951,18 @@ def test_holding_cover_while_crouched_is_not_punished_as_idling() -> None:
                         return tile_center((tx, ty))
         raise AssertionError("no cover tile in this facility")
 
-    env = GhostlineEnvV3(seed=3_000_022, tier=6, directive="standard")
+    env = GhostlineEnvV2(seed=3_000_022, tier=6, directive="standard")
     env.reset(seed=3_000_022)
     spot = cover_position(env.sim)
     env.sim.player[:] = spot
     assert env.sim.in_cover
 
-    env.step(RunnerActionV3(move=0, crouch=True).encode())
+    env.step(RunnerActionV2(move=0, crouch=True).encode())
     crouched_idle = env.reward_components["idle"]
 
     env.reset(seed=3_000_022)
     env.sim.player[:] = spot
-    env.step(RunnerActionV3(move=0, crouch=False).encode())
+    env.step(RunnerActionV2(move=0, crouch=False).encode())
     standing_idle = env.reward_components["idle"]
 
     assert crouched_idle == 0.0
@@ -847,13 +972,13 @@ def test_holding_cover_while_crouched_is_not_punished_as_idling() -> None:
     env.close()
 
 
-def test_v3_generator_reshapes_every_facility_and_stays_valid() -> None:
+def test_v2_generator_reshapes_every_facility_and_stays_valid() -> None:
     """The multi-agent track gets varied layouts that still pass validation."""
 
     from ghostline.generation import LevelGenerator
-    from ghostline.generation_v3 import FacilityLayoutV3
+    from ghostline.generation_v2 import FacilityLayoutV2
 
-    base, shaped = LevelGenerator(), FacilityLayoutV3()
+    base, shaped = LevelGenerator(), FacilityLayoutV2()
     reshaped = 0
     for seed in range(4_100_000, 4_100_030):
         tier = 3 + seed % 4
@@ -868,44 +993,44 @@ def test_v3_generator_reshapes_every_facility_and_stays_valid() -> None:
     assert reshaped >= 25, f"only {reshaped}/30 facilities were reshaped"
 
 
-def test_v3_generator_is_deterministic_for_a_seed() -> None:
+def test_v2_generator_is_deterministic_for_a_seed() -> None:
     """Replay and evaluation both depend on this."""
 
-    from ghostline.generation_v3 import FacilityLayoutV3
+    from ghostline.generation_v2 import FacilityLayoutV2
 
-    first = FacilityLayoutV3().generate(seed=4_100_777, tier=6)
-    second = FacilityLayoutV3().generate(seed=4_100_777, tier=6)
+    first = FacilityLayoutV2().generate(seed=4_100_777, tier=6)
+    second = FacilityLayoutV2().generate(seed=4_100_777, tier=6)
     assert np.array_equal(first.grid, second.grid)
     assert [(p.kind, p.tile_x, p.tile_y) for p in first.props] == [
         (p.kind, p.tile_x, p.tile_y) for p in second.props
     ]
 
 
-def test_v3_simulation_uses_the_reshaped_generator_and_v2_does_not() -> None:
+def test_v2_simulation_uses_the_reshaped_generator_and_v2_does_not() -> None:
     """The frozen single-agent track must keep its original facilities."""
 
     from ghostline.generation import LevelGenerator
-    from ghostline.generation_v3 import FacilityLayoutV3
+    from ghostline.generation_v2 import FacilityLayoutV2
     from ghostline.simulation import GhostlineSimulation
 
     classic = GhostlineSimulation(seed=4_100_042, tier=6)
-    adaptive = GhostlineSimulationV3(seed=4_100_042, tier=6)
+    adaptive = GhostlineSimulationV2(seed=4_100_042, tier=6)
     assert type(classic.generator) is LevelGenerator
-    assert isinstance(adaptive.generator, FacilityLayoutV3)
+    assert isinstance(adaptive.generator, FacilityLayoutV2)
     assert not np.array_equal(classic.level.grid, adaptive.level.grid)
 
     # The swap survives a reset, which is the path training actually uses.
     adaptive.reset(seed=4_100_043, tier=5)
-    assert isinstance(adaptive.generator, FacilityLayoutV3)
+    assert isinstance(adaptive.generator, FacilityLayoutV2)
 
 
-def test_v3_interior_structure_creates_cover_without_sealing_routes() -> None:
+def test_v2_interior_structure_creates_cover_without_sealing_routes() -> None:
     """Aisles must produce cover and still leave the facility walkable."""
 
     from ghostline.generation import flood_fill, world_to_tile
-    from ghostline.generation_v3 import FacilityLayoutV3
+    from ghostline.generation_v2 import FacilityLayoutV2
 
-    level = FacilityLayoutV3().generate(seed=4_100_099, tier=6)
+    level = FacilityLayoutV2().generate(seed=4_100_099, tier=6)
     blocked = {
         (p.tile_x + dx, p.tile_y + dy)
         for p in level.props
@@ -923,7 +1048,7 @@ def test_v3_interior_structure_creates_cover_without_sealing_routes() -> None:
     assert structural, "no sightline-breaking structure was placed"
 
 
-def test_v3_runner_policy_starts_uniform_over_legal_actions() -> None:
+def test_v2_runner_policy_starts_uniform_over_legal_actions() -> None:
     """Orthogonal init with a near-zero policy head is the point of the change.
 
     The project previously used PyTorch defaults everywhere, so the policy began
@@ -932,12 +1057,12 @@ def test_v3_runner_policy_starts_uniform_over_legal_actions() -> None:
 
     import torch
 
-    from ghostline.env_v3 import GhostlineEnvV3
-    from ghostline.model_v3 import RunnerPolicyV3
+    from ghostline.env_v2 import GhostlineEnvV2
+    from ghostline.model_v2 import RunnerPolicyV2
 
-    env = GhostlineEnvV3(seed=4_300_001, tier=6, directive="ghost")
+    env = GhostlineEnvV2(seed=4_300_001, tier=6, directive="ghost")
     observation, _ = env.reset(seed=4_300_001)
-    policy = RunnerPolicyV3(recurrent_size=256)
+    policy = RunnerPolicyV2(recurrent_size=256)
     tensors = {key: torch.as_tensor(value).unsqueeze(0) for key, value in observation.items()}
     logits, value, _hidden = policy.forward(tensors, None)
 
@@ -950,17 +1075,17 @@ def test_v3_runner_policy_starts_uniform_over_legal_actions() -> None:
     env.close()
 
 
-def test_v3_runner_policy_respects_the_directive_and_sequence_resets() -> None:
+def test_v2_runner_policy_respects_the_directive_and_sequence_resets() -> None:
     """FiLM conditioning must actually change the representation."""
 
     import torch
 
-    from ghostline.env_v3 import GhostlineEnvV3
-    from ghostline.model_v3 import RunnerPolicyV3
+    from ghostline.env_v2 import GhostlineEnvV2
+    from ghostline.model_v2 import RunnerPolicyV2
 
-    env = GhostlineEnvV3(seed=4_300_002, tier=6, directive="ghost")
+    env = GhostlineEnvV2(seed=4_300_002, tier=6, directive="ghost")
     observation, _ = env.reset(seed=4_300_002)
-    policy = RunnerPolicyV3(recurrent_size=256)
+    policy = RunnerPolicyV2(recurrent_size=256)
     tensors = {key: torch.as_tensor(value).unsqueeze(0) for key, value in observation.items()}
     ghost = policy.encode(tensors)
 
@@ -982,13 +1107,13 @@ def test_v3_runner_policy_respects_the_directive_and_sequence_resets() -> None:
     env.close()
 
 
-def test_v3_runner_checkpoint_round_trips_and_rejects_wrong_contracts(tmp_path) -> None:
-    from ghostline.model_v3 import RunnerPolicyV3, load_runner_v3, save_runner_v3
+def test_v2_runner_checkpoint_round_trips_and_rejects_wrong_contracts(tmp_path) -> None:
+    from ghostline.model_v2 import RunnerPolicyV2, load_runner_v2, save_runner_v2
 
-    path = tmp_path / "runner-v3.pt"
-    policy = RunnerPolicyV3(recurrent_size=256)
-    save_runner_v3(policy, path, note="unit")
-    restored = load_runner_v3(path)
+    path = tmp_path / "runner-v2.pt"
+    policy = RunnerPolicyV2(recurrent_size=256)
+    save_runner_v2(policy, path, note="unit")
+    restored = load_runner_v2(path)
     assert restored.recurrent_size == 256
 
     import torch
@@ -997,7 +1122,7 @@ def test_v3_runner_checkpoint_round_trips_and_rejects_wrong_contracts(tmp_path) 
     payload["action_count"] = 72
     torch.save(payload, path)
     with pytest.raises(RuntimeError, match="action count"):
-        load_runner_v3(path)
+        load_runner_v2(path)
 
 
 def test_running_return_scale_tracks_target_magnitude() -> None:
@@ -1019,26 +1144,26 @@ def test_running_return_scale_tracks_target_magnitude() -> None:
 def test_vents_move_the_runner_and_operatives_cannot_follow() -> None:
     """A vent is the answer to a sealed route, and a committed one."""
 
-    from ghostline.config_v3 import VENT_TRANSIT_SECONDS
+    from ghostline.config_v2 import VENT_TRANSIT_SECONDS
     from ghostline.generation import tile_center
 
-    sim = GhostlineSimulationV3(seed=4_400_002, tier=6)
+    sim = GhostlineSimulationV2(seed=4_400_002, tier=6)
     assert sim.vents, "tier 6 should place a vent network"
     vent = sim.vents[0]
     sim.player[:] = tile_center(vent.tile)
     origin = sim.player.copy()
 
     assert sim.can_interact()
-    sim.advance(RunnerActionV3(move=0, interact=True), ticks=1)
+    sim.advance(RunnerActionV2(move=0, interact=True), ticks=1)
     assert sim.vent_transit == pytest.approx(VENT_TRANSIT_SECONDS, rel=0.05)
 
     # Mid-transit the runner is frozen and cannot be steered.
-    sim.advance(RunnerActionV3(move=3), ticks=6)
+    sim.advance(RunnerActionV2(move=3), ticks=6)
     assert float(norm(sim.velocity)) == 0.0
     assert float(norm(sim.player - origin)) == pytest.approx(0.0, abs=1e-6)
 
     for _ in range(90):
-        sim.advance(RunnerActionV3(move=0), ticks=1)
+        sim.advance(RunnerActionV2(move=0), ticks=1)
     assert float(norm(sim.player - vent.exit_position)) == pytest.approx(0.0, abs=1e-3)
     assert sim.vent_uses == 1
 
@@ -1047,13 +1172,13 @@ def test_vents_move_the_runner_and_operatives_cannot_follow() -> None:
 
 
 def test_hacking_disables_a_camera_and_spends_a_charge() -> None:
-    sim = GhostlineSimulationV3(seed=4_400_003, tier=6)
+    sim = GhostlineSimulationV2(seed=4_400_003, tier=6)
     device = next(item for item in sim.hackable if item.kind == "camera")
     camera = next(item for item in sim.level.cameras if int(item.camera_id) == device.target_id)
     sim.player[:] = device.position
     charges = sim.hack_charges
 
-    sim.advance(RunnerActionV3(move=0, interact=True), ticks=1)
+    sim.advance(RunnerActionV2(move=0, interact=True), ticks=1)
     assert sim.hack_charges == charges - 1
     assert camera.disabled_for > 0.0
     assert sim.hacks_used == 1
@@ -1061,20 +1186,21 @@ def test_hacking_disables_a_camera_and_spends_a_charge() -> None:
     assert device.cooldown > 0.0
 
 
-def test_hacking_the_lights_shortens_sight_inside_that_room_only() -> None:
+def test_hacking_the_lights_shortens_sight_inside_that_room_only(monkeypatch) -> None:
     """Darkness is applied through the shared visibility predicate."""
 
-    from ghostline.config_v3 import HACK_LIGHTS_VISION_SCALE
+    from ghostline.config_v2 import HACK_LIGHTS_VISION_SCALE
 
-    sim = GhostlineSimulationV3(seed=4_400_003, tier=6)
+    sim = GhostlineSimulationV2(seed=4_400_003, tier=6)
     panel = next(item for item in sim.hackable if item.kind == "lights")
     sim.player[:] = panel.position
-    sim.advance(RunnerActionV3(move=0, interact=True), ticks=1)
+    sim.advance(RunnerActionV2(move=0, interact=True), ticks=1)
     assert panel.target_id in sim.darkened_rooms
 
     guard = sim.level.guards[0]
     guard.position[:] = panel.position
     guard.facing = 0.0
+    monkeypatch.setattr(sim, "line_of_sight", lambda *_args, **_kwargs: True)
     assert sim.guard_vision_scale(guard) == pytest.approx(HACK_LIGHTS_VISION_SCALE)
 
     far = guard.position + np.asarray((190.0, 0.0), dtype=np.float32)
@@ -1086,13 +1212,13 @@ def test_hacking_the_lights_shortens_sight_inside_that_room_only() -> None:
 def test_crouched_decoy_throw_is_shorter_than_a_standing_throw() -> None:
     """The quiet route trades reach for concealment here too."""
 
-    from ghostline.config_v3 import DECOY_CROUCH_THROW_SCALE
+    from ghostline.config_v2 import DECOY_CROUCH_THROW_SCALE
 
     def throw(crouch: bool) -> float:
-        sim = GhostlineSimulationV3(seed=4_400_010, tier=6)
+        sim = GhostlineSimulationV2(seed=4_400_010, tier=6)
         sim.decoy_charges = 3
         origin = sim.player.copy()
-        sim.advance(RunnerActionV3(move=3, decoy=True, crouch=crouch), ticks=1)
+        sim.advance(RunnerActionV2(move=3, decoy=True, crouch=crouch), ticks=1)
         assert sim.decoys, "decoy was not deployed"
         return float(norm(sim.decoys[0].position - origin))
 
@@ -1101,14 +1227,16 @@ def test_crouched_decoy_throw_is_shorter_than_a_standing_throw() -> None:
     assert 0.0 < DECOY_CROUCH_THROW_SCALE < 1.0
 
 
-def test_predictive_seal_targets_ahead_and_never_lands_on_the_runner() -> None:
-    """Sealing must feel outplayed, not arbitrary."""
+def test_predictive_seal_uses_an_explicit_public_cutoff() -> None:
+    """The controller must select from public contact-derived cutoff targets."""
 
-    from ghostline.config_v3 import CHOKEPOINT_MIN_RUNNER_DISTANCE
+    from ghostline.config_v2 import CHOKEPOINT_MIN_RUNNER_DISTANCE
     from ghostline.generation import tile_center
 
-    sim = GhostlineSimulationV3(seed=4_400_004, tier=6)
-    assert sim.request_predictive_seal()
+    sim = GhostlineSimulationV2(seed=4_400_004, tier=6)
+    cutoffs = sim.escape_route_cutoffs(sim.player.copy())
+    assert cutoffs
+    assert sim.request_predictive_seal(cutoffs[0])
     warned = [door for door in sim.security_doors if door.warning_remaining > 0.0 or door.locked]
     assert warned, "no door was asked to close"
     # It telegraphs before closing and is never on top of the runner.
@@ -1126,31 +1254,42 @@ def test_predictive_seal_targets_ahead_and_never_lands_on_the_runner() -> None:
 def test_hacking_a_door_forces_a_seal_back_open() -> None:
     """The runner always keeps an answer to a chokepoint."""
 
-    sim = GhostlineSimulationV3(seed=4_400_004, tier=6)
-    sim.request_predictive_seal()
-    door = sim.security_doors[0]
+    sim = GhostlineSimulationV2(seed=4_400_004, tier=6)
+    panel = next(item for item in sim.hackable if item.kind == "door")
+    door = next(
+        item
+        for item in sim.security_doors
+        if item.door_id == panel.target_id and item.tile == panel.target_tile
+    )
     door.lock_remaining = 3.0
     sim._refresh_navigation_blocks()
     assert door.locked
 
-    panel = next(item for item in sim.hackable if item.kind == "door")
     sim.player[:] = panel.position
-    sim.advance(RunnerActionV3(move=0, interact=True), ticks=1)
+    sim.advance(RunnerActionV2(move=0, interact=True), ticks=1)
     assert not door.locked
     assert door.tile not in sim._blocked_tiles
 
 
 def test_pincer_assigns_distinct_approach_arcs_across_the_team() -> None:
-    """A slower team closes by converging from several bearings."""
+    """The policy can split a team across distinct public escape cutoffs."""
 
-    from ghostline.types_v3 import SecurityIntent, SecurityOrder
+    from ghostline.types_v2 import SecurityIntent, SecurityOrder
 
-    sim = GhostlineSimulationV3(seed=4_400_004, tier=6, external_security=True)
+    sim = GhostlineSimulationV2(seed=4_400_004, tier=6, external_security=True)
     contact = sim.player.copy()
+    cutoffs = sim.escape_route_cutoffs(contact, limit=len(sim.level.guards))
+    assert len(cutoffs) >= 2
     sim.set_security_orders(
-        {guard.guard_id: SecurityOrder(SecurityIntent.PINCER, contact.copy()) for guard in sim.level.guards}
+        {
+            guard.guard_id: SecurityOrder(
+                SecurityIntent.PINCER,
+                cutoffs[min(index, len(cutoffs) - 1)].copy(),
+            )
+            for index, guard in enumerate(sim.level.guards)
+        }
     )
-    sim.advance(RunnerActionV3(move=0), ticks=1)
+    sim.advance(RunnerActionV2(move=0), ticks=1)
 
     stations = [sim.operative_states[guard.guard_id].current_order.target for guard in sim.level.guards]
     separations = [
@@ -1159,13 +1298,18 @@ def test_pincer_assigns_distinct_approach_arcs_across_the_team() -> None:
         for second in stations[index + 1 :]
     ]
     assert len(stations) >= 3
-    assert min(separations) > 20.0, "operatives stacked on one point instead of spreading"
+    distinct = {
+        (round(float(station[0]), 3), round(float(station[1]), 3))
+        for station in stations
+    }
+    assert len(distinct) >= 2, "all operatives stacked on one cutoff"
+    assert max(separations) > 20.0
 
 
 def test_field_sensors_report_a_crossing_and_never_damage() -> None:
     """Non-lethal by construction: a sensor is information, not a weapon."""
 
-    sim = GhostlineSimulationV3(seed=4_400_003, tier=6)
+    sim = GhostlineSimulationV2(seed=4_400_003, tier=6)
     guard = sim.level.guards[0]
     assert sim.deploy_field_sensor(guard)
     assert not sim.deploy_field_sensor(guard), "sensor charges are limited"
@@ -1173,7 +1317,7 @@ def test_field_sensors_report_a_crossing_and_never_damage() -> None:
     integrity = sim.integrity
     sim.player[:] = guard.position
     for _ in range(90):
-        sim.advance(RunnerActionV3(move=0), ticks=1)
+        sim.advance(RunnerActionV2(move=0), ticks=1)
 
     assert any(sensor.triggered for sensor in sim.field_sensors)
     assert sim.integrity == integrity, "a sensor must never cost integrity"
@@ -1185,7 +1329,7 @@ def test_interact_is_masked_out_when_there_is_nothing_to_use() -> None:
 
     from ghostline.generation import tile_center
 
-    sim = GhostlineSimulationV3(seed=4_400_002, tier=6)
+    sim = GhostlineSimulationV2(seed=4_400_002, tier=6)
     # Somewhere with no vent and no panel in range.
     far = next(
         tile_center((x, y))
@@ -1198,9 +1342,9 @@ def test_interact_is_masked_out_when_there_is_nothing_to_use() -> None:
     sim.player[:] = far
     assert not sim.can_interact()
     mask = sim.action_mask()
-    assert all(mask[value] == 0 for value in range(len(mask)) if RunnerActionV3.decode(value).interact)
+    assert all(mask[value] == 0 for value in range(len(mask)) if RunnerActionV2.decode(value).interact)
 
     vent = sim.vents[0]
     sim.player[:] = tile_center(vent.tile)
     mask = sim.action_mask()
-    assert any(mask[value] == 1 for value in range(len(mask)) if RunnerActionV3.decode(value).interact)
+    assert any(mask[value] == 1 for value in range(len(mask)) if RunnerActionV2.decode(value).interact)

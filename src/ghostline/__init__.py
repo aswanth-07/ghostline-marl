@@ -12,14 +12,21 @@ def register_env() -> None:
     import gymnasium as gym
 
     if "GhostlineEnv-v1" not in gym.registry:
-        gym.register("GhostlineEnv-v1", entry_point="ghostline.env:GhostlineEnvV1")
+        gym.register("GhostlineEnv-v1", entry_point="ghostline.env_v1:PublishedGhostlineEnvV1")
     if "GhostlineEnv-v2" not in gym.registry:
-        gym.register("GhostlineEnv-v2", entry_point="ghostline.env:GhostlineEnv")
-    if "GhostlineEnv-v3" not in gym.registry:
-        gym.register("GhostlineEnv-v3", entry_point="ghostline.env_v3:GhostlineEnvV3")
+        gym.register("GhostlineEnv-v2", entry_point="ghostline.env_v2:GhostlineEnvV2")
+    if "GhostlineLegacyEnv-v0" not in gym.registry:
+        gym.register("GhostlineLegacyEnv-v0", entry_point="ghostline.env:GhostlineEnvV1")
 
 
 if sys.platform != "emscripten":
-    GhostlineEnv = getattr(importlib.import_module("ghostline.env"), "GhostlineEnv")
-    __all__.append("GhostlineEnv")
+    GhostlineEnv = getattr(
+        importlib.import_module("ghostline.env_v1"),
+        "PublishedGhostlineEnvV1",
+    )
+    GhostlineEnvV2 = getattr(
+        importlib.import_module("ghostline.env_v2"),
+        "GhostlineEnvV2",
+    )
+    __all__.extend(("GhostlineEnv", "GhostlineEnvV2"))
     register_env()

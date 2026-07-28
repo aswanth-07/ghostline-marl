@@ -421,15 +421,22 @@ def _episodes_csv(report: dict[str, Any]) -> str:
     return output.getvalue()
 
 
-def _load_slice_manifest(path: Path) -> dict[str, Any]:
+def _load_slice_manifest(
+    path: Path,
+    *,
+    observation_contract: str = OBSERVATION_CONTRACT,
+) -> dict[str, Any]:
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise RuntimeError(f"could not read final-test slice manifest: {path}") from error
     if manifest.get("manifest_contract") != FINAL_SLICE_MANIFEST_CONTRACT:
         raise RuntimeError("final-test slice manifest has an unsupported contract")
-    if manifest.get("observation_contract") != OBSERVATION_CONTRACT:
-        raise RuntimeError("final-test slice manifest does not declare GhostlineEnv-v2")
+    if manifest.get("observation_contract") != observation_contract:
+        raise RuntimeError(
+            "final-test slice manifest observation contract does not match "
+            f"{observation_contract}"
+        )
     if not isinstance(manifest.get("slices"), list):
         raise RuntimeError("final-test slice manifest must contain a slices list")
     return manifest
@@ -474,6 +481,7 @@ class FinalSliceLease:
     lock_path: Path
     seed_start: int
     audit_id: str
+    observation_contract: str = OBSERVATION_CONTRACT
 
     def _entry_for_active_audit(self, manifest: dict[str, Any]) -> dict[str, Any]:
         entry = _slice_entry(manifest, self.seed_start)
@@ -485,12 +493,17 @@ class FinalSliceLease:
         return entry
 
     def finalize(self, report: dict[str, Any], outputs: Sequence[Path]) -> None:
-        manifest = _load_slice_manifest(self.manifest_path)
+        manifest = _load_slice_manifest(
+            self.manifest_path,
+            observation_contract=self.observation_contract,
+        )
         entry = self._entry_for_active_audit(manifest)
         entry["status"] = "consumed"
         entry["result"] = {
             "audit_id": self.audit_id,
-            "meets_acceptance_thresholds": bool(report["meets_acceptance_thresholds"]),
+            "meets_acceptance_thresholds": report.get(
+                "meets_acceptance_thresholds"
+            ),
             "outputs": [
                 {
                     "path": path.as_posix(),
@@ -505,7 +518,10 @@ class FinalSliceLease:
         self.lock_path.unlink(missing_ok=False)
 
     def abort(self, error: BaseException) -> None:
-        manifest = _load_slice_manifest(self.manifest_path)
+        manifest = _load_slice_manifest(
+            self.manifest_path,
+            observation_contract=self.observation_contract,
+        )
         entry = self._entry_for_active_audit(manifest)
         entry["status"] = "aborted_retired"
         entry["result"] = {
@@ -528,6 +544,7 @@ def _open_final_slice(
     policy_kind: str,
     checkpoint_sha256: str | None,
     output: Path,
+    observation_contract: str = OBSERVATION_CONTRACT,
 ) -> FinalSliceLease:
     manifest_path = Path(manifest_path)
     lock_path = manifest_path.with_name(f"{manifest_path.name}.lock")
@@ -540,7 +557,10 @@ def _open_final_slice(
         ) from error
     os.close(descriptor)
     try:
-        manifest = _load_slice_manifest(manifest_path)
+        manifest = _load_slice_manifest(
+            manifest_path,
+            observation_contract=observation_contract,
+        )
         if manifest.get("environment_fingerprint") != environment_fingerprint:
             raise RuntimeError("final-test slice manifest fingerprint does not match the frozen environment")
         entry = _slice_entry(manifest, seed_start)
@@ -579,7 +599,13 @@ def _open_final_slice(
             "tiers": list(tiers),
         }
         _atomic_write(manifest_path, _stable_json(manifest))
-        return FinalSliceLease(manifest_path, lock_path, seed_start, audit_id)
+        return FinalSliceLease(
+            manifest_path,
+            lock_path,
+            seed_start,
+            audit_id,
+            observation_contract,
+        )
     except BaseException:
         lock_path.unlink(missing_ok=True)
         raise

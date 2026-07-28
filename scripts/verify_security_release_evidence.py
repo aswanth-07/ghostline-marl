@@ -17,7 +17,6 @@ import sys
 from typing import Any, Callable
 
 from ghostline.security_model import (
-    SECURITY_OBSERVATION_CONTRACT,
     security_environment_fingerprint,
 )
 
@@ -33,6 +32,7 @@ RUNNER_OPPONENT = f"env-v2:{RUNNER_SHA256}"
 # verifiable against the identity it was actually produced under; what it
 # may no longer do is claim to describe the environment we now ship.
 RETIRED_RELEASE_FINGERPRINT = "96275bac09bd6fb321510e1bd23d0e025d157b4cdeeb919aded9bb38b850721b"
+RETIRED_OBSERVATION_CONTRACT = "GhostlineSecurityParallel-v0"
 TIERS = (3, 4, 5, 6)
 
 SECURITY_CHECKPOINT = Path("models/ghostline-security.pt")
@@ -145,7 +145,7 @@ def _verify_report(
     report = _read_json(path)
     _require(report.get("contract") == REPORT_CONTRACT, f"unsupported security contract in {path.name}")
     _require(
-        report.get("observation_contract") == SECURITY_OBSERVATION_CONTRACT,
+        report.get("observation_contract") == RETIRED_OBSERVATION_CONTRACT,
         f"wrong observation contract in {path.name}",
     )
     _require(
@@ -319,7 +319,7 @@ def verify_security_release(
     )
     return {
         "status": "passed",
-        "observation_contract": SECURITY_OBSERVATION_CONTRACT,
+        "observation_contract": RETIRED_OBSERVATION_CONTRACT,
         "environment_fingerprint": fingerprint,
         "live_environment_fingerprint": live_fingerprint,
         # True once the shipped contract has moved past the identity this

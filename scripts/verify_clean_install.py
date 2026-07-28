@@ -49,18 +49,31 @@ def verify(wheel: Path) -> dict[str, object]:
             assert util.find_spec("torch") is None
             assert util.find_spec("onnxruntime") is None
             assert util.find_spec("neon_arena") is None
+            retired_v3_modules = (
+                "ghostline.config_v3",
+                "ghostline.env_v3",
+                "ghostline.generation_v3",
+                "ghostline.model_v3",
+                "ghostline.simulation_v3",
+                "ghostline.types_v3",
+            )
+            for module_name in retired_v3_modules:
+                assert util.find_spec(module_name) is None, module_name
 
             import gymnasium as gym
-            env = gym.make("GhostlineEnv-v2", tier=1, seed=10101)
+            env = gym.make("GhostlineEnv-v1", tier=1, seed=10101)
             observation, info = env.reset(seed=10101, options={"training_lesson": 1})
             assert observation["action_mask"].shape == (36,)
+            assert info["contract"] == "GhostlineEnv-v1"
+            assert info["historical_internal_contract"] == "GhostlineEnv-v2"
             env.step(0)
             env.close()
-            adaptive = gym.make("GhostlineEnv-v3", tier=6, seed=10102, directive="ghost")
+            adaptive = gym.make("GhostlineEnv-v2", tier=6, seed=10102, directive="ghost")
             adaptive_observation, adaptive_info = adaptive.reset(seed=10102)
-            assert adaptive_observation["action_mask"].shape == (72,)
+            assert adaptive_observation["action_mask"].shape == (288,)
             assert adaptive_observation["directive"].shape == (6,)
-            assert adaptive_info["contract"] == "GhostlineEnv-v3"
+            assert adaptive_observation["field_targets"].shape == (16, 13)
+            assert adaptive_info["contract"] == "GhostlineEnv-v2"
             adaptive.step(0)
             adaptive.close()
 
@@ -72,11 +85,12 @@ def verify(wheel: Path) -> dict[str, object]:
                 "assets/visual/ghostline-environment-atlas-v1.png",
                 "assets/visual/ghostline-character-security-atlas-v1.png",
                 "assets/visual/ghostline-diagonal-locomotion-v2.png",
-                "models/ghostline-security.pt",
             )
             for relative in runtime_assets:
                 with runtime_asset_path(relative) as asset:
                     assert asset is not None and asset.is_file(), relative
+            with runtime_asset_path("models/ghostline-security.pt") as retired_security_policy:
+                assert retired_security_policy is None
             with runtime_asset_path("assets/licenses.json") as asset_manifest:
                 asset_data = json.loads(asset_manifest.read_text(encoding="utf-8"))
             assert asset_data["project"] == "Ghostline"
@@ -92,7 +106,7 @@ def verify(wheel: Path) -> dict[str, object]:
             from ghostline.presentation import GhostlineRenderer
             from ghostline.simulation import GhostlineSimulation
             from ghostline.security_controller import AdaptiveSecurityController
-            from ghostline.simulation_v3 import GhostlineSimulationV3
+            from ghostline.simulation_v2 import GhostlineSimulationV2
             renderer = GhostlineRenderer(GhostlineSimulation(seed=10101, tier=1), visible=False)
             assert not hasattr(renderer, "_key_art")
             assert renderer._environment_atlas is not None
@@ -101,7 +115,7 @@ def verify(wheel: Path) -> dict[str, object]:
             frame = renderer.draw(return_array=True)
             assert frame.shape == (360, 640, 3)
             renderer.close()
-            adaptive_sim = GhostlineSimulationV3(seed=10102, tier=6, external_security=True)
+            adaptive_sim = GhostlineSimulationV2(seed=10102, tier=6, external_security=True)
             security = AdaptiveSecurityController(adaptive_sim)
             assert security.policy is None
             assert security.adapter is None  # PettingZoo is intentionally outside the base wheel.
@@ -117,24 +131,36 @@ def verify(wheel: Path) -> dict[str, object]:
             assert scripts == {"ghostline": "ghostline.cli:main"}
             print(json.dumps({
                 "ghostline_version": ghostline.__version__,
-                "environments": ["GhostlineEnv-v2", "GhostlineEnv-v3"],
+                "environments": ["GhostlineEnv-v1", "GhostlineEnv-v2"],
                 "pygame_deferred_until_asset_probe": pygame_was_deferred,
                 "torch_available": util.find_spec("torch") is not None,
                 "onnxruntime_available": util.find_spec("onnxruntime") is not None,
                 "legacy_package_available": util.find_spec("neon_arena") is not None,
+                "retired_v3_modules_available": [
+                    module_name
+                    for module_name in retired_v3_modules
+                    if util.find_spec(module_name) is not None
+                ],
                 "console_scripts": scripts,
                 "runtime_assets": list(runtime_assets),
                 "playable_asset_probe": True,
             }))
             """
         )
-        completed = subprocess.run(
-            [str(python), "-c", probe],
-            cwd=environment,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            completed = subprocess.run(
+                [str(python), "-c", probe],
+                cwd=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as error:
+            if error.stdout:
+                print(error.stdout, file=sys.stderr, end="")
+            if error.stderr:
+                print(error.stderr, file=sys.stderr, end="")
+            raise
         subprocess.run(
             [str(python), "-m", "ghostline", "--help"],
             cwd=environment,

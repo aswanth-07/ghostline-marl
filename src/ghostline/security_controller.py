@@ -6,13 +6,13 @@ from typing import Any
 
 import numpy as np
 
-from ghostline.config_v3 import SECURITY_TACTICAL_TICKS
+from ghostline.config_v2 import SECURITY_TACTICAL_TICKS
 from ghostline.resources import runtime_asset_path
 from ghostline.security_baselines import tactical_security_action
 from ghostline.simulation import norm
-from ghostline.simulation_v3 import GhostlineSimulationV3
+from ghostline.simulation_v2 import GhostlineSimulationV2
 from ghostline.types import GuardMode
-from ghostline.types_v3 import GuardRole, RadioMessage, SecurityIntent, SecurityOrder
+from ghostline.types_v2 import GuardRole, RadioMessage, SecurityIntent, SecurityOrder
 
 
 class AdaptiveSecurityController:
@@ -23,7 +23,7 @@ class AdaptiveSecurityController:
     available in lightweight builds that intentionally omit PyTorch.
     """
 
-    def __init__(self, sim: GhostlineSimulationV3):
+    def __init__(self, sim: GhostlineSimulationV2):
         self.policy = None
         self.adapter = None
         self.hidden: dict[str, Any] = {}
@@ -51,7 +51,7 @@ class AdaptiveSecurityController:
                     self.policy = None
         self.reset(sim)
 
-    def reset(self, sim: GhostlineSimulationV3) -> None:
+    def reset(self, sim: GhostlineSimulationV2) -> None:
         self.sim = sim
         self.sim.external_security = True
         self.hidden = {f"guard_{guard.guard_id}": None for guard in sim.level.guards}
@@ -118,9 +118,18 @@ class AdaptiveSecurityController:
         }
         with torch.no_grad():
             logits, self._batch_hidden = self.policy.forward_actor(batched, self._batch_hidden)
-            decisions = torch.stack(
-                [torch.argmax(head, dim=-1) for head in logits],
-                dim=-1,
+            # Target legality depends on the selected semantic intent. Reuse
+            # the same autoregressive selector as training/evaluation so a
+            # desktop policy can never choose PINCER/SEAL with an incompatible
+            # target or execute a transition different from the sampled action.
+            selector = getattr(
+                importlib.import_module("ghostline.security_model"),
+                "select_factorized_actions",
+            )
+            decisions = selector(
+                logits,
+                batched["intent_target_mask"],
+                deterministic=True,
             ).cpu().numpy().astype(np.int64)
         return {agent: decisions[index] for index, agent in enumerate(agents)}
 

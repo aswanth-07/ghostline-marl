@@ -16,23 +16,26 @@ from ghostline.config import (
     PLAYER_PERCEPTION_DISTANCE,
     TILE_SIZE,
 )
-from ghostline.config_v3 import (
+from ghostline.config_v2 import (
     MAX_RADIO_MESSAGES,
     MAX_SECURITY_TARGETS,
     MAX_TEAMMATES,
     SECURITY_CENTRAL_STATE_SIZE,
+    SECURITY_INTENT_COUNT,
     SECURITY_TACTICAL_TICKS,
     SECURITY_TARGET_FEATURES,
     SECURITY_TARGET_KINDS,
+    SUPPRESSOR_MAX_RANGE,
+    SUPPRESSOR_MIN_RANGE,
 )
 from ghostline.generation import tile_center, world_to_tile
 from ghostline.policies import FairScriptedPolicy
 from ghostline.simulation import norm, unit
-from ghostline.simulation_v3 import GhostlineSimulationV3
+from ghostline.simulation_v2 import GhostlineSimulationV2
 from ghostline.types import Guard, GuardMode, Tile
-from ghostline.types_v3 import GuardRole, RadioMessage, RunnerActionV3, SecurityIntent, SecurityOrder
+from ghostline.types_v2 import GuardRole, RadioMessage, RunnerActionV2, SecurityIntent, SecurityOrder
 
-RunnerController = Callable[[GhostlineSimulationV3], int]
+RunnerController = Callable[[GhostlineSimulationV2], int]
 
 
 class TargetKind(IntEnum):
@@ -46,11 +49,26 @@ class TargetKind(IntEnum):
     DOOR = 5
     FLANK_LEFT = 6
     FLANK_RIGHT = 7
+    ESCAPE_ROUTE = 8
 
 
 assert len(TargetKind) == SECURITY_TARGET_KINDS
+assert len(SecurityIntent) == SECURITY_INTENT_COUNT
 TARGET_FEATURES = SECURITY_TARGET_FEATURES
 CENTRAL_STATE_SIZE = SECURITY_CENTRAL_STATE_SIZE
+SECURITY_REWARD_GAMMA = 0.999
+SECURITY_FORMATION_PENALTY_CAP = 0.04
+SECURITY_AGENT_SHAPING_CAP = 0.25
+SECURITY_REWARD_COMPONENT_BOUNDS: dict[str, tuple[float, float]] = {
+    "damage": (0.0, 15.0),
+    "contact_acquisition": (0.0, 0.30),
+    "runner_data": (-2.0, 0.0),
+    "radio_assist": (0.0, 0.02),
+    "invalid_action": (-0.10, 0.0),
+    "formation": (-SECURITY_FORMATION_PENALTY_CAP, 0.0),
+    "potential": (-1.0, 1.0),
+    "terminal": (-20.0, 20.0),
+}
 
 
 def _capped_radio_credit(before: int, after: int, team_size: int) -> float:
@@ -63,7 +81,7 @@ def _capped_radio_credit(before: int, after: int, team_size: int) -> float:
 class GhostlineSecurityParallelEnv(ParallelEnv):
     """Simultaneous, partially observed operative-control benchmark."""
 
-    metadata = {"name": "GhostlineSecurityParallel-v0", "render_modes": ["human", "rgb_array"], "render_fps": 60}
+    metadata = {"name": "GhostlineSecurityParallel-v2", "render_modes": ["human", "rgb_array"], "render_fps": 60}
 
     def __init__(
         self,
@@ -72,10 +90,14 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         seed: int = 20_000_000,
         runner: RunnerController | None = None,
         render_mode: str | None = None,
+        reward_gamma: float = SECURITY_REWARD_GAMMA,
     ):
         self.tier = int(tier)
         self.initial_seed = int(seed)
         self.render_mode = render_mode
+        self.reward_gamma = float(reward_gamma)
+        if not 0.0 < self.reward_gamma <= 1.0:
+            raise ValueError("reward_gamma must be in (0, 1]")
         self.possible_agents = [f"guard_{index}" for index in range(5)]
         self.agent_name_mapping = {agent: index for index, agent in enumerate(self.possible_agents)}
         self._observation_space = spaces.Dict(
@@ -87,20 +109,28 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
                 "teammate_mask": spaces.Box(0, 1, shape=(MAX_TEAMMATES,), dtype=np.int8),
                 "targets": spaces.Box(-1.0, 1.0, shape=(MAX_SECURITY_TARGETS, TARGET_FEATURES), dtype=np.float32),
                 "target_mask": spaces.Box(0, 1, shape=(MAX_SECURITY_TARGETS,), dtype=np.int8),
+                "intent_target_mask": spaces.Box(
+                    0,
+                    1,
+                    shape=(len(SecurityIntent), MAX_SECURITY_TARGETS),
+                    dtype=np.int8,
+                ),
                 "radio": spaces.Box(-1.0, 1.0, shape=(MAX_RADIO_MESSAGES, 8), dtype=np.float32),
                 "radio_mask": spaces.Box(0, 1, shape=(MAX_RADIO_MESSAGES,), dtype=np.int8),
-                "intent_mask": spaces.Box(0, 1, shape=(8,), dtype=np.int8),
-                "message_mask": spaces.Box(0, 1, shape=(5,), dtype=np.int8),
+                "intent_mask": spaces.Box(0, 1, shape=(len(SecurityIntent),), dtype=np.int8),
+                "message_mask": spaces.Box(0, 1, shape=(len(RadioMessage),), dtype=np.int8),
                 "ability_mask": spaces.Box(0, 1, shape=(2,), dtype=np.int8),
             }
         )
-        self._action_space = spaces.MultiDiscrete([8, MAX_SECURITY_TARGETS, 5, 2])
+        self._action_space = spaces.MultiDiscrete(
+            [len(SecurityIntent), MAX_SECURITY_TARGETS, len(RadioMessage), 2]
+        )
         self.observation_spaces = {agent: self._observation_space for agent in self.possible_agents}
         self.action_spaces = {agent: self._action_space for agent in self.possible_agents}
         self.state_space = spaces.Box(-1.0, 1.0, shape=(CENTRAL_STATE_SIZE,), dtype=np.float32)
         self._scripted_runner = FairScriptedPolicy()
         self.runner = runner or self._scripted_runner.act
-        self.sim = GhostlineSimulationV3(seed=self.initial_seed, tier=self.tier, external_security=True)
+        self.sim = GhostlineSimulationV2(seed=self.initial_seed, tier=self.tier, external_security=True)
         self.agents: list[str] = []
         self._renderer = None
         self._target_cache: dict[int, list[np.ndarray]] = {}
@@ -112,6 +142,7 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         self._current_observations: dict[str, dict[str, np.ndarray]] = {}
         self._plane_signature: tuple[Any, ...] | None = None
         self._plane_cache: np.ndarray | None = None
+        self._credited_contact_guards: set[int] = set()
 
     def observation_space(self, agent: str):
         return self.observation_spaces[agent]
@@ -143,6 +174,7 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         self._last_agent_shaping = {}
         self._plane_signature = None
         self._plane_cache = None
+        self._credited_contact_guards.clear()
         observations = {agent: self._observation(agent) for agent in self.agents}
         self._current_observations = observations
         infos = {agent: self._info(agent) for agent in self.agents}
@@ -160,7 +192,6 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
     ]:
         active_agents = list(self.agents)
         before_damage = self.sim.damage_taken
-        before_detections = self.sim.detections
         before_data = self.sim.data
         before_radio = sum(state.radio_assists for state in self.sim.operative_states.values())
         before_potential = self._security_potential()
@@ -171,23 +202,36 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         for tick in range(SECURITY_TACTICAL_TICKS):
             if tick % 6 == 0:
                 self._last_runner_action = int(self.runner(self.sim))
-            self.sim.advance(RunnerActionV3.decode(self._last_runner_action), ticks=1)
+            self.sim.advance(RunnerActionV2.decode(self._last_runner_action), ticks=1)
             if self.sim.terminated or self.sim.truncated:
                 break
 
         terminal = bool(self.sim.terminated or self.sim.truncated)
         after_potential = 0.0 if terminal else self._security_potential()
         after_radio = sum(state.radio_assists for state in self.sim.operative_states.values())
-        reward_components = {
-            "damage": 5.0 * max(0, self.sim.damage_taken - before_damage),
-            "detection": 0.08 * max(0, self.sim.detections - before_detections),
-            "runner_data": -0.50 * max(0, self.sim.data - before_data),
-            "survival": 0.01,
+        contact_guards = {
+            guard.guard_id
+            for guard in self.sim.level.guards
+            if guard.awareness >= 1.0 or guard.mode == GuardMode.CHASE
+        }
+        new_contacts = contact_guards - self._credited_contact_guards
+        self._credited_contact_guards.update(contact_guards)
+        raw_components = {
+            "damage": 5.0 * min(3, max(0, self.sim.damage_taken - before_damage)),
+            # One credit per operative and episode. Reissuing HOLD used to
+            # demote and immediately re-trigger CHASE, allowing an unbounded
+            # detection bonus without producing any new information.
+            "contact_acquisition": 0.06 * len(new_contacts),
+            "runner_data": -0.50 * min(4, max(0, self.sim.data - before_data)),
             "radio_assist": _capped_radio_credit(before_radio, after_radio, len(active_agents)),
             "invalid_action": -0.02 * invalid,
             "formation": -self._formation_penalty(),
-            "potential": 0.995 * after_potential - before_potential,
+            "potential": self.reward_gamma * after_potential - before_potential,
             "terminal": -20.0 if self.sim.extracted else 20.0 if terminal else 0.0,
+        }
+        reward_components = {
+            name: self._bounded_reward_component(name, value)
+            for name, value in raw_components.items()
         }
         # Discount-matched potential shaping supplies pursuit/containment signal
         # without changing the optimal terminal objective.
@@ -208,7 +252,13 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
             guard_id = self.agent_name_mapping[agent]
             before_value = before_agent_potentials.get(guard_id, 0.0)
             after_value = after_agent_potentials.get(guard_id, 0.0)
-            shaping = 0.995 * after_value - before_value
+            shaping = float(
+                np.clip(
+                    self.reward_gamma * after_value - before_value,
+                    -SECURITY_AGENT_SHAPING_CAP,
+                    SECURITY_AGENT_SHAPING_CAP,
+                )
+            )
             self._last_agent_shaping[agent] = float(shaping)
             rewards[agent] = float(reward + shaping)
 
@@ -228,65 +278,89 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         self._current_observations = observations
         return observations, rewards, terminations, truncations, infos
 
-    def _runner_goal(self) -> np.ndarray:
-        """Where the runner is actually trying to reach right now."""
-
-        if self.sim.quota_met:
-            return self.sim.level.extraction
-        terminal = self.sim.objective_terminal()
-        return terminal.position if terminal is not None else self.sim.level.extraction
-
     def _interception_score(self, guard: Guard) -> float:
-        """How well this operative cuts the runner off, in [0, 1].
+        """Geodesic route coverage, not Euclidean proximity through walls."""
 
-        Raw proximity was the wrong objective.  A guard moves at 95-99% of the
-        runner's speed, so it can never win a tail chase; rewarding closeness
-        trained exactly the losing behaviour.  What actually converts sight into
-        contact is standing between the runner and where it is going, so this
-        scores progress along the runner's own route instead of distance to it.
-        """
+        cutoffs = self.sim.escape_route_cutoffs(self.sim.player, limit=4)
+        if not cutoffs:
+            return 0.0
+        scores = [self._route_score(guard, cutoff) for cutoff in cutoffs]
+        return max(scores, default=0.0)
 
-        goal = self._runner_goal()
-        runner_to_goal = goal - self.sim.player
-        route_length = float(norm(runner_to_goal))
-        if route_length < 1.0:
-            return 1.0
-        direction = runner_to_goal / route_length
-        guard_offset = guard.position - self.sim.player
-        # Distance travelled along the runner's route, clamped to the segment.
-        along = float(np.dot(guard_offset, direction))
-        lateral = float(norm(guard_offset - direction * along))
-        if along <= 0.0:
-            return 0.0  # behind the runner: a pure tail chase, worth nothing
-        ahead = min(1.0, along / route_length)
-        # Being far off the route line is worth little even when ahead.
-        corridor = 1.0 / (1.0 + (lateral / (TILE_SIZE * 3.0)) ** 2)
-        return float(np.clip(ahead * corridor, 0.0, 1.0))
+    def _route_score(self, guard: Guard, cutoff: np.ndarray) -> float:
+        runner_eta = self._navigation_distance(self.sim.player, cutoff) / 230.0
+        guard_eta = self._navigation_distance(guard.position, cutoff) / 126.0
+        # A smooth arrival-race score preserves differences between operatives
+        # that are all currently late; a hard zero clip recreated lazy-agent
+        # symmetry at the beginning of difficult contracts.
+        margin = float(np.clip((runner_eta - guard_eta) / 2.0, -12.0, 12.0))
+        return float(1.0 / (1.0 + math.exp(-margin)))
+
+    def _team_route_coverage(self) -> float:
+        """Average best coverage over distinct public escape cutoffs."""
+
+        cutoffs = self.sim.escape_route_cutoffs(self.sim.player, limit=4)
+        if not cutoffs or not self.sim.level.guards:
+            return 0.0
+        covered = [
+            max(self._route_score(guard, cutoff) for guard in self.sim.level.guards)
+            for cutoff in cutoffs
+        ]
+        return float(np.mean(covered))
+
+    def _navigation_distance(self, start: np.ndarray, target: np.ndarray) -> float:
+        """Read the simulation's cached navigation metric in world units."""
+
+        if self.sim._segment_navigable(start, target, radius=7.0):
+            return float(norm(target - start))
+        target_tile = world_to_tile(target)
+        self.sim._next_path_point(start, target)
+        distance_map = self.sim._nav_maps.get(target_tile)
+        start_tile = world_to_tile(start)
+        if distance_map is not None:
+            distance = int(distance_map[start_tile[1], start_tile[0]])
+            if distance >= 0:
+                return float(distance * TILE_SIZE)
+        return float(norm(target - start))
 
     def _security_potential(self) -> float:
-        """Team potential.  Containment and pressure, not proximity."""
+        """Bounded team potential for containment rather than tail chasing."""
 
-        interception = max((self._interception_score(guard) for guard in self.sim.level.guards), default=0.0)
+        interception = self._team_route_coverage()
         awareness = max((guard.awareness for guard in self.sim.level.guards), default=0.0)
         partial_link = self.sim.active_hack_progress
         mission_progress = min(1.0, (self.sim.data + partial_link) / max(1.0, self.sim.level.quota))
-        # ``damage_taken`` is deliberately absent: it is already paid directly by
-        # the damage component, and a monotone counter inside a potential never
-        # telescopes back to its starting value.
-        return (
-            0.90 * interception
-            + 0.35 * awareness
-            + 0.25 * self.sim.trace / 100.0
-            - 2.00 * mission_progress
+        return float(
+            np.clip(
+                0.25 * interception
+                + 0.10 * awareness
+                + 0.05 * self.sim.trace / 100.0
+                - 0.50 * mission_progress,
+                -0.50,
+                0.40,
+            )
         )
 
     def _agent_potentials(self) -> dict[int, float]:
-        """Per-operative potential used for credit assignment."""
+        """Small bounded per-operative potential used for credit assignment."""
 
         return {
-            guard.guard_id: 0.60 * self._interception_score(guard) + 0.30 * guard.awareness
+            guard.guard_id: float(
+                np.clip(
+                    0.15 * self._interception_score(guard) + 0.10 * guard.awareness,
+                    0.0,
+                    SECURITY_AGENT_SHAPING_CAP,
+                )
+            )
             for guard in self.sim.level.guards
         }
+
+    @staticmethod
+    def _bounded_reward_component(name: str, value: float) -> float:
+        """Apply the documented per-decision ledger budget."""
+
+        lower, upper = SECURITY_REWARD_COMPONENT_BOUNDS[name]
+        return float(np.clip(float(value), lower, upper))
 
     def orders_from_actions(
         self,
@@ -305,19 +379,38 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
             if raw.shape != (4,):
                 raw = np.zeros(4, dtype=np.int64)
                 invalid += 1
-            intent_value = int(np.clip(raw[0], 0, 7))
+            intent_value = int(np.clip(raw[0], 0, len(SecurityIntent) - 1))
             target_value = int(np.clip(raw[1], 0, MAX_SECURITY_TARGETS - 1))
-            message_value = int(np.clip(raw[2], 0, 4))
+            message_value = int(np.clip(raw[2], 0, len(RadioMessage) - 1))
             ability_value = int(np.clip(raw[3], 0, 1))
             if (
                 observation["intent_mask"][intent_value] == 0
                 or observation["target_mask"][target_value] == 0
+                or observation["intent_target_mask"][intent_value, target_value] == 0
                 or observation["message_mask"][message_value] == 0
                 or observation["ability_mask"][ability_value] == 0
             ):
                 invalid += 1
                 intent_value, message_value, ability_value = 0, 0, 0
                 target_value = int(np.flatnonzero(observation["target_mask"])[0])
+            else:
+                target_kind = TargetKind(
+                    int(np.argmax(observation["targets"][target_value, 3:]))
+                )
+                compatible_kinds: tuple[TargetKind, ...] | None = None
+                if intent_value == int(SecurityIntent.PINCER):
+                    compatible_kinds = (TargetKind.ESCAPE_ROUTE,)
+                elif intent_value == int(SecurityIntent.SEAL):
+                    compatible_kinds = (TargetKind.DOOR, TargetKind.ESCAPE_ROUTE)
+                if compatible_kinds is not None and target_kind not in compatible_kinds:
+                    # External callers that ignore the conditional mask receive
+                    # one deterministic safe fallback. Never silently coerce
+                    # the sampled target into another transition.
+                    intent_value = int(SecurityIntent.PATROL)
+                    target_value = int(np.flatnonzero(observation["target_mask"])[0])
+                    message_value = int(RadioMessage.NONE)
+                    ability_value = 0
+                    invalid += 1
             targets = self._target_cache[guard_id]
             orders[guard_id] = SecurityOrder(
                 SecurityIntent(intent_value),
@@ -338,22 +431,61 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         targets, target_mask, positions = self._targets(guard, contact, confidence)
         self._target_cache[guard.guard_id] = positions
         radio, radio_mask = self._radio(guard)
-        intent_mask = np.ones(8, dtype=np.int8)
+        intent_mask = np.ones(len(SecurityIntent), dtype=np.int8)
         intent_mask[int(SecurityIntent.PURSUE)] = int(runner_visible)
         intent_mask[int(SecurityIntent.INTERCEPT)] = int(bool(self.sim.security_doors))
         intent_mask[int(SecurityIntent.FLANK_LEFT)] = int(confidence > 0.0)
         intent_mask[int(SecurityIntent.FLANK_RIGHT)] = int(confidence > 0.0)
-        message_mask = np.ones(5, dtype=np.int8)
+        escape_route_available = bool(np.any(target_mask[8:]))
+        intent_mask[int(SecurityIntent.PINCER)] = int(
+            confidence > 0.0
+            and len(self.sim.level.guards) >= 2
+            and escape_route_available
+        )
+        intent_mask[int(SecurityIntent.SEAL)] = int(
+            confidence > 0.0
+            and bool(self.sim.security_doors)
+            and self.sim.security_door_cooldown <= 0.0
+            and (bool(target_mask[5]) or escape_route_available)
+        )
+        # HOLD currently maps to the base suspicious state. Once contact is
+        # fully acquired it would demote CHASE and manufacture another
+        # detection on the next tick, so it is not a legal semantic order in
+        # that state. Suppressors can still fire while pursuing.
+        intent_mask[int(SecurityIntent.HOLD)] = int(
+            guard.awareness < 1.0 and guard.mode != GuardMode.CHASE
+        )
+        message_mask = np.ones(len(RadioMessage), dtype=np.int8)
         if guard.radio_jammed_for > 0.0:
             message_mask[1:] = 0
         state = self.sim.operative_states[guard.guard_id]
         distance = norm(self.sim.player - guard.position)
-        fire_legal = (
-            state.role == GuardRole.SUPPRESSOR
-            and state.weapon_cooldown <= 0.0
-            and runner_visible
-            and 96.0 <= distance <= 240.0
+        if state.role == GuardRole.SUPPRESSOR:
+            ability_legal = (
+                state.weapon_cooldown <= 0.0
+                and runner_visible
+                and SUPPRESSOR_MIN_RANGE <= distance <= SUPPRESSOR_MAX_RANGE
+            )
+        else:
+            ability_legal = self.sim.sensor_charges.get(guard.guard_id, 0) > 0
+        intent_target_mask = np.repeat(
+            target_mask[None, :],
+            len(SecurityIntent),
+            axis=0,
+        ).astype(np.int8)
+        target_kinds = np.argmax(targets[:, 3:], axis=-1)
+        intent_target_mask[int(SecurityIntent.PINCER)] &= (
+            target_kinds == int(TargetKind.ESCAPE_ROUTE)
         )
+        intent_target_mask[int(SecurityIntent.SEAL)] &= np.isin(
+            target_kinds,
+            (int(TargetKind.DOOR), int(TargetKind.ESCAPE_ROUTE)),
+        )
+        # Disabled intents retain one numeric fallback for padded/batched
+        # categorical stability; intent_mask prevents them from being sampled.
+        for intent_index in range(len(SecurityIntent)):
+            if not np.any(intent_target_mask[intent_index]):
+                intent_target_mask[intent_index, int(np.flatnonzero(target_mask)[0])] = 1
         return {
             "ego": self._ego(guard),
             "local_grid": self._local_grid(guard, runner if confidence > 0.0 else None),
@@ -362,11 +494,12 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
             "teammate_mask": teammate_mask,
             "targets": targets,
             "target_mask": target_mask,
+            "intent_target_mask": intent_target_mask,
             "radio": radio,
             "radio_mask": radio_mask,
             "intent_mask": intent_mask,
             "message_mask": message_mask,
-            "ability_mask": np.asarray((1, int(fire_legal)), dtype=np.int8),
+            "ability_mask": np.asarray((1, int(ability_legal)), dtype=np.int8),
         }
 
     def _ego(self, guard: Guard) -> np.ndarray:
@@ -558,14 +691,19 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
                     float(state.role) - 1.0,
                     other.awareness * 2.0 - 1.0,
                     min(1.0, other.radio_jammed_for / 5.0) * 2.0 - 1.0,
-                    float(state.current_order.intent) / 7.0 * 2.0 - 1.0,
+                    float(state.current_order.intent) / max(1, len(SecurityIntent) - 1) * 2.0 - 1.0,
                 ],
                 dtype=np.float32,
             )
             mask[index] = 1
         return result, mask
 
-    def _targets(self, guard: Guard, contact: np.ndarray, confidence: float) -> tuple[np.ndarray, np.ndarray, list[np.ndarray]]:
+    def _targets(
+        self,
+        guard: Guard,
+        contact: np.ndarray,
+        confidence: float,
+    ) -> tuple[np.ndarray, np.ndarray, list[np.ndarray]]:
         # One kind per semantic slot.  The extraction relay and the nearest
         # security door previously shared kind 4, so the policy could not tell
         # an exit from a chokepoint even though INTERCEPT legality depends on
@@ -593,6 +731,14 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         perpendicular = np.asarray((-offset[1], offset[0]), dtype=np.float32) * TILE_SIZE * 2.0
         candidates.append(((contact + perpendicular).astype(np.float32), TargetKind.FLANK_LEFT, confidence > 0.0))
         candidates.append(((contact - perpendicular).astype(np.float32), TargetKind.FLANK_RIGHT, confidence > 0.0))
+        for cutoff in self.sim.escape_route_cutoffs(contact, limit=2):
+            candidates.append(
+                (
+                    cutoff.astype(np.float32),
+                    TargetKind.ESCAPE_ROUTE,
+                    confidence > 0.0,
+                )
+            )
 
         result = np.zeros((MAX_SECURITY_TARGETS, TARGET_FEATURES), dtype=np.float32)
         mask = np.zeros(MAX_SECURITY_TARGETS, dtype=np.int8)
@@ -640,14 +786,21 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         return result, mask
 
     def _formation_penalty(self) -> float:
-        penalty = 0.0
+        violations: list[float] = []
         guards = self.sim.level.guards
         for index, first in enumerate(guards):
             for second in guards[index + 1 :]:
                 distance = norm(first.position - second.position)
                 if distance < 30.0:
-                    penalty += (30.0 - distance) / 300.0
-        return penalty
+                    violations.append(float((30.0 - distance) / 30.0))
+        if not violations:
+            return 0.0
+        return float(
+            min(
+                SECURITY_FORMATION_PENALTY_CAP,
+                SECURITY_FORMATION_PENALTY_CAP * float(np.mean(violations)),
+            )
+        )
 
     def state(self) -> np.ndarray:
         # Remaining time, alert tier, and live link progress are scoring inputs:
@@ -687,7 +840,7 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
                     float(guard.mode) / 5.0 * 2.0 - 1.0,
                     guard.awareness * 2.0 - 1.0,
                     float(state.role) - 1.0,
-                    float(state.current_order.intent) / 7.0 * 2.0 - 1.0,
+                    float(state.current_order.intent) / max(1, len(SecurityIntent) - 1) * 2.0 - 1.0,
                 ]
             )
         for door_id in range(3):
@@ -702,6 +855,21 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
                         float(door.locked) * 2.0 - 1.0,
                     ]
                 )
+        # Use the former padding budget for topology-aware critic context.
+        # These public doorway cutoffs make geodesic route-coverage shaping
+        # predictable without exposing them to decentralized actors.
+        cutoffs = self.sim.escape_route_cutoffs(self.sim.player, limit=3)
+        for cutoff_index in range(3):
+            if cutoff_index >= len(cutoffs):
+                values.extend([0.0, 0.0])
+            else:
+                cutoff = cutoffs[cutoff_index]
+                values.extend(
+                    [
+                        cutoff[0] / self.sim.level.world_width * 2.0 - 1.0,
+                        cutoff[1] / self.sim.level.world_height * 2.0 - 1.0,
+                    ]
+                )
         # Pad first so the presence mask is always the trailing block.
         values.extend([0.0] * max(0, CENTRAL_STATE_SIZE - len(presence) - len(values)))
         values = values[: CENTRAL_STATE_SIZE - len(presence)]
@@ -712,7 +880,7 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         guard = self._guard(agent)
         state = self.sim.operative_states[guard.guard_id]
         return {
-            "contract": "GhostlineSecurityParallel-v0",
+            "contract": "GhostlineSecurityParallel-v2",
             "tier": self.tier,
             "seed": self.sim.seed,
             "guard_id": guard.guard_id,
