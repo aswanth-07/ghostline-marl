@@ -41,3 +41,5 @@ immutable.
   coordination, credit assignment, and rejected first-campaign alternatives.
 - `improvement-proposals.md`: resolved readiness audit and remaining empirical
   gates.
+- `co-training-plan.md`: proposed simultaneous runner/security campaign,
+  credit-assignment horizons, and measured host throughput.
