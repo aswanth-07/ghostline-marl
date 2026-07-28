@@ -72,8 +72,8 @@ The 2026-07-27 chrome redesign is under `artifacts/qa/ui-redesign/`. Its 20-scen
 
 The 2026-07-26 interface-defect pass is under `artifacts/qa/ui-fixes/`. Its 20-scene matrix passes the native-text gate at both release sizes and measures 54.47 FPS at 1280x720 and 49.53 FPS at 1920x1080 in the conservative hidden-window compositor benchmark. That is a machine baseline, not a regression: the same benchmark on the immediately preceding revision of this workstation measured 56.89 and 49.57 FPS, so the gap against the 2026-07-16 figures below belongs to the measurement machine. The harness scenes were also resynchronized with the live menus; they had drifted into stale duplicated copy, which is why the tracked screenshots never exposed the Field Manual clipping the release build actually had.
 
-The Codex follow-up is under `artifacts/qa/codex-review-final/` and
-`artifacts/qa/codex-review-final-adaptive/`. It fixes precise desktop pacing,
+The 2026-07-26 review follow-up is under `artifacts/qa/review-final/` and
+`artifacts/qa/review-final-adaptive/`. It fixes precise desktop pacing,
 reuses native glyph surfaces, and scales directly into native 16:9 display
 surfaces. The same conservative full render/present benchmark now measures
 61.87/61.44 FPS for classic 720p/1080p and 60.56/61.21 FPS for adaptive

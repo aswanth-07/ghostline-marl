@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -39,6 +40,16 @@ RUNTIME_ASSET_NAMES = (
     "ghostline-character-security-atlas-v1.png",
     "ghostline-diagonal-locomotion-v2.png",
 )
+
+
+def _script_module(name: str, filename: str):
+    """Import a `scripts/` helper so tests assert against its real constants."""
+
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_bundled_onnx_policy_clears_every_disclosed_watch_agent_seed() -> None:
@@ -432,8 +443,15 @@ def test_public_cli_and_extras_match_release_contract() -> None:
     assert "recursive-include benchmarks" in source_manifest
     assert "recursive-include scripts *.py" in source_manifest
     assert "recursive-include web *" in source_manifest
-    assert "recursive-include wiki *.md" in source_manifest
     assert "recursive-include tests *.py" in source_manifest
+    # Documentation is enumerated rather than globbed so a directory-wide
+    # pattern cannot publish whatever Markdown sits in wiki/ at build time.
+    assert "recursive-include wiki" not in source_manifest
+    audit = _script_module("ghostline_verify_source_archive", "verify_source_archive.py")
+    assert audit.DOCUMENTATION_ALLOWED
+    for page in sorted(audit.DOCUMENTATION_ALLOWED):
+        assert f"include {page}" in source_manifest
+        assert (ROOT / page).is_file()
     assert "exclude tests/test_cli.py" in source_manifest
     assert "exclude tests/test_env.py" in source_manifest
     assert "exclude tests/test_training.py" in source_manifest

@@ -41,4 +41,3 @@ immutable.
   coordination, credit assignment, and rejected first-campaign alternatives.
 - `improvement-proposals.md`: resolved readiness audit and remaining empirical
   gates.
-- `log.md`: newest-first project memory and verified results.

@@ -281,6 +281,31 @@ The current pre-migration `models/ghostline-security.pt` is invalid for v2.
 It may remain as historical evidence, but training, launcher selection, and
 evaluation must reject it until replaced by a current-fingerprint checkpoint.
 
+### What a finite smoke does not cover
+
+The runner and security smokes prove that collection, loss, checkpointing, and
+resume run and stay finite. They do not exercise learning dynamics, and the
+preflight list must not be read as if they did. A smoke sized to a few hundred
+decisions completes zero episodes, so no terminal reward ever reaches a value
+target, and its explained variance describes only in-episode shaping.
+
+Two consequences shape the first long campaign:
+
+- Value targets grow by more than an order of magnitude the first time the
+  runner extracts. Before any success, returns are order 1 and the critic fits
+  them well; a successful extraction is worth `+20` on its own. Value-loss
+  spikes and explained-variance collapses on the updates where episodes end are
+  expected in the pre-success regime and are not by themselves evidence of a
+  broken critic.
+- `value_clip_ratio` is an absolute clamp on the change in predicted value, not
+  a fraction of the return range, and the runner learner does not scale its
+  returns. The security learner does scale returns, so the two learners treat
+  the same hyperparameter differently. Measured at the current order-1 return
+  scale this costs nothing: an identical 45-update run at `0.2` and at `0.99`
+  produced mean terminal-batch value loss `0.9174` and `0.9365`, which is no
+  improvement. Revisit it when returns actually reach extraction scale, and
+  decide it deliberately rather than inheriting the default.
+
 ## Final evaluation
 
 V2 runner acceptance keeps the published standard:

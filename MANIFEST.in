@@ -3,7 +3,6 @@
 # project documentation, release automation, web sources, and benchmark
 # evidence.  setup.py still copies only manifest-approved runtime assets into
 # the importable wheel.
-include AGENTS.md
 include LICENSE
 include THIRD_PARTY_NOTICES.md
 include README.md
@@ -16,7 +15,18 @@ recursive-include assets *
 recursive-include benchmarks *.csv *.json *.md
 recursive-include scripts *.py
 recursive-include web *
-recursive-include wiki *.md
+
+# The wiki is listed page by page on purpose.  A directory-wide pattern would
+# package whatever Markdown happens to sit in wiki/ at build time, including
+# local working notes that are not part of the published project.
+include wiki/index.md
+include wiki/implementation.md
+include wiki/training.md
+include wiki/setup.md
+include wiki/assets.md
+include wiki/web-deployment.md
+include wiki/improvement-proposals.md
+include wiki/rl-architecture-proposals.md
 
 # Include the runnable Ghostline suite, but not the three frozen legacy
 # prototype suites whose neon_arena package is intentionally absent below.

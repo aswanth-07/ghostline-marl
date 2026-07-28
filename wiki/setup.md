@@ -191,6 +191,14 @@ renders a headless frame, and exercises the v2 tactical fallback. Player wheels
 deliberately omit the retired `models/ghostline-security.pt`; the source archive
 retains it only as immutable historical evidence.
 
+The archive audit enumerates the documentation it expects and fails closed on
+any other page under `wiki/`, so the manifest lists each published page by name
+instead of globbing the directory. A directory-wide pattern packages whatever
+Markdown happens to sit on disk at build time, which is not the same set as the
+pages the project publishes. Delete `src/ghostline.egg-info/` before rebuilding
+after a manifest change: setuptools reuses the cached `SOURCES.txt` and would
+otherwise ship the previous file list.
+
 ## Static web build
 
 ```powershell

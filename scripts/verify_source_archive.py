@@ -11,7 +11,6 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = {
-    "AGENTS.md",
     "LICENSE",
     "MANIFEST.in",
     "README.md",
@@ -54,6 +53,20 @@ FORBIDDEN = {
     "tests/test_training.py",
 }
 FORBIDDEN_PREFIXES = ("src/neon_arena/",)
+# The archive ships exactly these documentation pages.  The audit fails closed
+# on anything else under wiki/, so a local working file that happens to sit in
+# that directory at build time cannot be published by accident.
+DOCUMENTATION_PREFIX = "wiki/"
+DOCUMENTATION_ALLOWED = {
+    "wiki/index.md",
+    "wiki/implementation.md",
+    "wiki/training.md",
+    "wiki/setup.md",
+    "wiki/assets.md",
+    "wiki/web-deployment.md",
+    "wiki/improvement-proposals.md",
+    "wiki/rl-architecture-proposals.md",
+}
 RELEASE_REQUIRED = {
     "benchmarks/neural/champion-final-8m-500.json",
     "benchmarks/neural/champion-final-8m-500.csv",
@@ -99,6 +112,20 @@ def verify(path: Path, *, release: bool = False) -> dict[str, object]:
     forbidden.extend(sorted(name for name in members if name.endswith((".pyc", ".pyo"))))
     if forbidden:
         raise RuntimeError("source archive contains excluded legacy/generated files: " + ", ".join(forbidden))
+    unlisted_documentation = sorted(
+        name
+        for name in members
+        if name.startswith(DOCUMENTATION_PREFIX) and name not in DOCUMENTATION_ALLOWED
+    )
+    if unlisted_documentation:
+        raise RuntimeError(
+            "source archive contains unlisted documentation: " + ", ".join(unlisted_documentation)
+        )
+    missing_documentation = sorted(DOCUMENTATION_ALLOWED - members)
+    if missing_documentation:
+        raise RuntimeError(
+            "source archive is missing documentation: " + ", ".join(missing_documentation)
+        )
     return {
         "status": "passed",
         "archive": str(path),
@@ -107,6 +134,8 @@ def verify(path: Path, *, release: bool = False) -> dict[str, object]:
         "release_evidence_required": release,
         "legacy_test_modules_excluded": sorted(FORBIDDEN),
         "legacy_package_excluded": True,
+        "documentation_pages": len(DOCUMENTATION_ALLOWED),
+        "documentation_allowlist_enforced": True,
     }
 
 
