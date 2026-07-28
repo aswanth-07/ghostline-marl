@@ -94,10 +94,12 @@ class RunnerPolicyV3(nn.Module):
         self.ego_encoder = self._mlp(27, 96, 64)
         self.objective_encoder = self._mlp(8, 48, 64)
         self.ray_encoder = self._mlp(24 * 4, 96, 64)
+        # Runner field systems: charges, reach, transit, darkness.
+        self.field_encoder = self._mlp(8, 48, 48)
         self.target_encoder = MaskedSetEncoderV3(10, 64)
         self.entity_encoder = MaskedSetEncoderV3(16, 64)
 
-        fused = 128 + 64 + 64 + 64 + 64 + 64
+        fused = 128 + 64 + 64 + 64 + 64 + 64 + 48
         self.fusion = nn.Sequential(
             orthogonal_(nn.Linear(fused, 384), np.sqrt(2)),
             nn.ELU(),
@@ -140,7 +142,8 @@ class RunnerPolicyV3(nn.Module):
         rays = self.ray_encoder(observation["rays"].float().flatten(-2, -1))
         targets = self.target_encoder(observation["targets"], observation["target_mask"])
         entities = self.entity_encoder(observation["entities"], observation["entity_mask"])
-        fused = self.fusion(torch.cat((local, ego, objective, rays, targets, entities), dim=-1))
+        field = self.field_encoder(observation["field"].float())
+        fused = self.fusion(torch.cat((local, ego, objective, rays, targets, entities, field), dim=-1))
         scale, shift = self.directive_film(observation["directive"].float()).chunk(2, dim=-1)
         # 1 + scale keeps the identity transform available at initialisation.
         return fused * (1.0 + scale) + shift

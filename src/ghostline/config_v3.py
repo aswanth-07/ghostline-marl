@@ -67,3 +67,47 @@ EXPOSURE_COST_PER_DECISION = 0.010
 DETECTION_COST = 0.06
 QUIET_DATA_BONUS = 0.35
 QUIET_TRACE_CEILING = 45.0
+
+# Vent network. Transit is deliberately slow and the runner is untargetable
+# while inside, so a vent is an escape from a sealed route rather than a free
+# teleport: entering in sight of an operative is a real tell.
+VENT_TRANSIT_SECONDS = 1.15
+VENT_PAIRS_PER_TIER = {1: 0, 2: 1, 3: 2, 4: 2, 5: 3, 6: 3}
+VENT_MIN_PAIR_DISTANCE_TILES = 8
+
+# Environmental hacking. Charges are shared across device kinds so taking a
+# camera down costs the same budget as forcing a sealed door open.
+HACK_RANGE = 46.0
+HACK_CHARGES_PER_TIER = {1: 0, 2: 1, 3: 2, 4: 2, 5: 3, 6: 3}
+HACK_COOLDOWN_SECONDS = 1.6
+HACK_CAMERA_DISABLE_SECONDS = 7.0
+HACK_DOOR_OVERRIDE_SECONDS = 6.0
+HACK_LIGHTS_SECONDS = 9.0
+# A darkened room shortens every guard sight cone inside it.
+HACK_LIGHTS_VISION_SCALE = 0.55
+HACK_DEVICES_PER_TIER = {1: 0, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}
+
+# Upgraded distraction. A lure holds attention at a point instead of emitting
+# one pulse, and a crouched throw is quieter but shorter.
+DECOY_LURE_SECONDS = 3.4
+DECOY_LURE_RADIUS = 168.0
+DECOY_CROUCH_THROW_SCALE = 0.62
+
+# Predictive chokepoints. Security seals ahead of the runner's route rather than
+# on top of it. Every guarantee from the reactive lock still applies: only
+# redundant room-graph edges are eligible, the door warns first, an occupied
+# door never closes, and the runner keeps a pulse and a hack override.
+CHOKEPOINT_LOOKAHEAD_TILES = 14.0
+CHOKEPOINT_MIN_RUNNER_DISTANCE = 72.0
+CHOKEPOINT_TEAM_COOLDOWN_SECONDS = 7.5
+
+# Coordinated pincers. Operatives take complementary approach arcs around the
+# contact so a strictly slower team can still close from multiple bearings.
+PINCER_ARC_RADIANS = 1.15
+PINCER_STANDOFF = 132.0
+
+# Non-lethal field tools. Sensors report a crossing; they never damage.
+FIELD_SENSOR_ARM_SECONDS = 1.0
+FIELD_SENSOR_LIFETIME_SECONDS = 26.0
+FIELD_SENSOR_RADIUS = 58.0
+FIELD_SENSOR_CHARGES = 1

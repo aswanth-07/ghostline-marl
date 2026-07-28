@@ -45,6 +45,11 @@ class SecurityIntent(IntEnum):
     FLANK_LEFT = 5
     FLANK_RIGHT = 6
     HOLD = 7
+    # Coordinated closure. PINCER assigns complementary approach arcs across the
+    # team so operatives converge from different bearings instead of stacking on
+    # one point, which a strictly slower pursuer needs in order to ever connect.
+    PINCER = 8
+    SEAL = 9
 
 
 class RadioMessage(IntEnum):
@@ -55,8 +60,13 @@ class RadioMessage(IntEnum):
     REGROUP = 4
 
 
-# 9 movement x dash x pulse x decoy x crouch.
-RUNNER_ACTION_COUNT_V3 = 144
+# 9 movement x dash x pulse x decoy x crouch x interact.
+#
+# ``interact`` is deliberately context-sensitive rather than one bit per verb.
+# Entering a vent and hacking a device are never both legal on the same tile, so
+# a single code keeps the action space at 288 instead of 576 and keeps the mask
+# doing the disambiguation the simulation already has to do anyway.
+RUNNER_ACTION_COUNT_V3 = 288
 
 
 @dataclass(frozen=True)
@@ -68,6 +78,7 @@ class RunnerActionV3:
     pulse: bool = False
     decoy: bool = False
     crouch: bool = False
+    interact: bool = False
 
     @classmethod
     def decode(cls, value: int) -> "RunnerActionV3":
@@ -78,6 +89,7 @@ class RunnerActionV3:
             pulse=bool((value // 18) % 2),
             decoy=bool((value // 36) % 2),
             crouch=bool((value // 72) % 2),
+            interact=bool((value // 144) % 2),
         )
 
     def encode(self) -> int:
@@ -87,6 +99,7 @@ class RunnerActionV3:
             + 18 * int(self.pulse)
             + 36 * int(self.decoy)
             + 72 * int(self.crouch)
+            + 144 * int(self.interact)
         )
 
 
@@ -104,6 +117,7 @@ class OperativeState:
     current_order: SecurityOrder = field(default_factory=SecurityOrder)
     heard_position: np.ndarray = field(default_factory=lambda: np.zeros(2, dtype=np.float32))
     heard_confidence: float = 0.0
+    lure_remaining: float = 0.0
     weapon_cooldown: float = 0.0
     aim_progress: float = 0.0
     aim_target: np.ndarray | None = None
@@ -146,3 +160,42 @@ class RadioTransmission:
     message: RadioMessage
     position: np.ndarray
     tick: int
+
+
+@dataclass
+class Vent:
+    """A maintenance duct the runner can use and operatives cannot.
+
+    Vents are the counterplay to a sealed chokepoint: they are visible to
+    everyone, so using one in sight is a real tell, but only the runner fits.
+    """
+
+    vent_id: int
+    tile: tuple[int, int]
+    exit_tile: tuple[int, int]
+    exit_position: np.ndarray
+
+
+@dataclass
+class HackableDevice:
+    """A facility system the runner can take over in the field."""
+
+    device_id: int
+    kind: str  # "camera" | "door" | "lights"
+    tile: tuple[int, int]
+    position: np.ndarray
+    target_id: int = -1
+    hacked_for: float = 0.0
+    cooldown: float = 0.0
+
+
+@dataclass
+class FieldSensor:
+    """A non-lethal operative deployable that reports a crossing."""
+
+    sensor_id: int
+    owner_id: int
+    position: np.ndarray
+    armed_in: float
+    lifetime: float
+    triggered: bool = False

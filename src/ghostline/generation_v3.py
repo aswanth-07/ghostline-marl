@@ -29,8 +29,15 @@ from __future__ import annotations
 import numpy as np
 
 from ghostline.config import TILE_SIZE
+from ghostline.config_v3 import (
+    HACK_DEVICES_PER_TIER,
+    VENT_MIN_PAIR_DISTANCE_TILES,
+    VENT_PAIRS_PER_TIER,
+)
 from ghostline.generation import LevelGenerator, flood_fill, world_to_tile
+from ghostline.generation import tile_center
 from ghostline.types import GeneratedLevel, Prop, Tile
+from ghostline.types_v3 import HackableDevice, Vent
 
 # Per-tier carving budget. Later tiers are larger, so they can absorb more
 # structure before the facility starts to feel like a maze.
@@ -71,6 +78,10 @@ class FacilityLayoutV3(LevelGenerator):
         # Variation is a presentation and tactics improvement, never a
         # correctness requirement: an unusually tight seed keeps its original
         # rectangular layout rather than failing to produce a level at all.
+        # The v3 attributes are still attached so consumers never branch on
+        # whether reshaping happened.
+        base.vents = []
+        base.hackable = []
         return base
 
     # -- geometry -----------------------------------------------------------
@@ -143,6 +154,10 @@ class FacilityLayoutV3(LevelGenerator):
         self._add_room_archetypes(level, rng, protected, blocked, start, required)
         self._add_interior_structure(level, rng, protected, blocked, start, required)
         self._add_decor(level, rng)
+        # Vents and hackable devices are placed last so they can only take
+        # tiles the structural passes left walkable.
+        level.vents = self._place_vents(level, rng, protected)
+        level.hackable = self._place_hackables(level, rng, protected)
         return level
 
     @staticmethod
@@ -379,6 +394,108 @@ class FacilityLayoutV3(LevelGenerator):
             level.props.append(Prop(kind, tile[0], tile[1], 1, 1, True))
             blocked.add(tile)
             protected.add(tile)
+
+    def _open_tiles(
+        self,
+        level: GeneratedLevel,
+        protected: set[tuple[int, int]],
+    ) -> list[tuple[int, int]]:
+        blocked = self._blocked_by_props(level)
+        return [
+            (x, y)
+            for y in range(1, level.grid.shape[0] - 1)
+            for x in range(1, level.grid.shape[1] - 1)
+            if level.grid[y, x] == Tile.FLOOR and (x, y) not in blocked and (x, y) not in protected
+        ]
+
+    def _place_vents(
+        self,
+        level: GeneratedLevel,
+        rng: np.random.Generator,
+        protected: set[tuple[int, int]],
+    ) -> list[Vent]:
+        """Pair up maintenance ducts across distant rooms.
+
+        Pairs are deliberately long-range: a vent is worth using because it
+        crosses the facility, which is what makes it an answer to a sealed
+        route rather than a shortcut around a corner.
+        """
+
+        wanted = VENT_PAIRS_PER_TIER.get(level.tier, 2)
+        if wanted <= 0:
+            return []
+        candidates = self._open_tiles(level, protected)
+        if len(candidates) < 4:
+            return []
+        rng.shuffle(candidates)
+        vents: list[Vent] = []
+        used: set[tuple[int, int]] = set()
+        for entry in candidates:
+            if len(vents) >= wanted * 2:
+                break
+            if entry in used:
+                continue
+            partner = next(
+                (
+                    other
+                    for other in candidates
+                    if other not in used
+                    and other != entry
+                    and abs(other[0] - entry[0]) + abs(other[1] - entry[1]) >= VENT_MIN_PAIR_DISTANCE_TILES
+                ),
+                None,
+            )
+            if partner is None:
+                continue
+            used.update({entry, partner})
+            vents.append(Vent(len(vents), entry, partner, tile_center(partner)))
+            vents.append(Vent(len(vents), partner, entry, tile_center(entry)))
+            level.props.append(Prop("vent_shaft", entry[0], entry[1], 1, 1, False))
+            level.props.append(Prop("vent_shaft", partner[0], partner[1], 1, 1, False))
+        return vents
+
+    def _place_hackables(
+        self,
+        level: GeneratedLevel,
+        rng: np.random.Generator,
+        protected: set[tuple[int, int]],
+    ) -> list[HackableDevice]:
+        """Wall panels wired to a camera, a door, or the room lights."""
+
+        wanted = HACK_DEVICES_PER_TIER.get(level.tier, 3)
+        if wanted <= 0:
+            return []
+        candidates = self._open_tiles(level, protected)
+        rng.shuffle(candidates)
+        devices: list[HackableDevice] = []
+        for tile in candidates:
+            if len(devices) >= wanted:
+                break
+            roll = rng.random()
+            if roll < 0.4 and level.cameras:
+                camera = level.cameras[int(rng.integers(0, len(level.cameras)))]
+                kind, target = "camera", int(camera.camera_id)
+            elif roll < 0.75 and level.doors:
+                kind, target = "door", int(rng.integers(0, len(level.doors)))
+            else:
+                # The panel darkens the room it is in. Wiring it to a random
+                # room made the hack unreadable: the player could not tell what
+                # they had just switched off.
+                room = next(
+                    (
+                        item
+                        for item in level.rooms
+                        if item.x <= tile[0] < item.x + item.width
+                        and item.y <= tile[1] < item.y + item.height
+                    ),
+                    None,
+                )
+                if room is None:
+                    continue
+                kind, target = "lights", int(room.room_id)
+            devices.append(HackableDevice(len(devices), kind, tile, tile_center(tile), target))
+            level.props.append(Prop("hack_panel", tile[0], tile[1], 1, 1, False))
+        return devices
 
     def _add_decor(self, level: GeneratedLevel, rng: np.random.Generator) -> None:
         """Add non-blocking flavour: floor markings, signage, cabling, vents.

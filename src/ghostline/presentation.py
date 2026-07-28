@@ -667,6 +667,7 @@ class GhostlineRenderer:
         self._draw_walls()
         self._draw_props()
         self._draw_objectives()
+        self._draw_v3_field_state()
         self._draw_stealth_state()
         self._draw_adaptive_mechanics()
         self._draw_security()
@@ -1073,6 +1074,9 @@ class GhostlineRenderer:
         if kind in ("pillar", "partition"):
             self._draw_v3_structure(kind, rect)
             return
+        if kind in ("vent_shaft", "hack_panel"):
+            self._draw_v3_field_prop(kind, rect)
+            return
         pygame.draw.rect(self.logical, (6, 10, 14), rect.move(3, 5), border_radius=2)
         if kind in ("desk", "meeting_table", "coffee_table", "lab_bench"):
             color = (83, 66, 61) if kind != "lab_bench" else (57, 84, 86)
@@ -1185,6 +1189,102 @@ class GhostlineRenderer:
             pygame.draw.rect(self.logical, (58, 66, 74), grate, 1)
             for offset in range(grate.y + 2, grate.bottom - 1, 3):
                 pygame.draw.line(self.logical, (44, 52, 60), (grate.x + 1, offset), (grate.right - 2, offset))
+
+    def _draw_v3_field_prop(self, kind: str, rect: pygame.Rect) -> None:
+        """Vent shafts and hackable panels.
+
+        Both are interactive, so they carry a shared visual grammar: a bright
+        inner element on a recessed housing, pulsing gently when the runner is
+        close enough to use them. Reduced Motion freezes the pulse.
+        """
+
+        pulse = 0.0 if self.reduced_motion else 0.5 + 0.5 * math.sin(self._time * 3.2)
+        if kind == "vent_shaft":
+            housing = rect.inflate(-4, -8)
+            pygame.draw.rect(self.logical, (18, 24, 30), housing)
+            pygame.draw.rect(self.logical, (74, 96, 108), housing, 1)
+            # Louvre slats read as a duct rather than a floor hatch.
+            for offset in range(housing.y + 2, housing.bottom - 1, 3):
+                pygame.draw.line(self.logical, (52, 70, 82), (housing.x + 2, offset), (housing.right - 3, offset))
+            glow = int(40 + 40 * pulse)
+            pygame.draw.rect(self.logical, (glow, glow + 30, glow + 46), housing, 1)
+            return
+        # Hack panel: a wall terminal with a live status light.
+        body = rect.inflate(-6, -10)
+        pygame.draw.rect(self.logical, (14, 20, 26), body)
+        pygame.draw.rect(self.logical, (86, 74, 120), body, 1)
+        screen = body.inflate(-4, -6)
+        pygame.draw.rect(self.logical, (30, 26, 52), screen)
+        for offset in range(screen.y + 1, screen.bottom - 1, 2):
+            pygame.draw.line(self.logical, (60, 52, 96), (screen.x + 1, offset), (screen.right - 2, offset))
+        light = (VIOLET[0], int(VIOLET[1] * (0.55 + 0.45 * pulse)), VIOLET[2])
+        pygame.draw.rect(self.logical, light, (body.right - 4, body.y + 2, 2, 2))
+
+    def _draw_v3_field_state(self) -> None:
+        """Live overlays for the new mechanics.
+
+        Every one of these is a mechanical state the player must be able to
+        read instantly: a sealed door, an armed sensor, a darkened room, a
+        usable vent or panel, and the runner's own vent transit.
+        """
+
+        # Deployed operative sensors.
+        for sensor in getattr(self.sim, "field_sensors", ()):  # non-lethal
+            sx, sy = self._world(sensor.position)
+            armed = sensor.armed_in <= 0.0
+            colour = RED if sensor.triggered else (AMBER if armed else MUTED)
+            pygame.draw.circle(self.logical, colour, (sx, sy), 3, 1)
+            pygame.draw.line(self.logical, colour, (sx - 5, sy), (sx - 3, sy))
+            pygame.draw.line(self.logical, colour, (sx + 3, sy), (sx + 5, sy))
+            if armed and not self.reduced_motion:
+                radius = int(6 + 4 * (0.5 + 0.5 * math.sin(self._time * 2.4)))
+                ring = pygame.Surface(LOGICAL_SIZE, pygame.SRCALPHA)
+                pygame.draw.circle(ring, (*colour, 40), (sx, sy), radius, 1)
+                self.logical.blit(ring, (0, 0))
+
+        # Interactable prompt on the nearest usable vent or panel.
+        if hasattr(self.sim, "can_interact") and self.sim.can_interact():
+            target = self.sim.nearest_vent()
+            position = None
+            label = "VENT"
+            if target is not None:
+                from ghostline.generation import tile_center
+
+                position = tile_center(target.tile)
+            else:
+                device = self.sim.nearest_hackable()
+                if device is not None:
+                    position = device.position
+                    label = f"HACK {device.kind.upper()}"
+            if position is not None:
+                sx, sy = self._world(position)
+                pygame.draw.circle(self.logical, CYAN, (sx, sy), 11, 1)
+                width = self.font_small.size(label)[0]
+                self._text(label, sx - width // 2, sy - 24, self.font_small, CYAN)
+
+        # Vent transit: the runner is committed and untargetable.
+        transit = float(getattr(self.sim, "vent_transit", 0.0))
+        if transit > 0.0:
+            sx, sy = self._world(self.sim.player)
+            overlay = pygame.Surface(LOGICAL_SIZE, pygame.SRCALPHA)
+            pygame.draw.circle(overlay, (*CYAN, 70), (sx, sy), 16, 2)
+            self.logical.blit(overlay, (0, 0))
+            self._text("IN DUCT", sx - self.font_small.size("IN DUCT")[0] // 2, sy - 30, self.font_small, CYAN)
+
+        # Darkened rooms read as a cool wash so the hack is visible at range.
+        darkened = getattr(self.sim, "darkened_rooms", {})
+        if darkened:
+            overlay = pygame.Surface(LOGICAL_SIZE, pygame.SRCALPHA)
+            for room in self.sim.level.rooms:
+                if int(room.room_id) not in darkened:
+                    continue
+                left, top = self._world((room.x * TILE_SIZE, room.y * TILE_SIZE))
+                pygame.draw.rect(
+                    overlay,
+                    (10, 18, 38, 96),
+                    (left, top, room.width * TILE_SIZE, room.height * TILE_SIZE),
+                )
+            self.logical.blit(overlay, (0, 0))
 
     def _draw_objectives(self) -> None:
         for terminal in self.sim.level.terminals:

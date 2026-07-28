@@ -17,6 +17,7 @@ DEFAULT_BINDINGS: dict[str, str] = {
     "pulse": "space",
     "decoy": "q",
     "crouch": "left ctrl",
+    "interact": "e",
     "restart": "r",
     "pause": "escape",
     "menu_up": "up",

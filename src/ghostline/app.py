@@ -58,6 +58,7 @@ CONTROL_ACTIONS = (
     ("pulse", "PULSE"),
     ("decoy", "NOISE DECOY"),
     ("crouch", "CROUCH / SNEAK"),
+    ("interact", "INTERACT / HACK"),
     ("restart", "RESTART"),
     ("pause", "PAUSE / MENU"),
     ("menu_up", "MENU UP"),
@@ -748,6 +749,7 @@ class GameApp:
                 pulse="pulse" in roles,
                 decoy="decoy" in roles,
                 crouch="crouch" in roles,
+                interact="interact" in roles,
             )
         return Action(move=move, dash="dash" in roles, pulse="pulse" in roles)
 
@@ -843,6 +845,7 @@ class GameApp:
                     bool(keys[self._key("pulse")]) or touch_action.pulse,
                     bool(keys[self._key("decoy")]) or bool(getattr(touch_action, "decoy", False)),
                     bool(keys[self._key("crouch")]) or bool(getattr(touch_action, "crouch", False)),
+                    bool(keys[self._key("interact")]) or bool(getattr(touch_action, "interact", False)),
                 )
             else:
                 action = Action(
@@ -1314,7 +1317,7 @@ class GameApp:
         name = name.strip().lower()
         bindings = self.settings["bindings"]
         previous = str(bindings[action])
-        gameplay_actions = {"move_up", "move_down", "move_left", "move_right", "dash", "pulse", "decoy", "crouch", "restart", "pause"}
+        gameplay_actions = {"move_up", "move_down", "move_left", "move_right", "dash", "pulse", "decoy", "crouch", "interact", "restart", "pause"}
         menu_actions = {"menu_up", "menu_down", "confirm", "back"}
         group = gameplay_actions if action in gameplay_actions else menu_actions
         conflict = next((other for other, current in bindings.items() if other in group and other != action and current == name), None)

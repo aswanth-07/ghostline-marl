@@ -20,9 +20,10 @@ from ghostline.config_v3 import (
     EXPOSURE_COST_PER_DECISION,
     QUIET_DATA_BONUS,
     QUIET_TRACE_CEILING,
+    VENT_TRANSIT_SECONDS,
 )
 from ghostline.env import GhostlineEnv, potential_progress_reward
-from ghostline.generation import world_to_tile
+from ghostline.generation import tile_center, world_to_tile
 from ghostline.simulation import angle_vector, norm
 from ghostline.simulation_v3 import GhostlineSimulationV3
 from ghostline.types_v3 import RUNNER_ACTION_COUNT_V3, ContractDirective, GuardRole, RunnerActionV3
@@ -50,6 +51,8 @@ class GhostlineEnvV3(GhostlineEnv):
                 "ego": spaces.Box(-1.0, 1.0, shape=(27,), dtype=np.float32),
                 "objective": spaces.Box(-1.0, 1.0, shape=(8,), dtype=np.float32),
                 "directive": spaces.Box(-1.0, 1.0, shape=(6,), dtype=np.float32),
+                # Runner field systems: charges, reach, transit, darkness.
+                "field": spaces.Box(-1.0, 1.0, shape=(8,), dtype=np.float32),
                 "local_grid": spaces.Box(0.0, 1.0, shape=(11, LOCAL_GRID_SIZE, LOCAL_GRID_SIZE), dtype=np.float32),
                 "targets": spaces.Box(-1.0, 1.0, shape=(5, 10), dtype=np.float32),
                 "target_mask": spaces.Box(0, 1, shape=(5,), dtype=np.int8),
@@ -184,17 +187,56 @@ class GhostlineEnvV3(GhostlineEnv):
     def directive_completed(self) -> bool:
         return self.sim.directive_completed
 
+    def _field_systems(self) -> np.ndarray:
+        """Eight values describing the runner's own field options.
+
+        Everything here is state the player can see on their HUD: how many
+        charges remain, whether something is in reach, and whether a transit or
+        a darkened room is currently active. No hidden security state leaks in.
+        """
+
+        sim = self.sim
+        vent = sim.nearest_vent()
+        device = sim.nearest_hackable()
+        vent_delta = np.zeros(2, dtype=np.float32)
+        if vent is None:
+            nearest = min(
+                sim.vents,
+                key=lambda item: norm(tile_center(item.tile) - sim.player),
+                default=None,
+            )
+            if nearest is not None:
+                vent_delta = (tile_center(nearest.tile) - sim.player) / PLAYER_PERCEPTION_DISTANCE
+        device_delta = np.zeros(2, dtype=np.float32)
+        if device is not None:
+            device_delta = (device.position - sim.player) / PLAYER_PERCEPTION_DISTANCE
+        values = np.asarray(
+            [
+                min(1.0, sim.hack_charges / 3.0) * 2.0 - 1.0,
+                float(bool(device is not None)) * 2.0 - 1.0,
+                float(bool(vent is not None)) * 2.0 - 1.0,
+                min(1.0, sim.vent_transit / max(1e-6, VENT_TRANSIT_SECONDS)) * 2.0 - 1.0,
+                float(bool(sim.darkened_rooms)) * 2.0 - 1.0,
+                float(np.clip(vent_delta[0] + device_delta[0], -1.0, 1.0)),
+                float(np.clip(vent_delta[1] + device_delta[1], -1.0, 1.0)),
+                min(1.0, len(sim.field_sensors) / 3.0) * 2.0 - 1.0,
+            ],
+            dtype=np.float32,
+        )
+        return np.clip(values, -1.0, 1.0)
+
     def _empty_rewards(self) -> dict[str, float]:
         result = super()._empty_rewards()
         # Env-v3 adds the directive term plus the stealth economy. Keeping
         # them declared here keeps exact component accounting intact.
-        for key in ("directive", "exposure", "detection", "stealth"):
+        for key in ("directive", "exposure", "detection", "stealth", "field"):
             result[key] = 0.0
         return result
 
     def _observation(self) -> dict[str, np.ndarray]:
         observation = super()._observation()
         observation["directive"] = self._directive()
+        observation["field"] = self._field_systems()
         return observation
 
     def _ego(self) -> np.ndarray:

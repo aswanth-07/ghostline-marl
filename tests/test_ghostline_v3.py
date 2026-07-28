@@ -42,18 +42,19 @@ from ghostline.types_v3 import (
 )
 
 
-def test_v3_action_contract_round_trips_all_144_semantic_combinations() -> None:
+def test_v3_action_contract_round_trips_all_288_semantic_combinations() -> None:
     from ghostline.types_v3 import RUNNER_ACTION_COUNT_V3
 
-    assert RUNNER_ACTION_COUNT_V3 == 144
+    assert RUNNER_ACTION_COUNT_V3 == 288
     values = range(RUNNER_ACTION_COUNT_V3)
     assert {RunnerActionV3.decode(value).encode() for value in values} == set(values)
     assert RunnerActionV3.decode(71) == RunnerActionV3(move=8, dash=True, pulse=True, decoy=True)
-    assert RunnerActionV3.decode(143) == RunnerActionV3(
-        move=8, dash=True, pulse=True, decoy=True, crouch=True
+    assert RunnerActionV3.decode(287) == RunnerActionV3(
+        move=8, dash=True, pulse=True, decoy=True, crouch=True, interact=True
     )
-    # The crouch bit is additive: every original code keeps its meaning.
+    # Both new bits are additive: every original code keeps its meaning.
     assert all(not RunnerActionV3.decode(value).crouch for value in range(72))
+    assert all(not RunnerActionV3.decode(value).interact for value in range(144))
 
 
 def test_adaptive_cli_defaults_bind_training_to_the_frozen_runner() -> None:
@@ -76,7 +77,7 @@ def test_v2_contract_remains_immutable_while_v3_is_registered() -> None:
     assert classic_observation["ego"].shape == (24,)
     assert classic_observation["entities"].shape == (12, 13)
     assert "directive" not in classic_info
-    assert adaptive.action_space.n == 144
+    assert adaptive.action_space.n == 288
     assert adaptive_observation["ego"].shape == (27,)
     assert adaptive_observation["entities"].shape == (12, 16)
     assert adaptive_observation["directive"].shape == (6,)
@@ -91,7 +92,7 @@ def test_v3_environment_checker_and_directive_observation() -> None:
     assert env.observation_space.contains(observation)
     assert observation["local_grid"].shape == (11, 15, 15)
     assert observation["rays"].shape == (24, 4)
-    assert observation["action_mask"].shape == (144,)
+    assert observation["action_mask"].shape == (288,)
     assert observation["directive"][2] == 1.0
     assert info["directive"] == "greed"
     check_env(env, skip_render_check=True)
@@ -976,7 +977,7 @@ def test_v3_runner_policy_respects_the_directive_and_sequence_resets() -> None:
     resets = torch.zeros(steps, batch, dtype=torch.bool)
     resets[1, 0] = True
     logits, values, _hidden = policy.forward_sequence(sequence, None, resets)
-    assert logits.shape == (steps, batch, 144)
+    assert logits.shape == (steps, batch, 288)
     assert values.shape == (steps, batch)
     env.close()
 
@@ -1013,3 +1014,193 @@ def test_running_return_scale_tracks_target_magnitude() -> None:
     assert small.sigma < scale.sigma
     # Never zero, so the division in the value loss is always safe.
     assert RunningReturnScale().sigma > 0.0
+
+
+def test_vents_move_the_runner_and_operatives_cannot_follow() -> None:
+    """A vent is the answer to a sealed route, and a committed one."""
+
+    from ghostline.config_v3 import VENT_TRANSIT_SECONDS
+    from ghostline.generation import tile_center
+
+    sim = GhostlineSimulationV3(seed=4_400_002, tier=6)
+    assert sim.vents, "tier 6 should place a vent network"
+    vent = sim.vents[0]
+    sim.player[:] = tile_center(vent.tile)
+    origin = sim.player.copy()
+
+    assert sim.can_interact()
+    sim.advance(RunnerActionV3(move=0, interact=True), ticks=1)
+    assert sim.vent_transit == pytest.approx(VENT_TRANSIT_SECONDS, rel=0.05)
+
+    # Mid-transit the runner is frozen and cannot be steered.
+    sim.advance(RunnerActionV3(move=3), ticks=6)
+    assert float(norm(sim.velocity)) == 0.0
+    assert float(norm(sim.player - origin)) == pytest.approx(0.0, abs=1e-6)
+
+    for _ in range(90):
+        sim.advance(RunnerActionV3(move=0), ticks=1)
+    assert float(norm(sim.player - vent.exit_position)) == pytest.approx(0.0, abs=1e-3)
+    assert sim.vent_uses == 1
+
+    # Operatives have no vent verb at all: the network is runner-only.
+    assert not hasattr(sim.level.guards[0], "vent")
+
+
+def test_hacking_disables_a_camera_and_spends_a_charge() -> None:
+    sim = GhostlineSimulationV3(seed=4_400_003, tier=6)
+    device = next(item for item in sim.hackable if item.kind == "camera")
+    camera = next(item for item in sim.level.cameras if int(item.camera_id) == device.target_id)
+    sim.player[:] = device.position
+    charges = sim.hack_charges
+
+    sim.advance(RunnerActionV3(move=0, interact=True), ticks=1)
+    assert sim.hack_charges == charges - 1
+    assert camera.disabled_for > 0.0
+    assert sim.hacks_used == 1
+    # A spent device goes on cooldown so one panel is not an infinite supply.
+    assert device.cooldown > 0.0
+
+
+def test_hacking_the_lights_shortens_sight_inside_that_room_only() -> None:
+    """Darkness is applied through the shared visibility predicate."""
+
+    from ghostline.config_v3 import HACK_LIGHTS_VISION_SCALE
+
+    sim = GhostlineSimulationV3(seed=4_400_003, tier=6)
+    panel = next(item for item in sim.hackable if item.kind == "lights")
+    sim.player[:] = panel.position
+    sim.advance(RunnerActionV3(move=0, interact=True), ticks=1)
+    assert panel.target_id in sim.darkened_rooms
+
+    guard = sim.level.guards[0]
+    guard.position[:] = panel.position
+    guard.facing = 0.0
+    assert sim.guard_vision_scale(guard) == pytest.approx(HACK_LIGHTS_VISION_SCALE)
+
+    far = guard.position + np.asarray((190.0, 0.0), dtype=np.float32)
+    assert not sim.visible(guard.position, guard.facing, far, distance=205.0, cosine=0.62)
+    sim.darkened_rooms.clear()
+    assert sim.visible(guard.position, guard.facing, far, distance=205.0, cosine=0.62)
+
+
+def test_crouched_decoy_throw_is_shorter_than_a_standing_throw() -> None:
+    """The quiet route trades reach for concealment here too."""
+
+    from ghostline.config_v3 import DECOY_CROUCH_THROW_SCALE
+
+    def throw(crouch: bool) -> float:
+        sim = GhostlineSimulationV3(seed=4_400_010, tier=6)
+        sim.decoy_charges = 3
+        origin = sim.player.copy()
+        sim.advance(RunnerActionV3(move=3, decoy=True, crouch=crouch), ticks=1)
+        assert sim.decoys, "decoy was not deployed"
+        return float(norm(sim.decoys[0].position - origin))
+
+    standing, crouched = throw(False), throw(True)
+    assert crouched <= standing
+    assert 0.0 < DECOY_CROUCH_THROW_SCALE < 1.0
+
+
+def test_predictive_seal_targets_ahead_and_never_lands_on_the_runner() -> None:
+    """Sealing must feel outplayed, not arbitrary."""
+
+    from ghostline.config_v3 import CHOKEPOINT_MIN_RUNNER_DISTANCE
+    from ghostline.generation import tile_center
+
+    sim = GhostlineSimulationV3(seed=4_400_004, tier=6)
+    assert sim.request_predictive_seal()
+    warned = [door for door in sim.security_doors if door.warning_remaining > 0.0 or door.locked]
+    assert warned, "no door was asked to close"
+    # It telegraphs before closing and is never on top of the runner.
+    for door in warned:
+        assert float(norm(tile_center(door.tile) - sim.player)) >= CHOKEPOINT_MIN_RUNNER_DISTANCE
+
+    # Only redundant room-graph edges are ever eligible, so a seal can never
+    # remove the last route between two rooms.
+    by_tile = {door.tile: door for door in sim.level.doors}
+    for security_door in sim.security_doors:
+        source = by_tile[security_door.tile]
+        assert sim._door_edge_is_redundant(source.room_a, source.room_b)
+
+
+def test_hacking_a_door_forces_a_seal_back_open() -> None:
+    """The runner always keeps an answer to a chokepoint."""
+
+    sim = GhostlineSimulationV3(seed=4_400_004, tier=6)
+    sim.request_predictive_seal()
+    door = sim.security_doors[0]
+    door.lock_remaining = 3.0
+    sim._refresh_navigation_blocks()
+    assert door.locked
+
+    panel = next(item for item in sim.hackable if item.kind == "door")
+    sim.player[:] = panel.position
+    sim.advance(RunnerActionV3(move=0, interact=True), ticks=1)
+    assert not door.locked
+    assert door.tile not in sim._blocked_tiles
+
+
+def test_pincer_assigns_distinct_approach_arcs_across_the_team() -> None:
+    """A slower team closes by converging from several bearings."""
+
+    from ghostline.types_v3 import SecurityIntent, SecurityOrder
+
+    sim = GhostlineSimulationV3(seed=4_400_004, tier=6, external_security=True)
+    contact = sim.player.copy()
+    sim.set_security_orders(
+        {guard.guard_id: SecurityOrder(SecurityIntent.PINCER, contact.copy()) for guard in sim.level.guards}
+    )
+    sim.advance(RunnerActionV3(move=0), ticks=1)
+
+    stations = [sim.operative_states[guard.guard_id].current_order.target for guard in sim.level.guards]
+    separations = [
+        float(norm(first - second))
+        for index, first in enumerate(stations)
+        for second in stations[index + 1 :]
+    ]
+    assert len(stations) >= 3
+    assert min(separations) > 20.0, "operatives stacked on one point instead of spreading"
+
+
+def test_field_sensors_report_a_crossing_and_never_damage() -> None:
+    """Non-lethal by construction: a sensor is information, not a weapon."""
+
+    sim = GhostlineSimulationV3(seed=4_400_003, tier=6)
+    guard = sim.level.guards[0]
+    assert sim.deploy_field_sensor(guard)
+    assert not sim.deploy_field_sensor(guard), "sensor charges are limited"
+
+    integrity = sim.integrity
+    sim.player[:] = guard.position
+    for _ in range(90):
+        sim.advance(RunnerActionV3(move=0), ticks=1)
+
+    assert any(sensor.triggered for sensor in sim.field_sensors)
+    assert sim.integrity == integrity, "a sensor must never cost integrity"
+    assert any(state.heard_confidence > 0.5 for state in sim.operative_states.values())
+
+
+def test_interact_is_masked_out_when_there_is_nothing_to_use() -> None:
+    """The context-sensitive verb must never be legal in empty space."""
+
+    from ghostline.generation import tile_center
+
+    sim = GhostlineSimulationV3(seed=4_400_002, tier=6)
+    # Somewhere with no vent and no panel in range.
+    far = next(
+        tile_center((x, y))
+        for y in range(2, sim.level.grid.shape[0] - 2)
+        for x in range(2, sim.level.grid.shape[1] - 2)
+        if sim._can_occupy(tile_center((x, y)), 6.0)
+        and all(norm(tile_center((x, y)) - d.position) > 200.0 for d in sim.hackable)
+        and all((x, y) != v.tile for v in sim.vents)
+    )
+    sim.player[:] = far
+    assert not sim.can_interact()
+    mask = sim.action_mask()
+    assert all(mask[value] == 0 for value in range(len(mask)) if RunnerActionV3.decode(value).interact)
+
+    vent = sim.vents[0]
+    sim.player[:] = tile_center(vent.tile)
+    mask = sim.action_mask()
+    assert any(mask[value] == 1 for value in range(len(mask)) if RunnerActionV3.decode(value).interact)

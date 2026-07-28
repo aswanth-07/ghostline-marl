@@ -26,6 +26,44 @@ a role-gated ability at 5 Hz. Deterministic base navigation, collision, sight,
 and animation remain the motor layer. The actor never receives the centralized
 state used by the MAPPO critic.
 
+## Adaptive Contracts field systems
+
+Env-v3 carries six field mechanics beyond the classic contract. The runner
+action is `RunnerActionV3(move, dash, pulse, decoy, crouch, interact)` for 288
+masked actions; `interact` is context-sensitive rather than one bit per verb,
+because entering a vent and hacking a device are never both legal on the same
+tile. All 144 previous codes keep their exact meaning.
+
+- **Vents** are a runner-only transit network. Transit freezes the runner for
+  1.15 s and cannot be steered, so a vent is a committed escape from a sealed
+  route rather than a dodge; entering one in sight is a real tell. Operatives
+  have no vent verb.
+- **Environmental hacking** spends shared charges on a camera (disabled),
+  a security door (all seals forced open), or the room lights. Darkness is
+  applied by overriding the shared `visible` predicate, so guard awareness, the
+  operative observation, and the rendered cone can never disagree about how far
+  an operative can see in a hacked room.
+- **Upgraded distraction**: a decoy now holds operative attention at its landing
+  point for a lure window instead of emitting one discardable ping, and a
+  crouched throw is quieter but carries less far.
+- **Predictive chokepoints** seal a redundant door ahead of the runner's
+  projected route rather than the nearest one. Every existing guarantee still
+  applies: only redundant room-graph edges are eligible, the door telegraphs
+  before closing, an occupied door never closes, and the runner keeps both a
+  pulse override and a door hack. A seal is never placed within 72 px of the
+  runner, because that is the case that reads as arbitrary rather than outplayed.
+- **Coordinated pincers** (`SecurityIntent.PINCER`) rewrite each operative's own
+  target into a complementary approach arc so a team that cannot win a tail
+  chase still converges from several bearings.
+- **Non-lethal field tools**: Patrol and Interceptor operatives spend the shared
+  ability bit on a deployable sensor that reports a crossing and seeds the heard
+  estimate. Sensors never damage. Suppressors keep their telegraphed shock round,
+  so the ability slot is now meaningful for the whole team.
+
+The runner observation gains an eight-value `field` record covering charges,
+reach, transit and darkness. Everything in it is state the player can already
+read from their own HUD; no hidden security state is exposed.
+
 ## Multi-agent network architecture
 
 `model.py` is the frozen Env-v2 network and is untouched. `model_v3.py` owns the
