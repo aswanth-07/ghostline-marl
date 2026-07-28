@@ -339,6 +339,7 @@ class RunnerPPOConfig:
     training_seed_start: int = TRAINING_SEED_START
     tiers: tuple[int, ...] = ALL_TIERS
     directives: tuple[int, ...] = tuple(int(item) for item in ALL_DIRECTIVES)
+    ghost_directive_fraction: float = 0.25
     adaptive_curriculum: bool = True
     initial_curriculum_tier: int = 1
     async_envs: bool = True
@@ -387,6 +388,15 @@ class RunnerPPOConfig:
             raise ValueError("target_kl must be non-negative")
         parse_tiers(self.tiers)
         parse_directives(self.directives)
+        if not 0.0 <= self.ghost_directive_fraction <= 1.0:
+            raise ValueError("ghost directive fraction must lie in [0, 1]")
+        if (
+            self.ghost_directive_fraction != 0.0
+            and int(ContractDirective.GHOST) not in self.directives
+        ):
+            raise ValueError(
+                "a positive ghost directive fraction requires the ghost directive"
+            )
         if self.adaptive_curriculum:
             if self.tiers != ALL_TIERS:
                 raise ValueError(
@@ -475,6 +485,7 @@ class ScheduledRunnerEnv(gym.Wrapper):
         schedule_salt: int,
         adaptive_curriculum: bool,
         initial_curriculum_tier: int,
+        ghost_directive_fraction: float = 0.25,
         security_opponent_paths: Sequence[str] = (),
         security_opponent_sha256: Sequence[str] = (),
         security_pool_salt: int = 0,
@@ -488,6 +499,7 @@ class ScheduledRunnerEnv(gym.Wrapper):
         self.training_seed_start = int(training_seed_start)
         self.tiers = parse_tiers(tiers)
         self.directives = parse_directives(directives)
+        self.ghost_directive_fraction = float(ghost_directive_fraction)
         self.schedule_salt = int(schedule_salt)
         self.adaptive_curriculum = bool(adaptive_curriculum)
         self.curriculum_tier = int(initial_curriculum_tier)
@@ -567,10 +579,29 @@ class ScheduledRunnerEnv(gym.Wrapper):
             else:
                 replay_draw = _stable_mix(tier_draw ^ 0x94D049BB133111EB)
                 tier = 1 + replay_draw % (curriculum_tier - 1)
-        directive_index = _stable_mix(
+        directive_draw = _stable_mix(
             seed ^ self.schedule_salt ^ 0xD1B54A32D192ED03
-        ) % len(self.directives)
-        return tier, self.directives[directive_index]
+        )
+        ghost = ContractDirective.GHOST
+        non_ghost = tuple(
+            directive for directive in self.directives if directive != ghost
+        )
+        if (
+            ghost in self.directives
+            and non_ghost
+            and self.ghost_directive_fraction != 1.0 / len(self.directives)
+        ):
+            unit_draw = directive_draw / float(1 << 64)
+            if unit_draw < self.ghost_directive_fraction:
+                directive = ghost
+            else:
+                replay_draw = _stable_mix(
+                    directive_draw ^ 0xA24BAED4963EE407
+                )
+                directive = non_ghost[replay_draw % len(non_ghost)]
+        else:
+            directive = self.directives[directive_draw % len(self.directives)]
+        return tier, directive
 
     def set_curriculum_tier(self, tier: int) -> None:
         tier = int(tier)
@@ -688,6 +719,7 @@ class RunnerEnvFactory:
     training_seed_start: int
     tiers: tuple[int, ...]
     directives: tuple[int, ...]
+    ghost_directive_fraction: float
     schedule_salt: int
     adaptive_curriculum: bool
     initial_curriculum_tier: int
@@ -703,6 +735,7 @@ class RunnerEnvFactory:
             training_seed_start=self.training_seed_start,
             tiers=self.tiers,
             directives=self.directives,
+            ghost_directive_fraction=self.ghost_directive_fraction,
             schedule_salt=self.schedule_salt,
             adaptive_curriculum=self.adaptive_curriculum,
             initial_curriculum_tier=self.initial_curriculum_tier,
@@ -726,6 +759,7 @@ def make_runner_vector_env(
             training_seed_start=config.training_seed_start,
             tiers=config.tiers,
             directives=config.directives,
+            ghost_directive_fraction=config.ghost_directive_fraction,
             schedule_salt=config.seed,
             adaptive_curriculum=config.adaptive_curriculum,
             initial_curriculum_tier=config.initial_curriculum_tier,
@@ -1940,6 +1974,9 @@ def train(
         training_seed_start=args.training_seed_start,
         tiers=tiers,
         directives=tuple(int(item) for item in directives),
+        ghost_directive_fraction=float(
+            getattr(args, "ghost_directive_fraction", 0.25)
+        ),
         adaptive_curriculum=bool(getattr(args, "adaptive_curriculum", True)),
         initial_curriculum_tier=int(getattr(args, "initial_curriculum_tier", 1)),
         async_envs=args.async_envs,
@@ -2356,6 +2393,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--training-seed-start", type=int, default=TRAINING_SEED_START)
     parser.add_argument("--tiers", default="1,2,3,4,5,6")
     parser.add_argument("--directives", default="standard,ghost,speed,greed")
+    parser.add_argument(
+        "--ghost-directive-fraction",
+        type=float,
+        default=0.25,
+        help="training share reserved for ghost contracts; validation stays balanced",
+    )
     parser.add_argument(
         "--no-curriculum",
         dest="adaptive_curriculum",

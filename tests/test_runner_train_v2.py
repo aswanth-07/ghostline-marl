@@ -18,6 +18,7 @@ from ghostline.runner_train_v2 import (
     EXPERIMENT_MANIFEST_CONTRACT,
     OBSERVATION_KEYS_V2,
     RunnerPPOConfig,
+    ScheduledRunnerEnv,
     build_parser,
     _require_checkpoint_contract,
     acceptance_gate,
@@ -42,7 +43,10 @@ from ghostline.runner_train_v2 import (
     train,
 )
 from ghostline.seeds import TRAINING_SEED_END, validation_seed
-from ghostline.types_v2 import RUNNER_ACTION_COUNT_V2
+from ghostline.types_v2 import (
+    RUNNER_ACTION_COUNT_V2,
+    ContractDirective,
+)
 
 
 def smoke_config(**changes: object) -> RunnerPPOConfig:
@@ -540,6 +544,40 @@ def test_seed_namespaces_validation_gates_and_selection_are_fail_closed() -> Non
     assert validation_selection_key(complete_report) == pytest.approx(
         (0.91, 0.96, -0.35, -13.5)
     )
+
+
+def test_training_can_oversample_ghost_without_changing_validation_balance() -> None:
+    environment = ScheduledRunnerEnv(
+        rank=0,
+        env_count=1,
+        training_seed_start=0,
+        tiers=ALL_TIERS,
+        directives=(0, 1, 2, 3),
+        schedule_salt=19,
+        adaptive_curriculum=True,
+        initial_curriculum_tier=3,
+        ghost_directive_fraction=0.50,
+    )
+    try:
+        counts = {directive: 0 for directive in ContractDirective}
+        for seed in range(10_000):
+            _, directive = environment._schedule(seed)
+            counts[directive] += 1
+    finally:
+        environment.close()
+    assert counts[ContractDirective.GHOST] / 10_000 == pytest.approx(
+        0.50,
+        abs=0.02,
+    )
+    for directive in (
+        ContractDirective.STANDARD,
+        ContractDirective.SPEED,
+        ContractDirective.GREED,
+    ):
+        assert counts[directive] / 10_000 == pytest.approx(
+            1.0 / 6.0,
+            abs=0.02,
+        )
 
 
 def test_validation_batches_inference_and_consumes_exact_cursor_window(

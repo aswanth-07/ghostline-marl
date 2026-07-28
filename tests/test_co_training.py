@@ -61,6 +61,9 @@ def test_generation_uses_only_previously_frozen_opponents(tmp_path: Path) -> Non
     assert plan.runner_command[
         plan.runner_command.index("--entropy-coefficient") + 1
     ] == "0.003"
+    assert plan.runner_command[
+        plan.runner_command.index("--ghost-directive-fraction") + 1
+    ] == "0.5"
     assert str(plan.runner_output) not in plan.security_command
     assert str(plan.security_output) not in plan.runner_command
 

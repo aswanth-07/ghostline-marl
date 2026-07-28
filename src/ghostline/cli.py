@@ -214,6 +214,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=range(1, 7),
         default=3,
     )
+    co_train.add_argument(
+        "--runner-ghost-directive-fraction",
+        type=float,
+        default=0.50,
+    )
     co_train.add_argument("--monitor-seconds", type=float, default=30.0)
     co_train.add_argument("--runner-max-decisions", type=int, default=0)
     co_train.add_argument("--security-max-steps", type=int, default=0)
@@ -554,6 +559,7 @@ def main() -> None:
                 runner_learning_rate=args.runner_learning_rate,
                 runner_entropy_coefficient=args.runner_entropy_coefficient,
                 runner_initial_curriculum_tier=args.runner_initial_curriculum_tier,
+                runner_ghost_directive_fraction=args.runner_ghost_directive_fraction,
                 monitor_seconds=args.monitor_seconds,
                 runner_max_decisions=args.runner_max_decisions,
                 security_max_steps=args.security_max_steps,

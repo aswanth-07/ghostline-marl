@@ -82,6 +82,7 @@ class CoTrainingConfig:
     runner_learning_rate: float = 5.0e-5
     runner_entropy_coefficient: float = 0.003
     runner_initial_curriculum_tier: int = 3
+    runner_ghost_directive_fraction: float = 0.50
     security_learning_rate: float = 3.0e-4
     gamma: float = 0.999
     gae_lambda: float = 0.98
@@ -133,6 +134,10 @@ class CoTrainingConfig:
             raise ValueError("runner entropy coefficient must lie in [0, 0.10]")
         if self.runner_initial_curriculum_tier not in range(1, 7):
             raise ValueError("runner initial curriculum tier must lie in 1..6")
+        if not 0.0 <= self.runner_ghost_directive_fraction <= 1.0:
+            raise ValueError(
+                "runner ghost directive fraction must lie in [0, 1]"
+            )
         if not 1.0 <= self.monitor_seconds <= 60.0:
             raise ValueError("monitor_seconds must lie in 1..60")
         if not 0.0 <= self.scripted_opponent_fraction <= 1.0:
@@ -216,6 +221,8 @@ def build_generation_plan(
         str(validation_cursor),
         "--initial-curriculum-tier",
         str(config.runner_initial_curriculum_tier),
+        "--ghost-directive-fraction",
+        str(config.runner_ghost_directive_fraction),
         "--validation-interval",
         str(config.runner_validation_interval),
         "--validation-episodes",
