@@ -1,11 +1,11 @@
 {
-  "environment_fingerprint": "7fe7510a8586ef55b7b7914b857721f4dffc8f2f33d80e8bd0f79f01c0acf98d",
+  "environment_fingerprint": "c82a6726a571ada1f00cb764c3abe239373cceec4438849163fa0f72377a938d",
   "manifest_contract": "ghostline-final-test-slices-v1",
   "observation_contract": "GhostlineSecurityParallel-v2",
   "policy": "This is a one-way final-test ledger. The evaluator locks a slice before its first episode and marks it consumed or aborted-retired after any attempt. There is no overwrite or reopen path.",
   "slices": [
     {
-      "environment_fingerprint": "7fe7510a8586ef55b7b7914b857721f4dffc8f2f33d80e8bd0f79f01c0acf98d",
+      "environment_fingerprint": "c82a6726a571ada1f00cb764c3abe239373cceec4438849163fa0f72377a938d",
       "episodes_per_tier": 500,
       "note": "Reserved for the selected current-v2 security champion against the immutable published-v1 runner after all training, validation, reward, curriculum, and opponent decisions are frozen.",
       "policy_kind": "security-v2-neural-vs-published-v1:76baa30af55cdaa2e71bb6ba06672bd9203455552358017505685827240b2e47",

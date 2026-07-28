@@ -120,8 +120,10 @@ ablation trains from orthogonal initialization.
 
 The runner reward stays in `env_v2.py`, never the simulation:
 
-- dominant extraction success and bounded terminal-data rewards;
-- potential-based geodesic mission progress;
+- dominant directive-complete extraction and bounded partial-extraction/data
+  rewards;
+- potential-based geodesic mission progress toward the directive's actual
+  acquisition target;
 - time and invalid-behavior costs;
 - genuine exposure and first-detection objective costs;
 - quiet-data bonus below the trace ceiling;
@@ -131,6 +133,13 @@ Exposure and detection are objective terms, not potentials: the design
 intentionally changes the optimum away from a trace-saturated race. Route
 progress remains potential-based because it should guide learning without
 changing the successful route objective.
+
+V2 success means both extraction and directive completion. Greed keeps the
+objective, extraction gate, map cue, and shaping potential on unfinished
+terminals after ordinary quota; ghost and speed may still extract after
+missing their constraint, but receive only the bounded partial outcome and
+cannot pass validation. This prevents reward, observation, mechanics, and
+checkpoint selection from optimizing different tasks.
 
 ## V2 security learner
 
@@ -304,9 +313,10 @@ target, and its explained variance describes only in-episode shaping.
 
 Two consequences shape the first long campaign:
 
-- Raw ledgers retain the `+20` extraction and containment outcomes, while both
-  critics train in fixed `0.05` scaled units. This keeps the conventional
-  absolute value clip meaningful without a moving normalization statistic.
+- Raw ledgers retain the `+20` directive-complete extraction and containment
+  outcomes, while both critics train in fixed `0.05` scaled units. This keeps
+  the conventional absolute value clip meaningful without a moving
+  normalization statistic.
 - The published-v1 value head is multiplied by the same fixed scale during
   overlap transplant. The full-horizon CUDA calibration then measured runner
   value loss `0.0045`, explained variance `0.62`, and finite gradients over

@@ -121,6 +121,76 @@ def test_v2_environment_checker_and_directive_observation() -> None:
     env.close()
 
 
+def test_greed_keeps_objective_and_extraction_locked_until_every_terminal() -> None:
+    env = GhostlineEnvV2(
+        seed=32,
+        tier=6,
+        directive=ContractDirective.GREED,
+    )
+    observation, _ = env.reset(seed=32)
+    assert len(env.sim.level.terminals) > 1
+
+    first = env.sim.level.terminals[0]
+    first.completed = True
+    first.progress = first.hack_seconds
+    env.sim.data = env.sim.level.quota
+    env.sim.optional_data = 0
+    selected = env.sim.objective_terminal()
+    assert selected is not None and not selected.completed
+    assert not env.sim.quota_met
+    assert env._objective()[0] == -1.0
+    assert not env._acquisition_complete()
+    assert "LINK EVERY DATA NODE" in env.sim.context_hint
+
+    env.sim.player = env.sim.level.extraction.copy()
+    env.sim._check_extraction()
+    assert not env.sim.extracted and not env.sim.terminated
+
+    for terminal in env.sim.level.terminals:
+        terminal.completed = True
+        terminal.progress = terminal.hack_seconds
+    env.sim.data = sum(
+        terminal.value
+        for terminal in env.sim.level.terminals
+    )
+    assert env.sim.objective_terminal() is None
+    assert env.sim.quota_met
+    assert env._acquisition_complete()
+    assert env._objective()[0] == 1.0
+    env.sim._check_extraction()
+    assert env.sim.extracted and env.sim.terminated
+    env.close()
+
+
+def test_v2_success_and_dominant_reward_require_directive_completion() -> None:
+    env = GhostlineEnvV2(
+        seed=33,
+        tier=1,
+        directive=ContractDirective.GHOST,
+    )
+    env.reset(seed=33)
+    env.sim.level.guards = []
+    env.sim.level.cameras = []
+    env.sim.drones = []
+    env.sim.data = env.sim.level.quota
+    env.sim.max_trace = 80.0
+    env.sim.trace = 80.0
+    env.sim.player = env.sim.level.extraction.copy()
+
+    _, reward, terminated, truncated, info = env.step(0)
+    assert terminated and not truncated and env.sim.extracted
+    assert not info["directive_success"]
+    assert not info["is_success"]
+    assert info["fail_reason"] == "directive_incomplete"
+    assert info["reward_extraction"] == pytest.approx(4.0)
+    assert info["reward_failure"] == pytest.approx(-2.0)
+    assert info["reward_total"] == pytest.approx(
+        sum(info["reward_components"].values())
+    )
+    assert reward == pytest.approx(info["reward_total"])
+    env.close()
+
+
 def test_v2_replay_is_deterministic_for_seed_tier_directive_and_actions() -> None:
     actions = [RunnerActionV2.decode(value) for value in (1, 10, 46, 3, 21, 0, 71, 8) * 4]
     first = GhostlineSimulationV2(seed=701, tier=6, directive="speed")

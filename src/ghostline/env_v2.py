@@ -116,6 +116,51 @@ class GhostlineEnvV2(GhostlineEnv):
         )
         self._reset_episode_metrics()
 
+    def _acquisition_complete(self) -> bool:
+        if self.directive == ContractDirective.GREED:
+            return all(
+                terminal.completed
+                for terminal in self.sim.level.terminals
+            )
+        return self.sim.quota_met
+
+    def _mission_potential(self) -> float:
+        """Shape progress toward the directive's real acquire objective."""
+
+        selected = self.sim.objective_terminal()
+        partial_data = max(
+            (
+                terminal.value * terminal.progress / terminal.hack_seconds
+                for terminal in self.sim.level.terminals
+                if not terminal.completed
+            ),
+            default=0.0,
+        )
+        target_data = (
+            sum(terminal.value for terminal in self.sim.level.terminals)
+            if self.directive == ContractDirective.GREED
+            else self.sim.level.quota
+        )
+        phase = min(
+            1.0,
+            (self.sim.data + partial_data) / max(1, target_data),
+        )
+        goal = (
+            self.sim.level.extraction
+            if selected is None
+            else selected.position
+        )
+        path_distance, _ = self._path_features(goal)
+        diagonal = math.hypot(
+            self.sim.level.world_width,
+            self.sim.level.world_height,
+        )
+        return (
+            2.0 * phase
+            + 1.0
+            - min(1.0, path_distance / max(1.0, diagonal))
+        )
+
     @property
     def unwrapped_sim(self) -> GhostlineSimulationV2:
         return self.sim
@@ -161,10 +206,19 @@ class GhostlineEnvV2(GhostlineEnv):
         self.sim.advance(decoded, ticks=POLICY_REPEAT)
         self._trace_history.append(self.sim.trace)
         terminal = bool(self.sim.terminated or self.sim.truncated)
+        contract_success = bool(
+            self.sim.extracted and self.directive_completed
+        )
         potential = self._mission_potential()
 
         components = self._empty_rewards()
-        components["extraction"] = 20.0 if self.sim.extracted else 0.0
+        components["extraction"] = (
+            20.0
+            if contract_success
+            else 4.0
+            if self.sim.extracted
+            else 0.0
+        )
         components["data"] = min(6.0, max(0, self.sim.data - before_data) * 1.5)
         components["progress"] = runner_potential_progress_reward(
             self._previous_potential,
@@ -204,9 +258,16 @@ class GhostlineEnvV2(GhostlineEnv):
             components["directive"] -= 0.003
         elif self.directive == ContractDirective.GREED:
             components["directive"] += 0.75 * max(0, self.sim.optional_data - before_optional)
-        if (self.sim.terminated or self.sim.truncated) and not self.sim.extracted:
-            components["failure"] = -10.0 if self.sim.fail_reason == "integrity_lost" else -6.0
-        if self.sim.extracted and self.directive_completed:
+        if terminal and not contract_success:
+            if self.sim.extracted:
+                components["failure"] = -2.0
+            else:
+                components["failure"] = (
+                    -10.0
+                    if self.sim.fail_reason == "integrity_lost"
+                    else -6.0
+                )
+        if contract_success:
             components["directive"] += 4.0
 
         reward = float(sum(components.values()))
@@ -224,7 +285,7 @@ class GhostlineEnvV2(GhostlineEnv):
             info["reward_total"] = float(sum(self.reward_components.values()))
             info["episode_extra_stats"] = {
                 "tier": int(self.tier),
-                "success": float(self.sim.extracted),
+                "success": float(contract_success),
                 "directive_success": float(self.directive_completed),
                 "data": float(self.sim.data),
                 "damage": float(self.sim.damage_taken),
@@ -512,7 +573,7 @@ class GhostlineEnvV2(GhostlineEnv):
                 base[4, ly, lx] = 1.0
         extraction_x, extraction_y = local(world_to_tile(sim.level.extraction))
         if (
-            sim.quota_met
+            self._acquisition_complete()
             and 0 <= extraction_x < size
             and 0 <= extraction_y < size
         ):
@@ -759,6 +820,12 @@ class GhostlineEnvV2(GhostlineEnv):
 
     def _info(self) -> dict[str, Any]:
         info = super()._info()
+        contract_success = bool(
+            self.sim.extracted and self.directive_completed
+        )
+        info["is_success"] = contract_success
+        if self.sim.extracted and not contract_success:
+            info["fail_reason"] = "directive_incomplete"
         info.update(
             {
                 "contract": "GhostlineEnv-v2",

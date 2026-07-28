@@ -121,6 +121,17 @@ class GhostlineSimulationV2(GhostlineSimulation):
 
     crouching: bool = False
 
+    @property
+    def quota_met(self) -> bool:
+        """Expose extraction readiness, including the active directive."""
+
+        if self.directive == ContractDirective.GREED:
+            return all(
+                terminal.completed
+                for terminal in self.level.terminals
+            )
+        return super().quota_met
+
     def reset(self, *, seed: int | None = None, tier: int | None = None) -> None:
         # The multi-agent track builds its own reshaped facilities. Swapping the
         # generator here rather than adding a seam to the base class keeps
@@ -517,11 +528,72 @@ class GhostlineSimulationV2(GhostlineSimulation):
         if self.vent_transit > 0.0:
             self._active_hack = None
             return
+        event_start = len(self.events)
         super()._update_hacking(dt)
+        if (
+            self.directive == ContractDirective.GREED
+            and not self.quota_met
+        ):
+            self.events[event_start:] = [
+                event
+                for event in self.events[event_start:]
+                if event.kind != "quota_met"
+            ]
+
+    def objective_terminal(self):
+        """Keep the public objective on data until a greed contract is complete."""
+
+        if self.directive != ContractDirective.GREED:
+            return super().objective_terminal()
+        if self.objective_terminal_id is not None:
+            for terminal in self.level.terminals:
+                if (
+                    terminal.terminal_id == self.objective_terminal_id
+                    and not terminal.completed
+                ):
+                    return terminal
+        remaining = [
+            terminal
+            for terminal in self.level.terminals
+            if not terminal.completed
+        ]
+        if not remaining:
+            self.objective_terminal_id = None
+            return None
+        selected = min(
+            remaining,
+            key=lambda terminal: (
+                norm(terminal.position - self.player) / max(1, terminal.value),
+                terminal.terminal_id,
+            ),
+        )
+        self.objective_terminal_id = selected.terminal_id
+        return selected
+
+    @property
+    def context_hint(self) -> str:
+        if (
+            self.directive == ContractDirective.GREED
+            and self.data >= self.level.quota
+            and any(
+                not terminal.completed
+                for terminal in self.level.terminals
+            )
+        ):
+            if self._active_hack is not None:
+                return "LINK ACTIVE  //  MOVE FREELY INSIDE THE RING"
+            return "GREED CONTRACT  //  LINK EVERY DATA NODE BEFORE EXTRACTION"
+        return super().context_hint
 
     def _check_extraction(self) -> None:
-        if self.vent_transit <= 0.0:
-            super()._check_extraction()
+        if self.vent_transit > 0.0:
+            return
+        if (
+            self.directive == ContractDirective.GREED
+            and any(not terminal.completed for terminal in self.level.terminals)
+        ):
+            return
+        super()._check_extraction()
 
     def _room_at(self, position: np.ndarray) -> int:
         tile_x, tile_y = world_to_tile(position)
