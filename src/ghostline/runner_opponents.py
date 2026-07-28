@@ -149,7 +149,13 @@ FrozenV2RunnerOpponent = FrozenPublishedV1RunnerOpponent
 def runner_opponent_kind(policy: Any) -> str:
     """Identify a loaded runner policy without relying on old metadata names."""
 
-    action_count = int(getattr(getattr(policy, "action_head", None), "out_features", 0))
+    action_count = int(
+        getattr(
+            policy,
+            "action_count",
+            getattr(getattr(policy, "action_head", None), "out_features", 0),
+        )
+    )
     if action_count == 288:
         return "runner-v2"
     if action_count == 36:

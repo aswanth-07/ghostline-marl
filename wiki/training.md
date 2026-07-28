@@ -79,12 +79,16 @@ with:
 - ego, objective, ray, and field MLPs;
 - directive FiLM;
 - a GRU with separate policy/value decoders;
+- a shared 36-action movement/dash/pulse head plus binary decoy, crouch, and
+  interact heads, with a small 288-action residual for full expressivity;
 - exact masking across all 288 semantic actions;
 - objective-bearing and visible-danger auxiliary heads trained from the same
   recurrent latent using only public observation labels. Their weighted losses
   are enabled in the baseline and accounted separately.
 
-The baseline optimizer is recurrent PPO/GAE. Rollouts retain recurrent
+The baseline optimizer is recurrent PPO/GAE with a 512-decision recurrent
+window, `gamma = 0.999`, `lambda = 0.98`, and fixed `0.05` reward scaling.
+Rollouts retain recurrent
 sequence boundaries and reset masks; feedforward flattening is not an allowed
 substitute. Checkpoints include optimizer, curriculum, all relevant random
 states, live vector-environment episode state, decisions, update count, source
@@ -134,6 +138,10 @@ The security benchmark uses parameter-shared recurrent MAPPO. One actor serves
 all operative roles, but deployment remains decentralized: each agent receives
 only its own observation and recurrent state.
 
+The actor applies explicit role FiLM and uses an intent-conditioned target
+pointer. It can therefore rank the same public doorway differently for SEAL,
+PINCER, PURSUE, and INTERCEPT while retaining exact conditional masking.
+
 The actor factorizes its policy over:
 
 - ten semantic intents;
@@ -174,6 +182,10 @@ Every security decision reports a bounded component ledger:
 | `terminal` | dominant stop/extraction outcome |
 | per-agent shaping | discount-matched route coverage and awareness attribution |
 
+The operative that establishes a new first contact receives a small one-time
+attributed credit. Its per-agent component ledger is exact and the episode-level
+contact set prevents reacquisition farming.
+
 The team potential combines geodesic escape-route coverage, awareness, trace,
 and the runner's partial mission progress. It is bounded before differencing.
 Agent shaping is bounded separately. Reward components are summed exactly once;
@@ -196,7 +208,8 @@ runner and security snapshots. After those exist, the staged protocol is:
 5. alternate only after held-out regression gates pass;
 6. preserve an earlier-opponent replay mixture to limit cycling.
 
-Opponent updates occur between runs, never mid-rollout. Every checkpoint records
+`ghostline co-train-v2` automates this as concurrent frozen generations.
+Opponent updates occur between generations, never mid-rollout. Every checkpoint records
 the exact opponent hashes and mixture. Security accepts a repeatable
 `--runner-pool` containing published-v1 adapters and/or native v2 runner
 snapshots, with `--scripted-opponent-fraction` retaining the tactical baseline.
@@ -291,20 +304,13 @@ target, and its explained variance describes only in-episode shaping.
 
 Two consequences shape the first long campaign:
 
-- Value targets grow by more than an order of magnitude the first time the
-  runner extracts. Before any success, returns are order 1 and the critic fits
-  them well; a successful extraction is worth `+20` on its own. Value-loss
-  spikes and explained-variance collapses on the updates where episodes end are
-  expected in the pre-success regime and are not by themselves evidence of a
-  broken critic.
-- `value_clip_ratio` is an absolute clamp on the change in predicted value, not
-  a fraction of the return range, and the runner learner does not scale its
-  returns. The security learner does scale returns, so the two learners treat
-  the same hyperparameter differently. Measured at the current order-1 return
-  scale this costs nothing: an identical 45-update run at `0.2` and at `0.99`
-  produced mean terminal-batch value loss `0.9174` and `0.9365`, which is no
-  improvement. Revisit it when returns actually reach extraction scale, and
-  decide it deliberately rather than inheriting the default.
+- Raw ledgers retain the `+20` extraction and containment outcomes, while both
+  critics train in fixed `0.05` scaled units. This keeps the conventional
+  absolute value clip meaningful without a moving normalization statistic.
+- The published-v1 value head is multiplied by the same fixed scale during
+  overlap transplant. The full-horizon CUDA calibration then measured runner
+  value loss `0.0045`, explained variance `0.62`, and finite gradients over
+  8,192 samples.
 
 ## Final evaluation
 

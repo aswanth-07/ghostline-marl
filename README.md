@@ -177,7 +177,8 @@ point:
 
 ```powershell
 ghostline train-runner-v2 --output artifacts/runner-v2/preflight --published-v1-init models/ghostline-policy.pt --dry-run --cpu
-ghostline train-runner-v2 --output artifacts/runner-v2/ppo --published-v1-init models/ghostline-policy.pt --envs 8 --rollout 128 --epochs 4 --seconds 86400
+ghostline train-runner-v2 --output artifacts/runner-v2/ppo --published-v1-init models/ghostline-policy.pt --envs 16 --rollout 512 --epochs 4 --gamma 0.999 --gae-lambda 0.98 --reward-scale 0.05 --seconds 86400
+ghostline co-train-v2 --output artifacts/v2-cotraining --hours 48 --generations 3
 ```
 
 The optional `--published-v1-init` path verifies the frozen checkpoint and
@@ -211,7 +212,7 @@ fingerprint:
 
 ```powershell
 python -m pip install --constraint requirements.lock -e ".[marl]"
-ghostline train-security --hours 72 --envs 8 --tiers 3,4,5,6 --runner-model models/ghostline-policy.pt --bc-warmup-steps 10000
+ghostline train-security --hours 72 --envs 8 --rollout 192 --epochs 2 --tiers 3,4,5,6 --runner-model models/ghostline-policy.pt --bc-warmup-steps 50000
 ghostline train-security --init-model artifacts/security-bc/champion.pt --bc-warmup-steps 0 --no-resume --hours 72
 ghostline evaluate-security --model artifacts/security-mappo/champion.pt --episodes-per-tier 500 --seed-start 14000000 --slice-manifest benchmarks/security/v2-final-test-slices.json
 ```

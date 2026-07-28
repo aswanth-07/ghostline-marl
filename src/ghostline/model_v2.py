@@ -40,7 +40,8 @@ from torch import nn
 from ghostline.types_v2 import RUNNER_ACTION_COUNT_V2
 
 OBSERVATION_CONTRACT_V2 = "GhostlineEnv-v2"
-RUNNER_MODEL_CONTRACT_V2 = "runner-recurrent-field-policy-v2"
+RUNNER_MODEL_CONTRACT_V2 = "runner-recurrent-factor-policy-v3"
+RUNNER_BASE_ACTION_COUNT = 36
 
 
 def runner_model_fingerprint(root: Path | None = None) -> str:
@@ -168,8 +169,43 @@ class RunnerPolicyV2(nn.Module):
         self.value_decoder = nn.Sequential(
             orthogonal_(nn.Linear(self.recurrent_size, 256), np.sqrt(2)), nn.ELU()
         )
-        # A near-zero policy head starts close to uniform over legal actions.
-        self.action_head = orthogonal_(nn.Linear(256, RUNNER_ACTION_COUNT_V2), 0.01)
+        # The 288 actions are a Cartesian product, not 288 unrelated labels.
+        # Sharing the published movement/dash/pulse base and the three new
+        # binary semantics lets one transition update every combination that
+        # contains the same decision.  A very small residual preserves full
+        # expressivity for interactions such as crouched vent entry.
+        self.base_action_head = orthogonal_(
+            nn.Linear(256, RUNNER_BASE_ACTION_COUNT),
+            0.01,
+        )
+        self.decoy_head = orthogonal_(nn.Linear(256, 2), 0.01)
+        self.crouch_head = orthogonal_(nn.Linear(256, 2), 0.01)
+        self.interact_head = orthogonal_(nn.Linear(256, 2), 0.01)
+        self.action_residual_head = orthogonal_(
+            nn.Linear(256, RUNNER_ACTION_COUNT_V2),
+            0.001,
+        )
+        actions = torch.arange(RUNNER_ACTION_COUNT_V2, dtype=torch.long)
+        self.register_buffer(
+            "_base_action_index",
+            actions.remainder(RUNNER_BASE_ACTION_COUNT),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_decoy_index",
+            actions.div(36, rounding_mode="floor").remainder(2),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_crouch_index",
+            actions.div(72, rounding_mode="floor").remainder(2),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_interact_index",
+            actions.div(144, rounding_mode="floor").remainder(2),
+            persistent=False,
+        )
         self.value_head = orthogonal_(nn.Linear(256, 1), 1.0)
         self.objective_head = orthogonal_(nn.Linear(self.recurrent_size, 2), 1.0)
         self.danger_head = orthogonal_(nn.Linear(self.recurrent_size, 1), 1.0)
@@ -213,6 +249,27 @@ class RunnerPolicyV2(nn.Module):
             valid[empty, 0] = True
         return logits.masked_fill(~valid, -1e9)
 
+    @property
+    def action_count(self) -> int:
+        return RUNNER_ACTION_COUNT_V2
+
+    def action_logits(
+        self,
+        latent: torch.Tensor,
+        action_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Expand shared semantic factors into the public flat action space."""
+
+        decoded = self.policy_decoder(latent)
+        logits = (
+            self.base_action_head(decoded)[..., self._base_action_index]
+            + self.decoy_head(decoded)[..., self._decoy_index]
+            + self.crouch_head(decoded)[..., self._crouch_index]
+            + self.interact_head(decoded)[..., self._interact_index]
+            + self.action_residual_head(decoded)
+        )
+        return self._masked_logits(logits, action_mask)
+
     def forward(
         self,
         observation: Mapping[str, torch.Tensor],
@@ -221,7 +278,7 @@ class RunnerPolicyV2(nn.Module):
         encoded = self.encode(observation)
         sequence, next_hidden = self.core(encoded.unsqueeze(1), hidden)
         latent = sequence[:, -1]
-        logits = self._masked_logits(self.action_head(self.policy_decoder(latent)), observation["action_mask"])
+        logits = self.action_logits(latent, observation["action_mask"])
         value = self.value_head(self.value_decoder(latent)).squeeze(-1)
         return logits, value, next_hidden
 
@@ -239,18 +296,26 @@ class RunnerPolicyV2(nn.Module):
         if reset_mask is None:
             sequence, next_hidden = self.core(encoded, hidden)
         else:
-            outputs = []
+            outputs: list[torch.Tensor] = []
             next_hidden = hidden
-            for index in range(time_steps):
-                reset = reset_mask[index].bool()
-                if reset.any() and next_hidden is not None:
+            boundaries = torch.nonzero(
+                reset_mask.bool().any(dim=1),
+                as_tuple=False,
+            ).flatten().tolist()
+            starts = sorted({0, *boundaries, time_steps})
+            for start, end in zip(starts[:-1], starts[1:], strict=True):
+                reset = reset_mask[start].bool()
+                if bool(reset.any()) and next_hidden is not None:
                     next_hidden = next_hidden.clone()
                     next_hidden[:, reset, :] = 0.0
-                output, next_hidden = self.core(encoded[:, index : index + 1], next_hidden)
+                output, next_hidden = self.core(
+                    encoded[:, start:end],
+                    next_hidden,
+                )
                 outputs.append(output)
             sequence = torch.cat(outputs, dim=1)
         latent = sequence.transpose(0, 1)
-        logits = self._masked_logits(self.action_head(self.policy_decoder(latent)), observation["action_mask"])
+        logits = self.action_logits(latent, observation["action_mask"])
         value = self.value_head(self.value_decoder(latent)).squeeze(-1)
         return logits, value, next_hidden
 
@@ -317,6 +382,8 @@ def load_runner_v2(path: Path, *, device: str | torch.device = "cpu") -> RunnerP
 def initialize_runner_v2_from_published_v1(
     policy: RunnerPolicyV2,
     path: Path,
+    *,
+    value_scale: float = 0.05,
 ) -> dict[str, object]:
     """Warm-start v2 from the immutable published-v1 recurrent policy.
 
@@ -347,6 +414,8 @@ def initialize_runner_v2_from_published_v1(
             "published-v1 and v2 recurrent widths must match for a safe warm-start "
             f"({source_size} != {policy.recurrent_size})"
         )
+    if not 0.0 < value_scale <= 1.0:
+        raise ValueError("value_scale must lie in (0, 1]")
     source = payload["model"]
 
     def copy_exact(target_name: str, source_name: str | None = None) -> None:
@@ -455,19 +524,28 @@ def initialize_runner_v2_from_published_v1(
         policy.directive_film.weight.zero_()
         policy.directive_film.bias.zero_()
 
-        old_action_weight = source["action_head.weight"]
-        old_action_bias = source["action_head.bias"]
-        for value in range(RUNNER_ACTION_COUNT_V2):
-            base = value % 36
-            semantic_bits = (
-                int((value // 36) % 2)
-                + int((value // 72) % 2)
-                + int((value // 144) % 2)
+        policy.base_action_head.weight.copy_(source["action_head.weight"])
+        policy.base_action_head.bias.copy_(source["action_head.bias"])
+        for head in (
+            policy.decoy_head,
+            policy.crouch_head,
+            policy.interact_head,
+        ):
+            head.weight.zero_()
+            head.bias.copy_(
+                torch.as_tensor(
+                    (0.0, -1.25),
+                    dtype=head.bias.dtype,
+                    device=head.bias.device,
+                )
             )
-            policy.action_head.weight[value].copy_(old_action_weight[base])
-            policy.action_head.bias[value].copy_(
-                old_action_bias[base] - 1.25 * semantic_bits
-            )
+        policy.action_residual_head.weight.zero_()
+        policy.action_residual_head.bias.zero_()
+        # PPO trains the v2 critic in fixed scaled-reward units.  Preserve the
+        # published value estimate while changing units instead of beginning
+        # with a critic that is twenty times too large.
+        policy.value_head.weight.mul_(float(value_scale))
+        policy.value_head.bias.mul_(float(value_scale))
 
     return {
         "source": str(source_path),
@@ -476,5 +554,6 @@ def initialize_runner_v2_from_published_v1(
         "source_recurrent_size": source_size,
         "target_observation_contract": OBSERVATION_CONTRACT_V2,
         "target_action_count": RUNNER_ACTION_COUNT_V2,
-        "method": "published-v1-overlap-transplant-v1",
+        "method": "published-v1-factor-overlap-transplant-v2",
+        "value_scale": float(value_scale),
     }

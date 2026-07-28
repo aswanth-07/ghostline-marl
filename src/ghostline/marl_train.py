@@ -569,7 +569,11 @@ def _tactical_behavior_warmup(
             nn.utils.clip_grad_norm_(policy.parameters(), 0.5)
             optimizer.step()
             with torch.no_grad():
-                predicted = torch.stack([torch.argmax(head, dim=-1) for head in logits], dim=-1)
+                predicted = select_factorized_actions(
+                    logits,
+                    tensors["intent_target_mask"],
+                    deterministic=True,
+                )
                 final_accuracy = float((predicted == expected).all(dim=-1).float().mean())
             final_loss = float(loss.detach())
             final_entropy = float(entropy.mean().detach())
@@ -692,13 +696,14 @@ def train_security(
     hours: float = 72.0,
     max_steps: int = 0,
     env_count: int = 8,
-    rollout: int = 64,
+    rollout: int = 256,
     epochs: int = 4,
     tiers: str | Iterable[int] = (3, 4, 5, 6),
     recurrent_size: int = 256,
     learning_rate: float = 3e-4,
     gamma: float = SECURITY_REWARD_GAMMA,
-    gae_lambda: float = 0.95,
+    gae_lambda: float = 0.98,
+    reward_scale: float = 0.05,
     clip_ratio: float = 0.2,
     value_coefficient: float = 0.5,
     entropy_coefficient: float = 0.01,
@@ -717,6 +722,8 @@ def train_security(
     bc_warmup_epochs: int = 2,
     bc_warmup_entropy: float = 0.05,
     adaptive_curriculum: bool = True,
+    training_seed_start: int = SECURITY_TRAIN_SEED_START,
+    initial_validation_cursor: int = 0,
 ) -> Path:
     selected_tiers = parse_security_tiers(tiers)
     if env_count < 1 or rollout < 2 or epochs < 1:
@@ -725,12 +732,18 @@ def train_security(
         raise ValueError("hours or max_steps must allow at least one rollout")
     if learning_rate <= 0.0 or not 0.0 < gamma <= 1.0 or not 0.0 <= gae_lambda <= 1.0:
         raise ValueError("learning_rate must be positive and gamma/gae_lambda must be in (0, 1]/[0, 1]")
+    if not 0.0 < reward_scale <= 1.0:
+        raise ValueError("reward_scale must lie in (0, 1]")
     if entropy_coefficient < 0.0 or bc_warmup_entropy < 0.0:
         raise ValueError("entropy coefficients cannot be negative")
     if not 0.0 <= scripted_opponent_fraction <= 1.0:
         raise ValueError("scripted_opponent_fraction must be between zero and one")
     if bc_warmup_steps < 0 or bc_warmup_epochs < 1:
         raise ValueError("bc_warmup_steps >= 0 and bc_warmup_epochs >= 1 are required")
+    if not SECURITY_TRAIN_SEED_START <= training_seed_start < SECURITY_VALIDATION_SEED_START:
+        raise ValueError("security training seed start leaves the training namespace")
+    if initial_validation_cursor < 0:
+        raise ValueError("initial_validation_cursor must be non-negative")
     runner_paths: list[Path] = []
     if runner_checkpoint is not None:
         runner_paths.append(Path(runner_checkpoint))
@@ -831,6 +844,7 @@ def train_security(
         "learning_rate": learning_rate,
         "gamma": gamma,
         "gae_lambda": gae_lambda,
+        "reward_scale": float(reward_scale),
         "clip_ratio": clip_ratio,
         "value_coefficient": value_coefficient,
         "entropy_coefficient": entropy_coefficient,
@@ -844,6 +858,8 @@ def train_security(
         "bc_warmup_epochs": int(bc_warmup_epochs),
         "bc_warmup_entropy": float(bc_warmup_entropy),
         "adaptive_curriculum": bool(adaptive_curriculum),
+        "training_seed_start": int(training_seed_start),
+        "initial_validation_cursor": int(initial_validation_cursor),
         "validation_interval": int(validation_interval),
         "validation_episodes": int(validation_episodes),
         "reward_contract": "bounded-discount-matched-security-v2",
@@ -851,7 +867,7 @@ def train_security(
     }
     resume_payload: dict[str, Any] | None = None
     next_validation = max(validation_interval, validation_interval)
-    validation_cursor = 0
+    validation_cursor = int(initial_validation_cursor)
     if resume and latest_path.exists():
         if init_checkpoint is not None:
             raise RuntimeError("cannot combine a resume checkpoint with --init-model")
@@ -953,7 +969,7 @@ def train_security(
             else None
         ),
         "seed_namespaces": {
-            "training_start": SECURITY_TRAIN_SEED_START,
+            "training_start": int(training_seed_start),
             "validation_start": SECURITY_VALIDATION_SEED_START,
             "final_test_start": SECURITY_FINAL_TEST_SEED_START,
             "final_test_not_consumed_by_training": True,
@@ -992,7 +1008,7 @@ def train_security(
 
     def next_seed() -> int:
         nonlocal seed_cursor
-        value = SECURITY_TRAIN_SEED_START + seed_cursor
+        value = int(training_seed_start) + seed_cursor
         if value >= SECURITY_VALIDATION_SEED_START:
             raise RuntimeError("security training seed namespace exhausted")
         seed_cursor += 1
@@ -1138,9 +1154,8 @@ def train_security(
                         for agent in env.agents
                     }
                     observations, team_rewards, terminations, truncations, infos = env.step(actions)
-                    # The critic predicts the shared team value, so its target
-                    # uses the shared component; the actor is credited with the
-                    # operative's own containment shaping on top of it.
+                    # The agent-specific CTDE critic and actor use the same
+                    # shared outcome plus attributed operative shaping.
                     for agent, agent_reward in team_rewards.items():
                         agent_rewards[env_index, env.agent_name_mapping[agent]] = float(agent_reward)
                     if infos:
@@ -1201,7 +1216,7 @@ def train_security(
                 continuation = (1.0 - dones_np[index].astype(np.float32))[:, None]
                 following = next_values if index == actual_rollout - 1 else values_np[index + 1]
                 delta = (
-                    agent_rewards_np[index]
+                    reward_scale * agent_rewards_np[index]
                     + gamma * following * continuation
                     - values_np[index]
                 )

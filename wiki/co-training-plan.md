@@ -1,15 +1,14 @@
 ---
 title: Ghostline Co-training Plan
 updated: 2026-07-28
-status: proposed
+status: implemented
 ---
 
 # Co-training plan
 
-This page proposes the first campaign that trains the runner and the security
-team in one session. It is suggestive. The measurements are facts and should be
-trusted; the design choices around them are starting points, and a better idea
-that survives the same gates is a better plan.
+This page records the first campaign that trains the runner and the security
+team in one session. The measurements are facts from the target host. The
+implemented choices below are bound into manifests and checkpoints.
 
 ## What is already settled
 
@@ -56,7 +55,7 @@ worse. At an update minibatch of 1024 it is 130.83 ms against 8.53 ms, a factor
 of 15.3. Put collection on cores and the update on the device; do not move
 per-decision inference to the device expecting a gain.
 
-## Horizon before architecture
+## Horizon and credit assignment
 
 The runner decides at 10 Hz. That gives three spans that should be compared
 directly:
@@ -67,20 +66,21 @@ directly:
 | Value horizon, `gamma = 0.995` | 200 | 20 s |
 | Observed episode length | 814 - 2250 | 81 - 225 s |
 
-A hack whose payoff arrives 30 seconds later has **no gradient path** to the
-decision that caused it, and `gamma` has already discounted it to 22%. This is
-the binding constraint on learning delayed consequences, and it is not a
-capacity problem: a larger network with a 12.8-second gradient window learns
-the same delayed structure as a small one, which is to say none.
+A short recurrent rollout limits the memory features that truncated
+backpropagation can train. Direct reward propagation is separately controlled
+by GAE through `gamma * lambda`, while the critic and potential-based progress
+reward bridge consequences beyond one rollout. Treating the recurrent window
+as the only credit horizon conflates those mechanisms.
 
-Suggested first moves, cheapest first:
+The implemented baseline therefore changes the coupled set rather than only
+one number:
 
-- Raise `rollout` toward 384 or 512. This is the single most direct change.
-- Raise runner `gamma` toward 0.997 or 0.999, lifting credit surviving 30
-  seconds from 22% to 41% or 74%.
-- Only then evaluate capacity: a wider recurrent core, or attention over a
-  window of recent observations, measured against the horizon fix alone at
-  equal environment steps.
+- runner rollout `512`, `gamma = 0.999`, and `lambda = 0.98`;
+- security rollout `192`, because contact, interception, and damage feedback
+  arrive faster than runner mission completion;
+- fixed reward scale `0.05` for both critics, with raw reward ledgers unchanged;
+- the published runner value head is rescaled during transplant so it begins in
+  the same units as the v2 critic.
 
 Two interactions are worth planning around rather than discovering:
 
@@ -95,7 +95,7 @@ back can be evicted by nearer content. That eviction is the gap recurrent memory
 has to bridge, and it is a fair reason to revisit capacity **after** the horizon
 can carry a gradient far enough to train it.
 
-## Simultaneous training against an opponent pool
+## Concurrent training against a frozen opponent pool
 
 The goal is one session in which both sides improve. The known failure mode of
 naive simultaneous play is cycling: each side overfits the other's current
@@ -103,23 +103,20 @@ policy, gains evaporate when the opponent moves, and the metrics stay busy while
 nothing improves. An opponent pool is the standard mitigation and preserves the
 single session.
 
-A sketch, offered as a starting point:
+`ghostline co-train-v2` runs runner PPO and security MAPPO concurrently. Within
+one generation, both opponents are immutable. After both processes finish,
+only held-out-selected `best.pt` / `champion.pt` checkpoints enter the next
+generation's uniform pool. The current generation can never see the other
+current process's output. This is block-frozen league training: it retains
+parallel wall-clock use without violating either learner's on-policy assumption
+or chasing a policy that moves mid-rollout.
 
-- Step one shared episode. Both sides act on the same simulation, so no
-  duplicated stepping and no drift between two copies of the world.
-- Sample each side's opponent per episode from a mixture of the live opponent
-  and frozen snapshots. A live fraction somewhere around a third to a half keeps
-  co-adaptation moving without letting either side chase a target that has
-  already moved.
-- Admit a snapshot to the pool on a validation result, not on a step count, so
-  the pool is a record of things that actually worked.
-- Record the opponent identity per episode in the manifest. Without it a
-  co-training run cannot be reproduced or attributed, which is most of why
-  simultaneous play acquired its reputation.
-
-Pool sampling can be uniform, recency-weighted, or prioritized by win rate
-against the current policy. Uniform is the honest baseline; anything fancier
-should have to beat it.
+Generation zero transplants the immutable published-v1 runner and behavior
+clones the tactical security controller. Later generations initialize from the
+previous selected checkpoint and replay every admitted opponent plus the
+scripted security fraction. Training and validation seed windows are disjoint
+between generations. Every command, PID, opponent hash, metric tail, selected
+checkpoint, and output hash is written to `session.json`.
 
 Alternating frozen turns remain the reproducible fallback and the natural
 control: if co-training does not beat it at equal environment steps, that is a
@@ -152,3 +149,19 @@ so the diagnostics matter as much as the result:
   device placement are both changing.
 - Held-out evaluation from the disjoint namespaces; a co-trained result may not
   borrow acceptance from any earlier campaign.
+
+The intended first campaign is 48 wall-clock hours over three 16-hour
+generations. The measured concurrent rates are approximately 929 runner
+decisions/s and 100 security agent-decisions/s. That budget supplies roughly
+15-17 million security decisions after validation and warm-up, covering the
+14-million security target with contingency. Monitoring uses an ordinary
+sleep/poll loop between one and sixty seconds; no scheduled task is involved.
+
+The algorithm choices follow PPO and GAE, the MAPPO parameter-sharing and CTDE
+baseline, policy-invariant potential shaping, and frozen league practice:
+
+- https://arxiv.org/abs/1707.06347
+- https://arxiv.org/abs/1506.02438
+- https://arxiv.org/abs/2103.01955
+- https://ai.stanford.edu/~ang/papers/shaping-icml99.ps
+- https://deepmind.google/blog/alphastar-grandmaster-level-in-starcraft-ii/

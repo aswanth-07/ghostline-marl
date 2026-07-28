@@ -66,7 +66,7 @@ from ghostline.types_v2 import (
 )
 
 
-TRAINER_CONTRACT_V2 = "ghostline-runner-recurrent-ppo-v2.1"
+TRAINER_CONTRACT_V2 = "ghostline-runner-recurrent-ppo-v2.2"
 EXPERIMENT_MANIFEST_CONTRACT = "ghostline-runner-v2-experiment-manifest-v1"
 CHECKPOINT_VERSION = 2
 OBSERVATION_KEYS_V2 = (
@@ -320,13 +320,14 @@ class RunnerPPOConfig:
 
     seed: int = 7
     envs: int = 8
-    rollout: int = 128
+    rollout: int = 512
     epochs: int = 4
     minibatch_envs: int = 2
     recurrent_size: int = 384
     learning_rate: float = 2.5e-4
-    gamma: float = 0.995
-    gae_lambda: float = 0.95
+    gamma: float = 0.999
+    gae_lambda: float = 0.98
+    reward_scale: float = 0.05
     clip_ratio: float = 0.2
     value_clip_ratio: float = 0.2
     value_coefficient: float = 0.5
@@ -367,6 +368,8 @@ class RunnerPPOConfig:
             raise ValueError("gamma must lie in (0, 1]")
         if not 0.0 <= self.gae_lambda <= 1.0:
             raise ValueError("gae_lambda must lie in [0, 1]")
+        if not 0.0 < self.reward_scale <= 1.0:
+            raise ValueError("reward_scale must lie in (0, 1]")
         if not 0.0 < self.clip_ratio < 1.0:
             raise ValueError("clip_ratio must lie in (0, 1)")
         if not 0.0 < self.value_clip_ratio < 1.0:
@@ -475,6 +478,7 @@ class ScheduledRunnerEnv(gym.Wrapper):
         security_opponent_paths: Sequence[str] = (),
         security_opponent_sha256: Sequence[str] = (),
         security_pool_salt: int = 0,
+        reward_gamma: float = 0.999,
     ):
         if not 0 <= rank < env_count:
             raise ValueError("rank must lie in 0..env_count-1")
@@ -507,6 +511,9 @@ class ScheduledRunnerEnv(gym.Wrapper):
                     f"security opponent checkpoint changed before worker start: {path}"
                 )
         self.security_pool_salt = int(security_pool_salt)
+        self.reward_gamma = float(reward_gamma)
+        if not 0.0 < self.reward_gamma <= 1.0:
+            raise ValueError("reward_gamma must lie in (0, 1]")
         self.next_seed = self.training_seed_start + self.rank
         self.current_seed: int | None = None
         self.current_tier: int | None = None
@@ -524,11 +531,13 @@ class ScheduledRunnerEnv(gym.Wrapper):
                 security_pool_salt=self.security_pool_salt,
                 seed=initial_seed,
                 tier=self.tiers[0],
+                reward_gamma=self.reward_gamma,
             )
         else:
             environment = GhostlineEnvV2(
                 seed=initial_seed,
                 tier=self.tiers[0],
+                reward_gamma=self.reward_gamma,
             )
         super().__init__(environment)
 
@@ -685,6 +694,7 @@ class RunnerEnvFactory:
     security_opponent_paths: tuple[str, ...]
     security_opponent_sha256: tuple[str, ...]
     security_pool_salt: int
+    reward_gamma: float
 
     def __call__(self) -> ScheduledRunnerEnv:
         return ScheduledRunnerEnv(
@@ -699,6 +709,7 @@ class RunnerEnvFactory:
             security_opponent_paths=self.security_opponent_paths,
             security_opponent_sha256=self.security_opponent_sha256,
             security_pool_salt=self.security_pool_salt,
+            reward_gamma=self.reward_gamma,
         )
 
 
@@ -721,6 +732,7 @@ def make_runner_vector_env(
             security_opponent_paths=config.security_opponent_paths,
             security_opponent_sha256=config.security_opponent_sha256,
             security_pool_salt=config.security_pool_salt,
+            reward_gamma=config.gamma,
         )
         for rank in range(config.envs)
     ]
@@ -864,22 +876,24 @@ def runner_sequence_outputs(
     else:
         outputs: list[torch.Tensor] = []
         next_hidden = hidden
-        for index in range(time_steps):
-            reset = reset_mask[index].to(encoded.device).bool()
-            if reset.any() and next_hidden is not None:
+        boundaries = torch.nonzero(
+            reset_mask.to(encoded.device).bool().any(dim=1),
+            as_tuple=False,
+        ).flatten().tolist()
+        starts = sorted({0, *boundaries, time_steps})
+        for start, end in zip(starts[:-1], starts[1:], strict=True):
+            reset = reset_mask[start].to(encoded.device).bool()
+            if bool(reset.any()) and next_hidden is not None:
                 next_hidden = next_hidden.clone()
                 next_hidden[:, reset, :] = 0.0
             output, next_hidden = policy.core(
-                encoded[:, index : index + 1],
+                encoded[:, start:end],
                 next_hidden,
             )
             outputs.append(output)
         sequence = torch.cat(outputs, dim=1)
     latent = sequence.transpose(0, 1)
-    logits = policy._masked_logits(
-        policy.action_head(policy.policy_decoder(latent)),
-        observation["action_mask"],
-    )
+    logits = policy.action_logits(latent, observation["action_mask"])
     values = policy.value_head(
         policy.value_decoder(latent)
     ).squeeze(-1)
@@ -993,6 +1007,7 @@ def collect_rollout(
     gamma: float,
     gae_lambda: float,
     device: torch.device,
+    reward_scale: float = 1.0,
 ) -> RunnerRollout:
     """Collect one vector rollout while preserving exact GRU reset semantics."""
 
@@ -1050,7 +1065,7 @@ def collect_rollout(
     rewards_array = np.stack(rewards).astype(np.float32)
     dones_array = np.stack(dones).astype(bool)
     advantages, returns = compute_gae(
-        rewards_array,
+        rewards_array * float(reward_scale),
         values_array,
         dones_array,
         bootstrap_value.cpu().numpy(),
@@ -1844,7 +1859,11 @@ def initialize_fresh_policy(
     if published_v1_init is not None:
         source = Path(published_v1_init)
         policy = RunnerPolicyV2(recurrent_size=config.recurrent_size).to(device)
-        report = initialize_runner_v2_from_published_v1(policy, source)
+        report = initialize_runner_v2_from_published_v1(
+            policy,
+            source,
+            value_scale=config.reward_scale,
+        )
         return policy.train(), {
             **report,
             "source": str(source.resolve()),
@@ -1899,6 +1918,7 @@ def train(
         learning_rate=args.learning_rate,
         gamma=args.gamma,
         gae_lambda=args.gae_lambda,
+        reward_scale=float(getattr(args, "reward_scale", 0.05)),
         clip_ratio=args.clip_ratio,
         value_clip_ratio=args.value_clip_ratio,
         value_coefficient=args.value_coefficient,
@@ -2129,6 +2149,7 @@ def train(
                 rollout_steps=config.rollout,
                 gamma=config.gamma,
                 gae_lambda=config.gae_lambda,
+                reward_scale=config.reward_scale,
                 device=device,
             )
             diagnostics = ppo_update(
@@ -2310,13 +2331,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--envs", type=int, default=8)
-    parser.add_argument("--rollout", type=int, default=128)
+    parser.add_argument("--rollout", type=int, default=512)
     parser.add_argument("--epochs", type=int, default=4)
     parser.add_argument("--minibatch-envs", type=int, default=2)
     parser.add_argument("--recurrent-size", type=int, choices=(256, 384, 512), default=384)
     parser.add_argument("--learning-rate", type=float, default=2.5e-4)
-    parser.add_argument("--gamma", type=float, default=0.995)
-    parser.add_argument("--gae-lambda", type=float, default=0.95)
+    parser.add_argument("--gamma", type=float, default=0.999)
+    parser.add_argument("--gae-lambda", type=float, default=0.98)
+    parser.add_argument("--reward-scale", type=float, default=0.05)
     parser.add_argument("--clip-ratio", type=float, default=0.2)
     parser.add_argument("--value-clip-ratio", type=float, default=0.2)
     parser.add_argument("--value-coefficient", type=float, default=0.5)

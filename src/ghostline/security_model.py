@@ -27,7 +27,7 @@ SECURITY_ACTION_SIZES = (
 )
 SECURITY_MASK_KEYS = ("intent_mask", "target_mask", "message_mask", "ability_mask")
 SECURITY_CONDITIONAL_MASK_KEY = "intent_target_mask"
-SECURITY_MODEL_CONTRACT_VERSION = "shared-security-actor-critic-v4"
+SECURITY_MODEL_CONTRACT_VERSION = "shared-security-actor-critic-v5"
 SECURITY_FINGERPRINT_FILES = (
     "config.py",
     "config_v2.py",
@@ -141,6 +141,11 @@ class SharedSecurityActorCritic(nn.Module):
             nn.ELU(),
             nn.LayerNorm(320),
         )
+        # Parameter sharing should not blur patrol, interceptor, and suppressor
+        # behaviour.  The first three ego values are a public role one-hot; a
+        # small FiLM modulation gives role an explicit route into every fused
+        # feature while preserving a shared policy and decentralized execution.
+        self.role_film = orthogonal_(nn.Linear(3, 320 * 2), 0.10)
         self.actor_core = nn.GRU(320, self.recurrent_size, batch_first=True)
         for name, parameter in self.actor_core.named_parameters():
             if "weight" in name:
@@ -158,7 +163,10 @@ class SharedSecurityActorCritic(nn.Module):
         # Targets are a variable semantic set. A learned pointer preserves each
         # slot's geometry and kind; pooling them and predicting a fixed index
         # loses the very row the target factor is meant to select.
-        self.target_query = orthogonal_(nn.Linear(192, 48), 0.01)
+        self.target_query = orthogonal_(
+            nn.Linear(192, SECURITY_ACTION_SIZES[0] * 48),
+            0.01,
+        )
         self.message_head = orthogonal_(nn.Linear(192, SECURITY_ACTION_SIZES[2]), 0.01)
         self.ability_head = orthogonal_(nn.Linear(192, SECURITY_ACTION_SIZES[3]), 0.01)
 
@@ -192,7 +200,13 @@ class SharedSecurityActorCritic(nn.Module):
         teammates = self.teammate_encoder(observation["teammates"], observation["teammate_mask"])
         targets = self.target_encoder(observation["targets"], observation["target_mask"])
         radio = self.radio_encoder(observation["radio"], observation["radio_mask"])
-        return self.actor_fusion(torch.cat((local, ego, runner, teammates, targets, radio), dim=-1))
+        fused = self.actor_fusion(
+            torch.cat((local, ego, runner, teammates, targets, radio), dim=-1)
+        )
+        scale, shift = self.role_film(
+            observation["ego"].float()[..., :3]
+        ).chunk(2, dim=-1)
+        return fused * (1.0 + scale) + shift
 
     @staticmethod
     def _mask_logits(logits: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -213,20 +227,34 @@ class SharedSecurityActorCritic(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         decoded = self.actor_decoder(latent)
         target_items = self.target_encoder.encode_items(observation["targets"])
-        target_query = self.target_query(decoded)
+        target_query = self.target_query(decoded).reshape(
+            *decoded.shape[:-1],
+            SECURITY_ACTION_SIZES[0],
+            48,
+        )
         target_logits = torch.sum(
-            target_items * target_query.unsqueeze(-2),
+            target_items.unsqueeze(-3) * target_query.unsqueeze(-2),
             dim=-1,
         ) / float(target_items.shape[-1]) ** 0.5
-        raw = (
+        intent_logits = self._mask_logits(
             self.intent_head(decoded),
-            target_logits,
-            self.message_head(decoded),
-            self.ability_head(decoded),
+            observation["intent_mask"],
         )
-        return tuple(
-            self._mask_logits(logits, observation[mask_key])
-            for logits, mask_key in zip(raw, SECURITY_MASK_KEYS, strict=True)
+        target_logits = self._mask_logits(
+            target_logits,
+            observation["target_mask"].unsqueeze(-2).expand_as(target_logits),
+        )
+        return (
+            intent_logits,
+            target_logits,
+            self._mask_logits(
+                self.message_head(decoded),
+                observation["message_mask"],
+            ),
+            self._mask_logits(
+                self.ability_head(decoded),
+                observation["ability_mask"],
+            ),
         )
 
     def forward_actor(
@@ -254,12 +282,20 @@ class SharedSecurityActorCritic(nn.Module):
         else:
             outputs: list[torch.Tensor] = []
             next_hidden = hidden
-            for index in range(time_steps):
-                reset = reset_mask[index].bool()
-                if reset.any() and next_hidden is not None:
+            boundaries = torch.nonzero(
+                reset_mask.bool().any(dim=1),
+                as_tuple=False,
+            ).flatten().tolist()
+            starts = sorted({0, *boundaries, time_steps})
+            for start, end in zip(starts[:-1], starts[1:], strict=True):
+                reset = reset_mask[start].bool()
+                if bool(reset.any()) and next_hidden is not None:
                     next_hidden = next_hidden.clone()
                     next_hidden[:, reset, :] = 0.0
-                output, next_hidden = self.actor_core(encoded[:, index : index + 1], next_hidden)
+                output, next_hidden = self.actor_core(
+                    encoded[:, start:end],
+                    next_hidden,
+                )
                 outputs.append(output)
             sequence = torch.cat(outputs, dim=1)
         latent = sequence.transpose(0, 1)
@@ -322,6 +358,22 @@ def _conditional_target_logits(
     intent_target_mask: torch.Tensor,
 ) -> torch.Tensor:
     target_count = target_logits.shape[-1]
+    # Current policies emit one target-pointer distribution per intent.  The
+    # fallback branch keeps this helper useful for explicit test logits and
+    # historical diagnostics that provide one shared target vector.
+    if (
+        target_logits.ndim >= 2
+        and target_logits.shape[-2] == intent_target_mask.shape[-2]
+    ):
+        target_logits = torch.gather(
+            target_logits,
+            dim=-2,
+            index=intents.unsqueeze(-1).unsqueeze(-1).expand(
+                *intents.shape,
+                1,
+                target_count,
+            ),
+        ).squeeze(-2)
     selected_mask = torch.gather(
         intent_target_mask,
         dim=-2,
@@ -393,6 +445,16 @@ def factorized_log_prob(
             actions[..., 0],
             intent_target_mask,
         )
+    elif target_logits.ndim == actions.ndim + 1:
+        target_logits = torch.gather(
+            target_logits,
+            dim=-2,
+            index=actions[..., 0].unsqueeze(-1).unsqueeze(-1).expand(
+                *actions.shape[:-1],
+                1,
+                target_logits.shape[-1],
+            ),
+        ).squeeze(-2)
     target_distribution = torch.distributions.Categorical(logits=target_logits)
     log_probability = log_probability + target_distribution.log_prob(actions[..., 1])
     entropy = entropy + target_distribution.entropy()

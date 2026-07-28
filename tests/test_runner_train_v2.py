@@ -306,9 +306,9 @@ def test_auxiliary_labels_are_public_and_share_one_recurrent_traversal() -> None
                 torch.zeros(1, 1, 256),
                 resets,
             )
-        # Reset-aware recurrence calls the GRU once per time step. A separate
-        # auxiliary traversal would double this count.
-        assert recurrent_forward.call_count == 3
+        # Reset-aware recurrence calls the GRU once per reset-delimited chunk.
+        # A separate auxiliary traversal would double this count.
+        assert recurrent_forward.call_count == 2
         assert outputs.logits.shape == (3, 1, RUNNER_ACTION_COUNT_V2)
         assert outputs.values.shape == (3, 1)
         assert outputs.objective_bearing.shape == (3, 1, 2)
@@ -462,7 +462,7 @@ def test_published_v1_warm_start_is_mutually_exclusive_and_provenanced() -> None
         torch.device("cpu"),
     )
     assert policy.recurrent_size == 384
-    assert metadata["method"] == "published-v1-overlap-transplant-v1"
+    assert metadata["method"] == "published-v1-factor-overlap-transplant-v2"
     assert len(metadata["source_sha256"]) == 64
     assert metadata["target_action_count"] == RUNNER_ACTION_COUNT_V2
 
@@ -747,7 +747,7 @@ def test_dry_run_validates_initialization_and_freezes_experiment_manifest(
     assert manifest["public_environment"] == "GhostlineEnv-v2"
     assert manifest["checkpoint_contract"]["action_count"] == 288
     assert manifest["initialization"]["method"] == (
-        "published-v1-overlap-transplant-v1"
+        "published-v1-factor-overlap-transplant-v2"
     )
     assert len(manifest["initialization"]["source_sha256"]) == 64
     assert manifest["budget"]["max_updates"] == 3

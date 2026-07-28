@@ -28,6 +28,7 @@ TRAINING_PATH_MODULES = (
     "ghostline.security_model",
     "ghostline.runner_train_v2",
     "ghostline.marl_train",
+    "ghostline.co_training",
 )
 
 PRESENTATION_MODULES = (

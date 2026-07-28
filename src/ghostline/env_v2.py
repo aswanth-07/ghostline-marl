@@ -27,7 +27,12 @@ from ghostline.config_v2 import (
     QUIET_TRACE_CEILING,
     VENT_TRANSIT_SECONDS,
 )
-from ghostline.env import GhostlineEnv, PerceivedEntity, potential_progress_reward
+from ghostline.env import (
+    GhostlineEnv,
+    PerceivedEntity,
+    PROGRESS_POTENTIAL_SCALE,
+    REWARD_DISCOUNT,
+)
 from ghostline.generation import tile_center, world_to_tile
 from ghostline.simulation import norm
 from ghostline.simulation_v2 import GhostlineSimulationV2
@@ -43,6 +48,22 @@ _RAY_DIRECTIONS = np.stack(
 _RAY_SAMPLE_DISTANCES = np.arange(1, 41, dtype=np.float32) * 8.0
 
 
+def runner_potential_progress_reward(
+    previous: float,
+    current: float,
+    *,
+    gamma: float,
+    terminal: bool = False,
+) -> float:
+    """Discount-matched mission shaping with a zero terminal potential."""
+
+    next_potential = 0.0 if terminal else float(current)
+    return float(
+        PROGRESS_POTENTIAL_SCALE
+        * (float(gamma) * next_potential - float(previous))
+    )
+
+
 class GhostlineEnvV2(GhostlineEnv):
     """Player-equivalent v2 contract with directives and field systems."""
 
@@ -54,9 +75,13 @@ class GhostlineEnvV2(GhostlineEnv):
         tier: int = 1,
         directive: ContractDirective | str | int = ContractDirective.STANDARD,
         external_security: bool = False,
+        reward_gamma: float = REWARD_DISCOUNT,
     ):
         self.directive = ContractDirective.parse(directive)
         self.external_security = bool(external_security)
+        self.reward_gamma = float(reward_gamma)
+        if not 0.0 < self.reward_gamma <= 1.0:
+            raise ValueError("reward_gamma must lie in (0, 1]")
         self._directive_par_seconds = 1.0
         super().__init__(render_mode=render_mode, seed=seed, tier=tier)
         self.action_space = spaces.Discrete(RUNNER_ACTION_COUNT_V2)
@@ -135,12 +160,18 @@ class GhostlineEnvV2(GhostlineEnv):
         before_explored = int(np.count_nonzero(self.sim.explored))
         self.sim.advance(decoded, ticks=POLICY_REPEAT)
         self._trace_history.append(self.sim.trace)
+        terminal = bool(self.sim.terminated or self.sim.truncated)
         potential = self._mission_potential()
 
         components = self._empty_rewards()
         components["extraction"] = 20.0 if self.sim.extracted else 0.0
         components["data"] = min(6.0, max(0, self.sim.data - before_data) * 1.5)
-        components["progress"] = potential_progress_reward(self._previous_potential, potential)
+        components["progress"] = runner_potential_progress_reward(
+            self._previous_potential,
+            potential,
+            gamma=self.reward_gamma,
+            terminal=terminal,
+        )
         newly_explored = max(0, int(np.count_nonzero(self.sim.explored)) - before_explored)
         components["exploration"] = min(0.08, newly_explored * 0.008)
         components["trace"] = -0.006 * max(0.0, self.sim.trace - before_trace)
@@ -181,7 +212,7 @@ class GhostlineEnvV2(GhostlineEnv):
         reward = float(sum(components.values()))
         for key, value in components.items():
             self.reward_components[key] += value
-        self._previous_potential = potential
+        self._previous_potential = 0.0 if terminal else potential
         info = self._info()
         if self.sim.terminated or self.sim.truncated:
             for key, value in self.reward_components.items():

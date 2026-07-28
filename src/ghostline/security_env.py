@@ -58,7 +58,8 @@ TARGET_FEATURES = SECURITY_TARGET_FEATURES
 CENTRAL_STATE_SIZE = SECURITY_CENTRAL_STATE_SIZE
 SECURITY_REWARD_GAMMA = 0.999
 SECURITY_FORMATION_PENALTY_CAP = 0.04
-SECURITY_AGENT_SHAPING_CAP = 0.25
+SECURITY_AGENT_SHAPING_CAP = 0.35
+SECURITY_AGENT_CONTACT_CREDIT = 0.10
 SECURITY_REWARD_COMPONENT_BOUNDS: dict[str, tuple[float, float]] = {
     "damage": (0.0, 15.0),
     "contact_acquisition": (0.0, 0.30),
@@ -139,6 +140,7 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         self._invalid_actions = 0
         self._last_reward_components: dict[str, float] = {}
         self._last_agent_shaping: dict[str, float] = {}
+        self._last_agent_reward_components: dict[str, dict[str, float]] = {}
         self._current_observations: dict[str, dict[str, np.ndarray]] = {}
         self._plane_signature: tuple[Any, ...] | None = None
         self._plane_cache: np.ndarray | None = None
@@ -172,6 +174,7 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         self._invalid_actions = 0
         self._last_reward_components = {}
         self._last_agent_shaping = {}
+        self._last_agent_reward_components = {}
         self._plane_signature = None
         self._plane_cache = None
         self._credited_contact_guards.clear()
@@ -247,18 +250,30 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         # containment shaping is attributed to the operative that earned it.
         after_agent_potentials = {} if terminal else self._agent_potentials()
         self._last_agent_shaping = {}
+        self._last_agent_reward_components = {}
         rewards: dict[str, float] = {}
         for agent in active_agents:
             guard_id = self.agent_name_mapping[agent]
             before_value = before_agent_potentials.get(guard_id, 0.0)
             after_value = after_agent_potentials.get(guard_id, 0.0)
-            shaping = float(
+            potential_shaping = float(
                 np.clip(
                     self.reward_gamma * after_value - before_value,
                     -SECURITY_AGENT_SHAPING_CAP,
                     SECURITY_AGENT_SHAPING_CAP,
                 )
             )
+            contact_credit = (
+                SECURITY_AGENT_CONTACT_CREDIT
+                if guard_id in new_contacts
+                else 0.0
+            )
+            shaping = float(potential_shaping + contact_credit)
+            self._last_agent_reward_components[agent] = {
+                "potential": potential_shaping,
+                "contact_credit": contact_credit,
+                "total": shaping,
+            }
             self._last_agent_shaping[agent] = float(shaping)
             rewards[agent] = float(reward + shaping)
 
@@ -347,7 +362,7 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
         return {
             guard.guard_id: float(
                 np.clip(
-                    0.15 * self._interception_score(guard) + 0.10 * guard.awareness,
+                    0.20 * self._interception_score(guard) + 0.15 * guard.awareness,
                     0.0,
                     SECURITY_AGENT_SHAPING_CAP,
                 )
@@ -892,6 +907,16 @@ class GhostlineSecurityParallelEnv(ParallelEnv):
             "invalid_actions": self._invalid_actions,
             "reward_components": dict(self._last_reward_components),
             "agent_shaping": float(self._last_agent_shaping.get(agent, 0.0)),
+            "agent_reward_components": dict(
+                self._last_agent_reward_components.get(
+                    agent,
+                    {
+                        "potential": 0.0,
+                        "contact_credit": 0.0,
+                        "total": 0.0,
+                    },
+                )
+            ),
             "interception": float(self._interception_score(guard)),
         }
 

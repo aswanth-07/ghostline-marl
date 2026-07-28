@@ -1,11 +1,11 @@
 {
-  "environment_fingerprint": "be4a280a0d629cadabec08d038497eef331a14650c3e5fd23e97d4afca61efdd",
+  "environment_fingerprint": "e29c45e7aaa4060c67bbf3dab1b77635e64f2e01567fd62166ac0157a55db828",
   "manifest_contract": "ghostline-final-test-slices-v1",
   "observation_contract": "GhostlineEnv-v2",
   "policy": "This is a one-way final-test ledger. The evaluator locks a slice before its first episode and marks it consumed or aborted-retired after any attempt. There is no overwrite or reopen path.",
   "slices": [
     {
-      "environment_fingerprint": "be4a280a0d629cadabec08d038497eef331a14650c3e5fd23e97d4afca61efdd",
+      "environment_fingerprint": "e29c45e7aaa4060c67bbf3dab1b77635e64f2e01567fd62166ac0157a55db828",
       "episodes_per_tier": 500,
       "note": "Reserved for the selected held-out v2 runner champion after all training, validation, reward, curriculum, and opponent decisions are frozen.",
       "policy_kind": "runner-v2-neural:standard,ghost,speed,greed",

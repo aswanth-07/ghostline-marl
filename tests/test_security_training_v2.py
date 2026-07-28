@@ -245,6 +245,59 @@ def test_intent_target_sampling_and_log_probability_use_the_same_joint_mask() ->
     env.close()
 
 
+def test_security_reset_boundary_chunking_matches_stepwise_gru() -> None:
+    env = GhostlineSecurityParallelEnv(
+        tier=6,
+        seed=20_600_016,
+        runner=_stationary_runner,
+    )
+    observations, _ = env.reset(seed=20_600_016)
+    agents = env.agents[:2]
+    policy = SharedSecurityActorCritic(recurrent_size=256)
+    time_steps = 7
+    sequence = {
+        key: torch.as_tensor(
+            np.stack(
+                [
+                    np.stack([observations[agent][key] for agent in agents])
+                    for _ in range(time_steps)
+                ]
+            )
+        )
+        for key in marl_train.ACTOR_OBS_KEYS
+    }
+    resets = torch.zeros(time_steps, len(agents), dtype=torch.bool)
+    resets[0] = True
+    resets[3, 1] = True
+    initial = torch.zeros(1, len(agents), 256)
+    with torch.no_grad():
+        sequence_logits, sequence_hidden = policy.forward_actor_sequence(
+            sequence,
+            initial,
+            resets,
+        )
+        hidden = initial
+        step_heads: list[list[torch.Tensor]] = [[], [], [], []]
+        for index in range(time_steps):
+            if resets[index].any():
+                hidden = hidden.clone()
+                hidden[:, resets[index], :] = 0.0
+            heads, hidden = policy.forward_actor(
+                {key: value[index] for key, value in sequence.items()},
+                hidden,
+            )
+            for factor, head in enumerate(heads):
+                step_heads[factor].append(head)
+    for factor, head in enumerate(sequence_logits):
+        assert torch.allclose(
+            head,
+            torch.stack(step_heads[factor]),
+            atol=1e-6,
+        )
+    assert torch.allclose(sequence_hidden, hidden, atol=1e-6)
+    env.close()
+
+
 def test_repeated_hold_under_continuous_contact_cannot_farm_detection_reward(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -308,8 +361,13 @@ def test_reward_ledger_is_exact_and_formation_cost_is_bounded() -> None:
         abs=1e-9,
     )
     for agent, reward in rewards.items():
+        agent_components = infos[agent]["agent_reward_components"]
+        assert agent_components["total"] == pytest.approx(
+            agent_components["potential"]
+            + agent_components["contact_credit"]
+        )
         assert reward == pytest.approx(
-            components["total"] + infos[agent]["agent_shaping"],
+            components["total"] + agent_components["total"],
             abs=1e-9,
         )
     env.close()

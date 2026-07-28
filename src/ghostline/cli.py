@@ -21,7 +21,7 @@ def _add_runner_v2_training_arguments(
     parser.add_argument("--allow-scratch", action="store_true")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--envs", type=int, default=8)
-    parser.add_argument("--rollout", type=int, default=128)
+    parser.add_argument("--rollout", type=int, default=512)
     parser.add_argument("--epochs", type=int, default=4)
     parser.add_argument("--minibatch-envs", type=int, default=2)
     parser.add_argument(
@@ -31,8 +31,9 @@ def _add_runner_v2_training_arguments(
         default=384,
     )
     parser.add_argument("--learning-rate", type=float, default=2.5e-4)
-    parser.add_argument("--gamma", type=float, default=0.995)
-    parser.add_argument("--gae-lambda", type=float, default=0.95)
+    parser.add_argument("--gamma", type=float, default=0.999)
+    parser.add_argument("--gae-lambda", type=float, default=0.98)
+    parser.add_argument("--reward-scale", type=float, default=0.05)
     parser.add_argument("--clip-ratio", type=float, default=0.2)
     parser.add_argument("--value-clip-ratio", type=float, default=0.2)
     parser.add_argument("--value-coefficient", type=float, default=0.5)
@@ -128,15 +129,28 @@ def build_parser() -> argparse.ArgumentParser:
     train_security.add_argument("--hours", type=float, default=72.0)
     train_security.add_argument("--max-steps", type=int, default=0)
     train_security.add_argument("--envs", type=int, default=8)
-    train_security.add_argument("--rollout", type=int, default=64)
+    train_security.add_argument("--rollout", type=int, default=256)
     train_security.add_argument("--epochs", type=int, default=4)
     train_security.add_argument("--tiers", default="3,4,5,6")
     train_security.add_argument("--recurrent-size", type=int, choices=(256, 384), default=256)
     train_security.add_argument("--learning-rate", type=float, default=3e-4)
+    train_security.add_argument("--gamma", type=float, default=0.999)
+    train_security.add_argument("--gae-lambda", type=float, default=0.98)
+    train_security.add_argument("--reward-scale", type=float, default=0.05)
     train_security.add_argument("--entropy-coefficient", type=float, default=0.01)
     train_security.add_argument("--device")
     train_security.add_argument("--validation-interval", type=int, default=100_000)
     train_security.add_argument("--validation-episodes", type=int, default=20)
+    train_security.add_argument(
+        "--training-seed-start",
+        type=int,
+        default=10_000_000,
+    )
+    train_security.add_argument(
+        "--initial-validation-cursor",
+        type=int,
+        default=0,
+    )
     train_security.add_argument("--bc-warmup-steps", type=int, default=10_000)
     train_security.add_argument("--bc-warmup-epochs", type=int, default=2)
     train_security.add_argument("--bc-warmup-entropy", type=float, default=0.05)
@@ -168,6 +182,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="initialize a fresh optimizer from a compatible security policy checkpoint",
     )
     train_security.add_argument("--scripted-runner", action="store_true")
+    co_train = subparsers.add_parser(
+        "co-train-v2",
+        help="Train runner PPO and security MAPPO concurrently against frozen league snapshots",
+    )
+    co_train.add_argument(
+        "--output",
+        type=Path,
+        default=Path("artifacts/v2-cotraining"),
+    )
+    co_train.add_argument(
+        "--published-runner",
+        type=Path,
+        default=Path("models/ghostline-policy.pt"),
+    )
+    co_train.add_argument("--hours", type=float, default=24.0)
+    co_train.add_argument("--generations", type=int, default=3)
+    co_train.add_argument("--runner-envs", type=int, default=16)
+    co_train.add_argument("--security-envs", type=int, default=8)
+    co_train.add_argument("--runner-rollout", type=int, default=512)
+    co_train.add_argument("--security-rollout", type=int, default=192)
+    co_train.add_argument("--monitor-seconds", type=float, default=30.0)
+    co_train.add_argument("--runner-max-decisions", type=int, default=0)
+    co_train.add_argument("--security-max-steps", type=int, default=0)
+    co_train.add_argument("--dry-run", action="store_true")
     evaluate = subparsers.add_parser(
         "evaluate",
         help="Consume one explicitly reserved final-test slice exactly once",
@@ -415,6 +453,9 @@ def main() -> None:
                 tiers=args.tiers,
                 recurrent_size=args.recurrent_size,
                 learning_rate=args.learning_rate,
+                gamma=args.gamma,
+                gae_lambda=args.gae_lambda,
+                reward_scale=args.reward_scale,
                 entropy_coefficient=args.entropy_coefficient,
                 device=args.device,
                 validation_interval=args.validation_interval,
@@ -433,6 +474,8 @@ def main() -> None:
                 ),
                 init_checkpoint=args.init_model,
                 scripted_opponent_fraction=args.scripted_opponent_fraction,
+                training_seed_start=args.training_seed_start,
+                initial_validation_cursor=args.initial_validation_cursor,
             )
         )
         return
@@ -465,6 +508,27 @@ def main() -> None:
                 slice_manifest=args.slice_manifest,
             )
         )
+        return
+    if command == "co-train-v2":
+        from ghostline.co_training import CoTrainingConfig, run_co_training
+
+        result = run_co_training(
+            CoTrainingConfig(
+                output=args.output.resolve(),
+                published_runner=args.published_runner.resolve(),
+                hours=args.hours,
+                generations=args.generations,
+                runner_envs=args.runner_envs,
+                security_envs=args.security_envs,
+                runner_rollout=args.runner_rollout,
+                security_rollout=args.security_rollout,
+                monitor_seconds=args.monitor_seconds,
+                runner_max_decisions=args.runner_max_decisions,
+                security_max_steps=args.security_max_steps,
+                dry_run=args.dry_run,
+            )
+        )
+        print(result)
         return
     if command == "evaluate-runner-v2":
         from ghostline.evaluation_v2 import evaluate_runner_v2_checkpoint

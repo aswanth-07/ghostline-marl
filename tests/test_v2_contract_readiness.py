@@ -150,16 +150,12 @@ def test_v2_runner_can_warm_start_from_immutable_published_v1() -> None:
     )
     assert torch.count_nonzero(policy.local_encoder[0].weight[:, 8:]) == 0
     assert torch.equal(
-        policy.action_head.weight[0],
+        policy.base_action_head.weight[0],
         source["model"]["action_head.weight"][0],
     )
-    # Action 36 is the decoy variant of published action zero.
-    assert torch.equal(
-        policy.action_head.weight[36],
-        source["model"]["action_head.weight"][0],
-    )
+    assert torch.count_nonzero(policy.decoy_head.weight) == 0
     assert float(
-        (policy.action_head.bias[36] - policy.action_head.bias[0]).detach()
+        (policy.decoy_head.bias[1] - policy.decoy_head.bias[0]).detach()
     ) == pytest.approx(-1.25)
 
     env = GhostlineEnvV2(seed=12_345, tier=6, directive="ghost")
@@ -190,13 +186,53 @@ def test_v2_runner_can_warm_start_from_immutable_published_v1() -> None:
             }
         )
     assert torch.allclose(v2_logits[:, :36], published_logits, atol=1e-5)
-    assert torch.allclose(v2_value, published_value, atol=1e-5)
+    assert torch.allclose(v2_value, published_value * 0.05, atol=1e-5)
     assert torch.allclose(v2_hidden, published_hidden, atol=1e-5)
     env.close()
 
     incompatible = RunnerPolicyV2(recurrent_size=256)
     with pytest.raises(RuntimeError, match="recurrent widths"):
         initialize_runner_v2_from_published_v1(incompatible, checkpoint)
+
+
+def test_v2_runner_action_head_shares_semantics_but_keeps_full_residual_capacity() -> None:
+    policy = RunnerPolicyV2(recurrent_size=256)
+    latent = torch.zeros(2, 256)
+    mask = torch.ones(2, RUNNER_ACTION_COUNT_V2, dtype=torch.int8)
+    with torch.no_grad():
+        policy.action_residual_head.weight.zero_()
+        policy.action_residual_head.bias.zero_()
+        policy.decoy_head.weight.zero_()
+        policy.decoy_head.bias.copy_(torch.tensor((0.0, 0.75)))
+        decoded = policy.policy_decoder(latent)
+        logits = policy.action_logits(latent, mask)
+    assert torch.allclose(
+        logits[:, 36] - logits[:, 0],
+        torch.full((2,), 0.75),
+    )
+    assert decoded.shape == (2, 256)
+
+
+def test_v2_runner_potential_is_discount_matched_and_zero_at_terminal() -> None:
+    from ghostline.env import PROGRESS_POTENTIAL_SCALE
+    from ghostline.env_v2 import runner_potential_progress_reward
+
+    previous, current, gamma = 0.8, 1.4, 0.999
+    ordinary = runner_potential_progress_reward(
+        previous,
+        current,
+        gamma=gamma,
+    )
+    terminal = runner_potential_progress_reward(
+        previous,
+        current,
+        gamma=gamma,
+        terminal=True,
+    )
+    assert ordinary == pytest.approx(
+        PROGRESS_POTENTIAL_SCALE * (gamma * current - previous)
+    )
+    assert terminal == pytest.approx(-PROGRESS_POTENTIAL_SCALE * previous)
 
 
 def test_security_can_use_a_native_v2_runner_checkpoint(tmp_path: Path) -> None:
