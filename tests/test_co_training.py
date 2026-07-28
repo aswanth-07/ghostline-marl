@@ -64,12 +64,12 @@ def test_generation_uses_only_previously_frozen_opponents(tmp_path: Path) -> Non
     ] == "0.003"
     assert plan.runner_command[
         plan.runner_command.index("--ghost-directive-fraction") + 1
-    ] == "0.5"
+    ] == "0.25"
     assert str(plan.runner_output) not in plan.security_command
     assert str(plan.security_output) not in plan.runner_command
     parsed = build_parser().parse_args(list(plan.runner_command[3:]))
     assert parsed.command == "train-runner-v2"
-    assert parsed.ghost_directive_fraction == pytest.approx(0.50)
+    assert parsed.ghost_directive_fraction == pytest.approx(0.25)
 
 
 def test_generations_use_disjoint_training_and_validation_offsets(

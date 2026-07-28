@@ -1003,6 +1003,34 @@ def test_exposure_scales_with_trace_and_quiet_data_earns_a_bonus() -> None:
     env.close()
 
 
+def test_ghost_potential_exposes_irreversible_trace_and_damage_budgets() -> None:
+    """Stealth shaping is immediate, bounded, and unavailable to other directives."""
+
+    ghost = GhostlineEnvV2(seed=3_000_023, tier=3, directive="ghost")
+    ghost.reset(seed=3_000_023)
+    quiet = ghost._mission_potential()
+    ghost.sim.max_trace = 75.0
+    exhausted_trace = ghost._mission_potential()
+    ghost.sim.integrity = 2
+    damaged = ghost._mission_potential()
+
+    assert quiet - exhausted_trace == pytest.approx(8.0)
+    assert exhausted_trace - damaged == pytest.approx(2.0 / 3.0)
+
+    standard = GhostlineEnvV2(
+        seed=3_000_023,
+        tier=3,
+        directive="standard",
+    )
+    standard.reset(seed=3_000_023)
+    before = standard._mission_potential()
+    standard.sim.max_trace = 75.0
+    standard.sim.integrity = 2
+    assert standard._mission_potential() == pytest.approx(before)
+    ghost.close()
+    standard.close()
+
+
 def test_holding_cover_while_crouched_is_not_punished_as_idling() -> None:
     """Waiting out a patrol is a tactic, not stalling."""
 

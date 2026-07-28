@@ -222,7 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
     co_train.add_argument(
         "--runner-ghost-directive-fraction",
         type=float,
-        default=0.50,
+        default=0.25,
     )
     co_train.add_argument("--monitor-seconds", type=float, default=30.0)
     co_train.add_argument("--runner-max-decisions", type=int, default=0)

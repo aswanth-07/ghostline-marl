@@ -82,7 +82,7 @@ class CoTrainingConfig:
     runner_learning_rate: float = 5.0e-5
     runner_entropy_coefficient: float = 0.003
     runner_initial_curriculum_tier: int = 3
-    runner_ghost_directive_fraction: float = 0.50
+    runner_ghost_directive_fraction: float = 0.25
     security_learning_rate: float = 3.0e-4
     gamma: float = 0.999
     gae_lambda: float = 0.98

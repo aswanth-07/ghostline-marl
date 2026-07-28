@@ -178,9 +178,9 @@ point:
 ```powershell
 ghostline train-runner-v2 --output artifacts/runner-v2/preflight --published-v1-init models/ghostline-policy.pt --dry-run --cpu
 ghostline train-runner-v2 --output artifacts/runner-v2/ppo --published-v1-init models/ghostline-policy.pt --envs 16 --rollout 512 --epochs 4 --gamma 0.999 --gae-lambda 0.98 --reward-scale 0.05 --seconds 86400
-ghostline co-train-v2 --output artifacts/v2-cotraining --hours 48 --generations 3 --runner-learning-rate 0.00005 --runner-entropy-coefficient 0.003 --runner-initial-curriculum-tier 3 --runner-ghost-directive-fraction 0.5
+ghostline co-train-v2 --output artifacts/v2-cotraining --hours 48 --generations 3 --runner-learning-rate 0.00005 --runner-entropy-coefficient 0.003 --runner-initial-curriculum-tier 3 --runner-ghost-directive-fraction 0.25
 # Recover an interrupted campaign after verifying its recorded configuration:
-ghostline co-train-v2 --output artifacts/v2-cotraining --hours 48 --generations 3 --runner-learning-rate 0.00005 --runner-entropy-coefficient 0.003 --runner-initial-curriculum-tier 3 --runner-ghost-directive-fraction 0.5 --resume
+ghostline co-train-v2 --output artifacts/v2-cotraining --hours 48 --generations 3 --runner-learning-rate 0.00005 --runner-entropy-coefficient 0.003 --runner-initial-curriculum-tier 3 --runner-ghost-directive-fraction 0.25 --resume
 ```
 
 The optional `--published-v1-init` path verifies the frozen checkpoint and

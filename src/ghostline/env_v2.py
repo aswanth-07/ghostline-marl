@@ -46,6 +46,9 @@ _RAY_DIRECTIONS = np.stack(
     axis=1,
 ).astype(np.float32)
 _RAY_SAMPLE_DISTANCES = np.arange(1, 41, dtype=np.float32) * 8.0
+GHOST_TRACE_LIMIT = 75.0
+GHOST_MAX_INTEGRITY = 3
+GHOST_STEALTH_POTENTIAL_SCALE = 10.0
 
 
 def runner_potential_progress_reward(
@@ -155,11 +158,28 @@ class GhostlineEnvV2(GhostlineEnv):
             self.sim.level.world_width,
             self.sim.level.world_height,
         )
-        return (
+        potential = (
             2.0 * phase
             + 1.0
             - min(1.0, path_distance / max(1.0, diagonal))
         )
+        if self.directive == ContractDirective.GHOST:
+            # The ghost contract depends on irreversible episode outcomes:
+            # maximum trace and damage. Encoding their remaining budgets in
+            # the same discount-matched potential makes the consequence
+            # immediate without adding a repeatable crouch/cover bonus.
+            trace_budget = max(
+                0.0,
+                1.0 - self.sim.max_trace / GHOST_TRACE_LIMIT,
+            )
+            integrity_budget = self.sim.integrity / max(
+                1,
+                GHOST_MAX_INTEGRITY,
+            )
+            potential += GHOST_STEALTH_POTENTIAL_SCALE * (
+                0.8 * trace_budget + 0.2 * integrity_budget
+            )
+        return potential
 
     @property
     def unwrapped_sim(self) -> GhostlineSimulationV2:
