@@ -70,6 +70,17 @@ are archived together.
 
 ## V2 runner learner
 
+The current runner environment fingerprint is
+`01d1b7835d17172edc8dda1158d93e5c24e9362cc3472722b4aee77452c75e8f`.
+Ghost-specialist experiments `r1` through `r3` belong to earlier reward
+fingerprints and are retained only as diagnostics; none may be resumed,
+selected, or reported under the current contract. Their repeated tier-3
+failure showed that discount-matched stealth potential supplied credit timing
+but could not alter the policy optimum. The current Ghost objective therefore
+also charges loud dash decisions and positive security-awareness increments.
+Both signals are visible to the player, are costs only, and cannot be farmed
+by repeatedly leaving and re-entering a vision cone.
+
 The runner uses `RunnerPolicyV2`, a player-equivalent recurrent actor-critic
 with:
 
@@ -142,6 +153,11 @@ cannot pass validation. This prevents reward, observation, mechanics, and
 checkpoint selection from optimizing different tasks.
 
 ## V2 security learner
+
+The shared dependency change binds the security environment to fingerprint
+`97dfb60808aef79add8b9b67992daa03694d8a173c70d2fb1e20687e1d66c7c9`.
+All earlier developmental security checkpoints remain initialization or
+diagnostic evidence only and cannot be selected for this contract.
 
 The security benchmark uses parameter-shared recurrent MAPPO. One actor serves
 all operative roles, but deployment remains decentralized: each agent receives

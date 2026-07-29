@@ -48,9 +48,9 @@ deterministic tactical fallback when no compatible learned policy is present.
 No learned-security or v2-runner acceptance result is claimed yet.
 
 The developmental runner environment is frozen at fingerprint
-`be4a280a0d629cadabec08d038497eef331a14650c3e5fd23e97d4afca61efdd`;
+`01d1b7835d17172edc8dda1158d93e5c24e9362cc3472722b4aee77452c75e8f`;
 the current security learning contract is
-`3574a87dab53cfd2b116f97894e5bfda5a269c976681573b735188efb5b21218`.
+`97dfb60808aef79add8b9b67992daa03694d8a173c70d2fb1e20687e1d66c7c9`.
 Readiness evidence includes 10,000 valid generated facilities, exact
 fresh/resume runner and security smokes, and 1,000/1,000 deterministic v2
 runner PyTorch/ONNX actions. These are correctness gates, not performance

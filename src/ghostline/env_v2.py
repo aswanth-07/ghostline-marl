@@ -22,6 +22,8 @@ from ghostline.config_v2 import (
     DETECTION_COST,
     EXPOSURE_COST_PER_DECISION,
     FIELD_TARGET_FEATURES,
+    GHOST_AWARENESS_GAIN_COST,
+    GHOST_DASH_COST_PER_DECISION,
     MAX_FIELD_TARGETS,
     QUIET_DATA_BONUS,
     QUIET_TRACE_CEILING,
@@ -49,6 +51,21 @@ _RAY_SAMPLE_DISTANCES = np.arange(1, 41, dtype=np.float32) * 8.0
 GHOST_TRACE_LIMIT = 75.0
 GHOST_MAX_INTEGRITY = 3
 GHOST_STEALTH_POTENTIAL_SCALE = 10.0
+
+
+def ghost_stealth_behavior_cost(
+    *,
+    dash: bool,
+    awareness_before: float,
+    awareness_after: float,
+) -> float:
+    """Return dense, non-farmable costs for loud or increasingly visible play."""
+
+    return float(
+        -GHOST_DASH_COST_PER_DECISION * int(bool(dash))
+        - GHOST_AWARENESS_GAIN_COST
+        * max(0.0, float(awareness_after) - float(awareness_before))
+    )
 
 
 def runner_potential_progress_reward(
@@ -222,8 +239,10 @@ class GhostlineEnvV2(GhostlineEnv):
         before_integrity = self.sim.integrity
         before_trace = self.sim.trace
         before_detections = self.sim.detections
+        before_awareness = self._security_awareness()
         before_explored = int(np.count_nonzero(self.sim.explored))
         self.sim.advance(decoded, ticks=POLICY_REPEAT)
+        after_awareness = self._security_awareness()
         self._trace_history.append(self.sim.trace)
         terminal = bool(self.sim.terminated or self.sim.truncated)
         contract_success = bool(
@@ -274,6 +293,11 @@ class GhostlineEnvV2(GhostlineEnv):
             components["directive"] -= 0.008 * max(0.0, self.sim.trace - before_trace)
             components["directive"] -= 0.12 * max(0, self.sim.detections - before_detections)
             components["directive"] -= 0.8 * max(0, before_integrity - self.sim.integrity)
+            components["directive"] += ghost_stealth_behavior_cost(
+                dash=decoded.dash,
+                awareness_before=before_awareness,
+                awareness_after=after_awareness,
+            )
         elif self.directive == ContractDirective.SPEED:
             components["directive"] -= 0.003
         elif self.directive == ContractDirective.GREED:
@@ -313,6 +337,14 @@ class GhostlineEnvV2(GhostlineEnv):
             }
             info["telemetry"] = self.telemetry()
         return self._observation(), reward, self.sim.terminated, self.sim.truncated, info
+
+    def _security_awareness(self) -> float:
+        """Aggregate the awareness meters communicated by facility security."""
+
+        return float(
+            sum(float(camera.awareness) for camera in self.sim.level.cameras)
+            + sum(float(guard.awareness) for guard in self.sim.level.guards)
+        )
 
     def _validated_action(self, action: int) -> tuple[RunnerActionV2, bool]:
         """Decode exactly the legal action whose log-probability was sampled.

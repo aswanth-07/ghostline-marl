@@ -1031,6 +1031,30 @@ def test_ghost_potential_exposes_irreversible_trace_and_damage_budgets() -> None
     standard.close()
 
 
+def test_ghost_behavior_cost_is_dense_and_cannot_be_farmed() -> None:
+    """Dash and rising awareness cost reward; awareness recovery never pays."""
+
+    from ghostline.config_v2 import (
+        GHOST_AWARENESS_GAIN_COST,
+        GHOST_DASH_COST_PER_DECISION,
+    )
+    from ghostline.env_v2 import ghost_stealth_behavior_cost
+
+    cost = ghost_stealth_behavior_cost(
+        dash=True,
+        awareness_before=0.2,
+        awareness_after=0.7,
+    )
+    assert cost == pytest.approx(
+        -GHOST_DASH_COST_PER_DECISION - 0.5 * GHOST_AWARENESS_GAIN_COST
+    )
+    assert ghost_stealth_behavior_cost(
+        dash=False,
+        awareness_before=0.8,
+        awareness_after=0.2,
+    ) == pytest.approx(0.0)
+
+
 def test_holding_cover_while_crouched_is_not_punished_as_idling() -> None:
     """Waiting out a patrol is a tactic, not stalling."""
 

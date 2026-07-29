@@ -75,6 +75,13 @@ EXPOSURE_COST_PER_DECISION = 0.010
 DETECTION_COST = 0.06
 QUIET_DATA_BONUS = 0.35
 QUIET_TRACE_CEILING = 45.0
+# Ghost contracts need an actionable signal before a full detection turns into
+# a chase. Both terms are player-readable and one-way costs: dash consumes the
+# finite noise/trace budget, while rising awareness is shown by the security
+# arcs exposed to human play. Falling awareness never pays a reward, so
+# repeatedly entering and leaving a cone cannot be farmed.
+GHOST_DASH_COST_PER_DECISION = 0.020
+GHOST_AWARENESS_GAIN_COST = 0.30
 
 # Vent network. Transit is deliberately slow and the runner is untargetable
 # while inside, so a vent is an escape from a sealed route rather than a free
