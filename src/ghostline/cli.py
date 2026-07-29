@@ -51,6 +51,16 @@ def _add_runner_v2_training_arguments(
         default=0.25,
     )
     parser.add_argument(
+        "--ghost-training-stage",
+        type=int,
+        choices=range(0, 4),
+        default=0,
+        help=(
+            "training-only Ghost roster: 1=one guard, 2=one guard+camera, "
+            "3=two guards+camera; 0 keeps the full release environment"
+        ),
+    )
+    parser.add_argument(
         "--no-curriculum",
         dest="adaptive_curriculum",
         action="store_false",

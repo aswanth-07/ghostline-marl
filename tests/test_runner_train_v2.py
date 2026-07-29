@@ -525,6 +525,10 @@ def test_seed_namespaces_validation_gates_and_selection_are_fail_closed() -> Non
         }
     }
     assert validation_selection_key(incomplete_report)[:2] == (-1.0, -1.0)
+    assert validation_selection_key(
+        incomplete_report,
+        required_tiers=(1,),
+    ) == pytest.approx((1.0, 1.0, 0.0, -1.0))
     adaptive = smoke_config(
         tiers=ALL_TIERS,
         adaptive_curriculum=True,
@@ -544,6 +548,71 @@ def test_seed_namespaces_validation_gates_and_selection_are_fail_closed() -> Non
     assert validation_selection_key(complete_report) == pytest.approx(
         (0.91, 0.96, -0.35, -13.5)
     )
+
+
+@pytest.mark.parametrize(
+    ("stage", "guards", "cameras"),
+    ((1, 1, 0), (2, 1, 1), (3, 2, 1)),
+)
+def test_training_only_ghost_stages_reduce_security_and_replay_exactly(
+    stage: int,
+    guards: int,
+    cameras: int,
+) -> None:
+    first = ScheduledRunnerEnv(
+        rank=0,
+        env_count=1,
+        training_seed_start=0,
+        tiers=(3,),
+        directives=(int(ContractDirective.GHOST),),
+        schedule_salt=31,
+        adaptive_curriculum=False,
+        initial_curriculum_tier=3,
+        ghost_directive_fraction=1.0,
+        ghost_training_stage=stage,
+    )
+    second = ScheduledRunnerEnv(
+        rank=0,
+        env_count=1,
+        training_seed_start=0,
+        tiers=(3,),
+        directives=(int(ContractDirective.GHOST),),
+        schedule_salt=31,
+        adaptive_curriculum=False,
+        initial_curriculum_tier=3,
+        ghost_directive_fraction=1.0,
+        ghost_training_stage=stage,
+    )
+    try:
+        observation, info = first.reset()
+        assert info["training_ghost_security_stage"] == stage
+        assert len(first.env.sim.level.guards) == guards
+        assert len(first.env.sim.level.cameras) == cameras
+        assert not first.env.sim.level.response_drones
+        assert len(first.env.sim.operative_states) == guards
+
+        observation, *_ = first.step(0)
+        state = first.checkpoint_state()
+        restored = second.restore_state([state])
+        assert observation_digest(restored) == observation_digest(observation)
+        assert len(second.env.sim.level.guards) == guards
+        assert len(second.env.sim.level.cameras) == cameras
+    finally:
+        first.close()
+        second.close()
+
+
+def test_training_only_ghost_stage_requires_an_isolated_scripted_curriculum() -> None:
+    with pytest.raises(ValueError, match="--no-curriculum"):
+        smoke_config(
+            ghost_training_stage=1,
+            directives=(int(ContractDirective.GHOST),),
+        ).validate()
+    with pytest.raises(ValueError, match="--directives ghost"):
+        smoke_config(
+            ghost_training_stage=1,
+            adaptive_curriculum=False,
+        ).validate()
 
 
 def test_training_can_oversample_ghost_without_changing_validation_balance() -> None:

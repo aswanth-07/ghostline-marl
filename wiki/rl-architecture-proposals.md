@@ -1,7 +1,7 @@
 ---
 title: RL Architecture Decision Record
-updated: 2026-07-28
-status: superseded
+updated: 2026-07-29
+status: current
 ---
 
 # RL architecture decision record
@@ -22,6 +22,57 @@ experimental files. That label is retired. Public versioning is:
 
 The published artifacts retain their historical internal `GhostlineEnv-v2`
 metadata because provenance-bound bytes are not rewritten.
+
+## 2026-07-29 runner recovery decision
+
+DAgger is an online imitation-learning procedure, not a replacement neural
+backbone. The existing v2 structured recurrent policy remains appropriate:
+its critic reached roughly `0.90-0.98` explained variance through the stalled
+Ghost tier while deterministic success stayed near zero. The network could
+model the returns of its behavior; the missing ingredient was successful
+stealth behavior to reinforce.
+
+The first 5.66-million-decision Ghost specialist is therefore not resumed
+unchanged. It learned tiers 1-2, reached the tier-3 objective reliably, and
+usually extracted after exhausting the trace budget. On 50 unused training
+seeds, 46 runs extracted without satisfying Ghost and none succeeded. This is a
+hard-exploration and constraint-discovery failure, not evidence that a wider
+GRU will help.
+
+DAgger is deferred until a v2 supervisor passes a held-out qualification gate.
+The published-v1 observation teacher emits only the old 36 action semantics.
+Observation-only v2 wrappers reached `0-15%` tier-3 Ghost success over a
+20-training-seed diagnostic, which is not credible supervision. Aggregating
+those labels would teach the same trace-saturated behavior.
+
+The accepted recovery path is:
+
+1. keep the 384-unit recurrent actor-critic and exact 288-action mask;
+2. pretrain Ghost on declared, training-only security rosters between
+   camera-only tier 2 and full tier 3;
+3. select each stage on disjoint validation windows clearly marked as
+   training-only, never as release evidence;
+4. return to the unmodified full distribution for PPO and acceptance;
+5. add BC/DAgger only after a fair v2 teacher is independently qualified, or
+   add self-imitation if the staged policy itself supplies enough successful
+   recovery trajectories.
+
+The first deterministic probe supports this direction. The stalled checkpoint
+scored `35%` on one guard, `35%` on one guard plus one camera, `10%` on two
+guards plus one camera, and `0%` on the full tier-3 roster over the same 20
+unused training seeds. That creates a learnable bridge without privileged
+state, weakened release evaluation, or a new public environment.
+
+This decision follows DAgger's requirement for an expert queried on the
+learner's state distribution, the demonstration result for hard exploration
+under partial observability, and constrained-RL's separation of task reward
+from behavioral constraints:
+
+- https://proceedings.mlr.press/v15/ross11a/ross11a.pdf
+- https://arxiv.org/abs/1909.01387
+- https://proceedings.mlr.press/v80/oh18b.html
+- https://arxiv.org/abs/1705.10528
+- https://arxiv.org/abs/1805.11074
 
 ## Decisions adopted
 

@@ -145,6 +145,55 @@ intentionally changes the optimum away from a trace-saturated race. Route
 progress remains potential-based because it should guide learning without
 changing the successful route objective.
 
+### Ghost recovery curriculum
+
+`--ghost-training-stage` is an explicit training-only bridge for the first
+human-security lesson. It never changes `GhostlineEnv-v2`, public play, or
+release evaluation:
+
+| Stage | Training roster |
+|---:|---|
+| `0` | full generated security; the only release setting |
+| `1` | one guard, no cameras |
+| `2` | one guard and one camera |
+| `3` | two guards and one camera |
+
+Stages are valid only with `--no-curriculum --directives ghost` and scripted
+security. Each run uses a separate training seed range and validation cursor,
+and the report/checkpoint records
+`training_only_ghost_security_stage`. Partial-tier runs rank checkpoints only
+over their declared tier, fixing the former sentinel behavior without allowing
+partial evidence to satisfy the six-tier acceptance gate.
+
+The trainer contract is now `ghostline-runner-recurrent-ppo-v2.3`. Optimizer
+snapshots written under v2.2 cannot be resumed under this contract because the
+validation/checkpoint-selection semantics changed. Their policy weights remain
+valid as explicit `--init-checkpoint` inputs; in particular, the r4 `best.pt`
+below is a policy-only warm start, not an optimizer resume.
+
+The first recovery stage starts from the held-out-selected checkpoint of the
+5.66-million-decision Ghost specialist:
+
+```powershell
+ghostline train-runner-v2 `
+  --output artifacts/runner-v2-ghost-curriculum-s1 `
+  --init-checkpoint artifacts/runner-v2-ghost-specialist-r4/best.pt `
+  --tiers 3 --directives ghost --ghost-directive-fraction 1 `
+  --ghost-training-stage 1 --no-curriculum `
+  --training-seed-start 400000 --initial-validation-cursor 1000 `
+  --envs 6 --rollout 512 --epochs 4 --minibatch-envs 3 `
+  --learning-rate 5e-5 --entropy-coefficient 0.003 `
+  --validation-interval 50 --validation-episodes 25 `
+  --validation-batch-size 8 --seconds 7200
+```
+
+Stages 2, 3, and finally 0 initialize from the preceding stage's selected
+checkpoint and use non-overlapping seed/cursor allocations. A stage advances
+only after two deterministic validation windows reach its declared gate; the
+full roster then has to pass the ordinary tier gate. A DAgger corpus is not
+collected from the current v1 teacher because its v2 tier-3 qualification is
+far below the policy threshold.
+
 V2 success means both extraction and directive completion. Greed keeps the
 objective, extraction gate, map cue, and shaping potential on unfinished
 terminals after ordinary quota; ghost and speed may still extract after

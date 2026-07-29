@@ -66,7 +66,7 @@ from ghostline.types_v2 import (
 )
 
 
-TRAINER_CONTRACT_V2 = "ghostline-runner-recurrent-ppo-v2.2"
+TRAINER_CONTRACT_V2 = "ghostline-runner-recurrent-ppo-v2.3"
 EXPERIMENT_MANIFEST_CONTRACT = "ghostline-runner-v2-experiment-manifest-v1"
 CHECKPOINT_VERSION = 2
 OBSERVATION_KEYS_V2 = (
@@ -91,6 +91,89 @@ ALL_DIRECTIVES = (
     ContractDirective.SPEED,
     ContractDirective.GREED,
 )
+GHOST_TRAINING_STAGE_COUNTS: dict[int, tuple[int, int] | None] = {
+    # Zero is the real environment. The other stages are training-only
+    # stepping stones between camera-only tier 2 and full tier 3.
+    0: None,
+    1: (1, 0),
+    2: (1, 1),
+    3: (2, 1),
+}
+
+
+def apply_training_ghost_security_stage(
+    environment: GhostlineEnvV2,
+    *,
+    stage: int,
+    tier: int,
+    directive: ContractDirective | str | int,
+    observation: Mapping[str, np.ndarray] | None = None,
+) -> dict[str, np.ndarray]:
+    """Apply a declared training-only Ghost security roster.
+
+    The public environment and every release evaluation keep ``stage=0``.
+    Easier rosters are constructed only after a normal deterministic reset, so
+    geometry, objectives, observations, rewards, and action semantics remain
+    the real v2 contract. The actor still receives only player-equivalent
+    observations.
+    """
+
+    stage = int(stage)
+    if stage not in GHOST_TRAINING_STAGE_COUNTS:
+        raise ValueError("ghost training stage must lie in 0..3")
+    parsed_directive = ContractDirective.parse(directive)
+    roster = GHOST_TRAINING_STAGE_COUNTS[stage]
+    if roster is None or parsed_directive != ContractDirective.GHOST or int(tier) < 3:
+        if observation is not None:
+            return {
+                key: np.asarray(value)
+                for key, value in observation.items()
+            }
+        return environment._observation()
+
+    guard_count, camera_count = roster
+    sim = environment.sim
+    sim.level.guards = list(sim.level.guards[:guard_count])
+    sim.level.cameras = list(sim.level.cameras[:camera_count])
+    sim.level.response_drones = False
+    sim.drones = []
+
+    active_guard_ids = {int(guard.guard_id) for guard in sim.level.guards}
+    active_camera_ids = {int(camera.camera_id) for camera in sim.level.cameras}
+    sim.operative_states = {
+        guard_id: state
+        for guard_id, state in sim.operative_states.items()
+        if int(guard_id) in active_guard_ids
+    }
+    sim.sensor_charges = {
+        guard_id: charges
+        for guard_id, charges in sim.sensor_charges.items()
+        if int(guard_id) in active_guard_ids
+    }
+    sim._pending_security_orders = {
+        guard_id: order
+        for guard_id, order in sim._pending_security_orders.items()
+        if int(guard_id) in active_guard_ids
+    }
+    sim.security_intel = {
+        key: value
+        for key, value in sim.security_intel.items()
+        if (
+            (key[0] == "guard" and int(key[1]) in active_guard_ids)
+            or (key[0] == "camera" and int(key[1]) in active_camera_ids)
+        )
+    }
+    sim._guard_waypoints.clear()
+    sim._drone_waypoints.clear()
+
+    # Frozen learned security is not used by the first curriculum campaign,
+    # but keeping this helper correct prevents stale recurrent slots if a
+    # declared future ablation combines the two.
+    controller = getattr(environment, "security_controller", None)
+    if controller is not None:
+        controller.reset(sim)
+        controller.update(force=True)
+    return environment._observation()
 
 
 def _normalised_file_hash(path: Path) -> str:
@@ -340,6 +423,7 @@ class RunnerPPOConfig:
     tiers: tuple[int, ...] = ALL_TIERS
     directives: tuple[int, ...] = tuple(int(item) for item in ALL_DIRECTIVES)
     ghost_directive_fraction: float = 0.25
+    ghost_training_stage: int = 0
     adaptive_curriculum: bool = True
     initial_curriculum_tier: int = 1
     async_envs: bool = True
@@ -397,6 +481,21 @@ class RunnerPPOConfig:
             raise ValueError(
                 "a positive ghost directive fraction requires the ghost directive"
             )
+        if self.ghost_training_stage not in GHOST_TRAINING_STAGE_COUNTS:
+            raise ValueError("ghost_training_stage must lie in 0..3")
+        if self.ghost_training_stage:
+            if self.adaptive_curriculum:
+                raise ValueError(
+                    "training-only Ghost security stages require --no-curriculum"
+                )
+            if self.directives != (int(ContractDirective.GHOST),):
+                raise ValueError(
+                    "training-only Ghost security stages require --directives ghost"
+                )
+            if self.security_opponent_paths:
+                raise ValueError(
+                    "training-only Ghost security stages require scripted security"
+                )
         if self.adaptive_curriculum:
             if self.tiers != ALL_TIERS:
                 raise ValueError(
@@ -486,6 +585,7 @@ class ScheduledRunnerEnv(gym.Wrapper):
         adaptive_curriculum: bool,
         initial_curriculum_tier: int,
         ghost_directive_fraction: float = 0.25,
+        ghost_training_stage: int = 0,
         security_opponent_paths: Sequence[str] = (),
         security_opponent_sha256: Sequence[str] = (),
         security_pool_salt: int = 0,
@@ -500,6 +600,9 @@ class ScheduledRunnerEnv(gym.Wrapper):
         self.tiers = parse_tiers(tiers)
         self.directives = parse_directives(directives)
         self.ghost_directive_fraction = float(ghost_directive_fraction)
+        self.ghost_training_stage = int(ghost_training_stage)
+        if self.ghost_training_stage not in GHOST_TRAINING_STAGE_COUNTS:
+            raise ValueError("ghost_training_stage must lie in 0..3")
         self.schedule_salt = int(schedule_salt)
         self.adaptive_curriculum = bool(adaptive_curriculum)
         self.curriculum_tier = int(initial_curriculum_tier)
@@ -628,6 +731,16 @@ class ScheduledRunnerEnv(gym.Wrapper):
         requested = dict(options or {})
         requested.update({"tier": tier, "directive": directive})
         observation, info = self.env.reset(seed=episode_seed, options=requested)
+        observation = apply_training_ghost_security_stage(
+            self.env,
+            stage=self.ghost_training_stage,
+            tier=tier,
+            directive=directive,
+            observation=observation,
+        )
+        if self.ghost_training_stage:
+            info = dict(info)
+            info["training_ghost_security_stage"] = self.ghost_training_stage
         self.current_seed = episode_seed
         self.current_tier = tier
         self.current_directive = directive
@@ -690,6 +803,13 @@ class ScheduledRunnerEnv(gym.Wrapper):
             seed=current_seed,
             options={"tier": tier, "directive": directive},
         )
+        observation = apply_training_ghost_security_stage(
+            self.env,
+            stage=self.ghost_training_stage,
+            tier=tier,
+            directive=directive,
+            observation=observation,
+        )
         actions = [int(value) for value in state.get("action_history", ())]
         for index, action in enumerate(actions):
             observation, _, terminated, truncated, _ = self.env.step(action)
@@ -720,6 +840,7 @@ class RunnerEnvFactory:
     tiers: tuple[int, ...]
     directives: tuple[int, ...]
     ghost_directive_fraction: float
+    ghost_training_stage: int
     schedule_salt: int
     adaptive_curriculum: bool
     initial_curriculum_tier: int
@@ -736,6 +857,7 @@ class RunnerEnvFactory:
             tiers=self.tiers,
             directives=self.directives,
             ghost_directive_fraction=self.ghost_directive_fraction,
+            ghost_training_stage=self.ghost_training_stage,
             schedule_salt=self.schedule_salt,
             adaptive_curriculum=self.adaptive_curriculum,
             initial_curriculum_tier=self.initial_curriculum_tier,
@@ -760,6 +882,7 @@ def make_runner_vector_env(
             tiers=config.tiers,
             directives=config.directives,
             ghost_directive_fraction=config.ghost_directive_fraction,
+            ghost_training_stage=config.ghost_training_stage,
             schedule_salt=config.seed,
             adaptive_curriculum=config.adaptive_curriculum,
             initial_curriculum_tier=config.initial_curriculum_tier,
@@ -1415,21 +1538,41 @@ def curriculum_gate(
     return current_tier, passes, False
 
 
-def validation_selection_key(report: Mapping[str, Any]) -> tuple[float, float, float, float]:
+def validation_selection_key(
+    report: Mapping[str, Any],
+    *,
+    required_tiers: Sequence[int] = ALL_TIERS,
+) -> tuple[float, float, float, float]:
     tiers = {
         int(tier): values
         for tier, values in dict(report.get("tiers", {})).items()
     }
-    if any(tier not in tiers for tier in ALL_TIERS):
+    selected_tiers = parse_tiers(required_tiers)
+    if any(tier not in tiers for tier in selected_tiers):
         return (-1.0, -1.0, -math.inf, -math.inf)
-    successes = {tier: float(tiers[tier]["success_rate"]) for tier in ALL_TIERS}
-    mean_damage = float(np.mean([float(tiers[tier]["mean_damage"]) for tier in ALL_TIERS]))
+    successes = {
+        tier: float(tiers[tier]["success_rate"])
+        for tier in selected_tiers
+    }
+    mean_damage = float(
+        np.mean(
+            [
+                float(tiers[tier]["mean_damage"])
+                for tier in selected_tiers
+            ]
+        )
+    )
     mean_duration = float(
-        np.mean([float(tiers[tier]["mean_duration_seconds"]) for tier in ALL_TIERS])
+        np.mean(
+            [
+                float(tiers[tier]["mean_duration_seconds"])
+                for tier in selected_tiers
+            ]
+        )
     )
     return (
         min(successes.values()),
-        successes[6],
+        successes.get(6, successes[max(selected_tiers)]),
         -mean_damage,
         -mean_duration,
     )
@@ -1452,6 +1595,7 @@ def validate_runner(
     directive: ContractDirective = ContractDirective.STANDARD,
     batch_size: int = 16,
     security_pool: Any | None = None,
+    ghost_training_stage: int = 0,
 ) -> dict[str, Any]:
     """Evaluate a deterministic policy on one reserved, disjoint seed window."""
 
@@ -1493,6 +1637,13 @@ def validate_runner(
                     observation, _ = env.reset(
                         seed=seed,
                         options={"tier": tier, "directive": directive},
+                    )
+                    observation = apply_training_ghost_security_stage(
+                        env,
+                        stage=ghost_training_stage,
+                        tier=tier,
+                        directive=directive,
+                        observation=observation,
                     )
                     environments.append(env)
                     observations.append(observation)
@@ -1560,6 +1711,7 @@ def validate_runner(
         "security_opponent_pool": (
             getattr(security_pool, "pool_id", None)
         ),
+        "training_only_ghost_security_stage": int(ghost_training_stage),
         "tiers": summaries,
     }
 
@@ -1576,6 +1728,7 @@ def validate_runner_suite(
     batch_size: int = 16,
     security_opponent_paths: Sequence[str | Path] = (),
     security_pool_salt: int = 0,
+    ghost_training_stage: int = 0,
 ) -> dict[str, Any]:
     """Gate a universal policy by its worst result across trained directives."""
 
@@ -1599,6 +1752,7 @@ def validate_runner_suite(
                 directive=directive,
                 batch_size=batch_size,
                 security_pool=security_pool,
+                ghost_training_stage=ghost_training_stage,
             )
             for directive in selected_directives
         }
@@ -1660,6 +1814,7 @@ def validate_runner_suite(
             if reports
             else None
         ),
+        "training_only_ghost_security_stage": int(ghost_training_stage),
         "tiers": summaries,
     }
 
@@ -1977,6 +2132,9 @@ def train(
         ghost_directive_fraction=float(
             getattr(args, "ghost_directive_fraction", 0.25)
         ),
+        ghost_training_stage=int(
+            getattr(args, "ghost_training_stage", 0)
+        ),
         adaptive_curriculum=bool(getattr(args, "adaptive_curriculum", True)),
         initial_curriculum_tier=int(getattr(args, "initial_curriculum_tier", 1)),
         async_envs=args.async_envs,
@@ -2231,6 +2389,7 @@ def train(
                     batch_size=config.validation_batch_size,
                     security_opponent_paths=config.security_opponent_paths,
                     security_pool_salt=config.security_pool_salt,
+                    ghost_training_stage=config.ghost_training_stage,
                 )
                 validation_history.append(validation_report)
                 rates = {
@@ -2256,7 +2415,10 @@ def train(
                         acceptance_passes = 0
                 else:
                     acceptance_passes = acceptance_gate(rates, acceptance_passes)
-                selection_key = validation_selection_key(validation_report)
+                selection_key = validation_selection_key(
+                    validation_report,
+                    required_tiers=config.tiers,
+                )
                 if selection_key > best_selection_key:
                     best_selection_key = selection_key
                     _atomic_torch_save(
@@ -2398,6 +2560,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.25,
         help="training share reserved for ghost contracts; validation stays balanced",
+    )
+    parser.add_argument(
+        "--ghost-training-stage",
+        type=int,
+        choices=tuple(GHOST_TRAINING_STAGE_COUNTS),
+        default=0,
+        help=(
+            "training-only Ghost roster: 1=one guard, 2=one guard+camera, "
+            "3=two guards+camera; 0 keeps the full release environment"
+        ),
     )
     parser.add_argument(
         "--no-curriculum",
