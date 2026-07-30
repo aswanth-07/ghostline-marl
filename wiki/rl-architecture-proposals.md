@@ -1,6 +1,6 @@
 ---
 title: RL Architecture Decision Record
-updated: 2026-07-29
+updated: 2026-07-30
 status: current
 ---
 
@@ -53,9 +53,20 @@ The accepted recovery path is:
 3. select each stage on disjoint validation windows clearly marked as
    training-only, never as release evidence;
 4. return to the unmodified full distribution for PPO and acceptance;
-5. add BC/DAgger only after a fair v2 teacher is independently qualified, or
-   add self-imitation if the staged policy itself supplies enough successful
-   recovery trajectories.
+5. use positive-advantage self-imitation once the staged policy supplies enough
+   complete successful recovery trajectories;
+6. add BC/DAgger only after a fair v2 teacher is independently qualified.
+
+The Stage-1 run supplied enough successful trajectories to activate step five.
+Its PPO critic remained healthy while held-out success plateaued near 31%, and
+the final policy discarded crouching while continuing to extract loudly. The
+v2.4 auxiliary objective therefore operates on recurrent on-policy rollouts:
+it retains only complete successful episodes and applies supervised policy
+loss only where the unnormalized GAE advantage is positive. It does not replay
+failed actions, incomplete rollout prefixes, privileged state, or external
+demonstrations. A coefficient calibration rejected `0.02` after no matched
+improvement and selected `0.2` after two diagnostic windows improved from
+`28/34%` to `34/36%` without KL or entropy instability.
 
 The first deterministic probe supports this direction. The stalled checkpoint
 scored `35%` on one guard, `35%` on one guard plus one camera, `10%` on two

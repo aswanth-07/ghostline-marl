@@ -36,6 +36,8 @@ from ghostline.runner_train_v2 import (
     require_validation_window,
     save_training_checkpoint,
     selection_validation_tiers,
+    self_imitation_policy_loss,
+    successful_episode_step_mask,
     runner_sequence_outputs,
     validate_runner,
     validate_runner_suite,
@@ -212,6 +214,8 @@ def test_ppo_smoke_has_finite_kl_clip_and_grad_diagnostics() -> None:
                 diagnostics.objective_aux_loss,
                 diagnostics.danger_aux_loss,
                 diagnostics.weighted_auxiliary_loss,
+                diagnostics.self_imitation_loss,
+                diagnostics.self_imitation_fraction,
                 diagnostics.approximate_kl,
                 diagnostics.clip_fraction,
                 diagnostics.gradient_norm,
@@ -224,6 +228,8 @@ def test_ppo_smoke_has_finite_kl_clip_and_grad_diagnostics() -> None:
         assert diagnostics.objective_aux_loss >= 0.0
         assert diagnostics.danger_aux_loss >= 0.0
         assert diagnostics.weighted_auxiliary_loss >= 0.0
+        assert diagnostics.self_imitation_loss >= 0.0
+        assert diagnostics.self_imitation_fraction == pytest.approx(0.0)
         assert not torch.equal(
             policy.objective_head.weight,
             objective_head_before,
@@ -234,6 +240,84 @@ def test_ppo_smoke_has_finite_kl_clip_and_grad_diagnostics() -> None:
         )
     finally:
         envs.close()
+
+
+def test_successful_episode_mask_excludes_partial_and_failed_episodes() -> None:
+    starts = np.asarray(
+        [
+            [False, True],
+            [False, False],
+            [True, False],
+            [False, True],
+            [False, False],
+        ]
+    )
+    dones = np.asarray(
+        [
+            [False, False],
+            [True, True],
+            [False, False],
+            [False, False],
+            [True, True],
+        ]
+    )
+    terminal_successes = np.asarray(
+        [
+            [False, False],
+            [True, False],
+            [False, False],
+            [False, False],
+            [True, True],
+        ]
+    )
+    selected = successful_episode_step_mask(
+        starts,
+        dones,
+        terminal_successes,
+    )
+    # Environment zero's first success began before the rollout and is
+    # excluded; its complete second success is retained.
+    assert selected[:, 0].tolist() == [False, False, True, True, True]
+    # Environment one's failed first episode is excluded and its complete
+    # second success is retained.
+    assert selected[:, 1].tolist() == [False, False, False, True, True]
+
+
+def test_self_imitation_uses_only_positive_advantage_success_steps() -> None:
+    log_probability = torch.tensor(
+        [[-1.0, -2.0], [-3.0, -4.0]],
+        requires_grad=True,
+    )
+    advantage = torch.tensor([[2.0, 5.0], [-1.0, 1.0]])
+    successful = torch.tensor([[True, False], [True, True]])
+    loss, fraction = self_imitation_policy_loss(
+        log_probability,
+        advantage,
+        successful,
+    )
+    # Only [0, 0] and [1, 1] are both successful and above expectation.
+    # Their normalized weights are 4/3 and 2/3.
+    assert float(loss.detach()) == pytest.approx(
+        (1.0 * (4.0 / 3.0) + 4.0 * (2.0 / 3.0)) / 2.0
+    )
+    assert float(fraction) == pytest.approx(0.5)
+    loss.backward()
+    assert log_probability.grad is not None
+    assert log_probability.grad[0, 1] == pytest.approx(0.0)
+    assert log_probability.grad[1, 0] == pytest.approx(0.0)
+
+
+def test_self_imitation_without_eligible_steps_is_differentiable_zero() -> None:
+    log_probability = torch.tensor([[-1.0]], requires_grad=True)
+    loss, fraction = self_imitation_policy_loss(
+        log_probability,
+        torch.tensor([[-0.5]]),
+        torch.tensor([[True]]),
+    )
+    assert float(loss.detach()) == pytest.approx(0.0)
+    assert float(fraction) == pytest.approx(0.0)
+    loss.backward()
+    assert log_probability.grad == pytest.approx(torch.zeros_like(log_probability))
 
 
 def test_nonfinite_rollout_aborts_before_optimizer_step() -> None:

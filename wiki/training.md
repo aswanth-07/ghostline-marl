@@ -1,6 +1,6 @@
 ---
 title: Ghostline Training and Evaluation
-updated: 2026-07-28
+updated: 2026-07-30
 status: active
 ---
 
@@ -165,26 +165,44 @@ and the report/checkpoint records
 over their declared tier, fixing the former sentinel behavior without allowing
 partial evidence to satisfy the six-tier acceptance gate.
 
-The trainer contract is now `ghostline-runner-recurrent-ppo-v2.3`. Optimizer
-snapshots written under v2.2 cannot be resumed under this contract because the
-validation/checkpoint-selection semantics changed. Their policy weights remain
-valid as explicit `--init-checkpoint` inputs; in particular, the r4 `best.pt`
-below is a policy-only warm start, not an optimizer resume.
+The trainer contract is now `ghostline-runner-recurrent-ppo-v2.4`. Optimizer
+snapshots written under v2.3 or earlier cannot be resumed under this contract.
+Their current-environment policy weights remain valid as explicit
+`--init-checkpoint` inputs; in particular, the selected Stage-1 checkpoint is
+a policy-only warm start rather than an optimizer resume.
 
-The first recovery stage starts from the held-out-selected checkpoint of the
-5.66-million-decision Ghost specialist:
+Stage-1 diagnostics showed a hard-exploration plateau rather than numerical
+instability: the selected policy extracted on 97% of 100 fresh contracts, but
+only 35% met Ghost, and failed extractions averaged 96.8 maximum trace. With
+security removed, the same policy reached 92% Ghost success. The missing skill
+is therefore moving-guard avoidance, not navigation, hacking, or basic noise
+budgeting.
+
+V2.4 adds an optional recurrent self-imitation term to PPO. It selects only
+complete self-generated successful episodes contained inside a rollout, then
+imitates only their positive-advantage decisions. Advantage weights are
+detached, normalized, and capped; partial episodes and every failed trajectory
+are excluded. The default coefficient remains zero for ordinary baselines.
+The current Ghost recovery continuation uses
+`--self-imitation-coefficient 0.2`, selected on two matched diagnostic windows:
+`34%` versus `28%` and `36%` versus `34%`. The weaker `0.02` probe exactly
+matched or trailed its frozen baseline and was stopped after 200 updates.
+
+The current v2.4 recovery run starts from the held-out-selected v2.3 Stage-1
+checkpoint as a policy-only initialization:
 
 ```powershell
 ghostline train-runner-v2 `
-  --output artifacts/runner-v2-ghost-curriculum-s1 `
-  --init-checkpoint artifacts/runner-v2-ghost-specialist-r4/best.pt `
+  --output artifacts/runner-v2-ghost-sil-strong-probe-r1 `
+  --init-checkpoint artifacts/runner-v2-ghost-curriculum-s1-longgae-r1/best.pt `
   --tiers 3 --directives ghost --ghost-directive-fraction 1 `
   --ghost-training-stage 1 --no-curriculum `
-  --training-seed-start 400000 --initial-validation-cursor 1000 `
+  --training-seed-start 720000 --initial-validation-cursor 6200 `
   --envs 6 --rollout 512 --epochs 4 --minibatch-envs 3 `
-  --learning-rate 5e-5 --entropy-coefficient 0.003 `
-  --validation-interval 50 --validation-episodes 25 `
-  --validation-batch-size 8 --seconds 7200
+  --learning-rate 1e-5 --entropy-coefficient 0.001 --gae-lambda 0.995 `
+  --self-imitation-coefficient 0.2 `
+  --validation-interval 50 --validation-episodes 50 `
+  --validation-batch-size 10 --max-updates 100
 ```
 
 Stages 2, 3, and finally 0 initialize from the preceding stage's selected

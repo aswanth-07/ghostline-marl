@@ -40,6 +40,15 @@ def _add_runner_v2_training_arguments(
     parser.add_argument("--entropy-coefficient", type=float, default=0.01)
     parser.add_argument("--objective-aux-coefficient", type=float, default=0.15)
     parser.add_argument("--danger-aux-coefficient", type=float, default=0.10)
+    parser.add_argument(
+        "--self-imitation-coefficient",
+        type=float,
+        default=0.0,
+        help=(
+            "positive-advantage imitation weight for complete self-generated "
+            "successful episodes"
+        ),
+    )
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--target-kl", type=float, default=0.03)
     parser.add_argument("--training-seed-start", type=int, default=0)

@@ -66,7 +66,7 @@ from ghostline.types_v2 import (
 )
 
 
-TRAINER_CONTRACT_V2 = "ghostline-runner-recurrent-ppo-v2.3"
+TRAINER_CONTRACT_V2 = "ghostline-runner-recurrent-ppo-v2.4"
 EXPERIMENT_MANIFEST_CONTRACT = "ghostline-runner-v2-experiment-manifest-v1"
 CHECKPOINT_VERSION = 2
 OBSERVATION_KEYS_V2 = (
@@ -417,6 +417,7 @@ class RunnerPPOConfig:
     entropy_coefficient: float = 0.01
     objective_aux_coefficient: float = 0.15
     danger_aux_coefficient: float = 0.10
+    self_imitation_coefficient: float = 0.0
     max_grad_norm: float = 0.5
     target_kl: float = 0.03
     training_seed_start: int = TRAINING_SEED_START
@@ -464,6 +465,7 @@ class RunnerPPOConfig:
         if (
             self.objective_aux_coefficient < 0.0
             or self.danger_aux_coefficient < 0.0
+            or self.self_imitation_coefficient < 0.0
         ):
             raise ValueError("auxiliary coefficients must be non-negative")
         if self.max_grad_norm <= 0.0:
@@ -1081,6 +1083,7 @@ class RunnerRollout:
     next_hidden: torch.Tensor
     next_episode_starts: np.ndarray
     completed_successes: list[float]
+    successful_episode_steps: np.ndarray
 
     @property
     def time_steps(self) -> int:
@@ -1125,10 +1128,15 @@ def compute_gae(
     return advantages, advantages + values
 
 
-def _completed_successes(infos: Mapping[str, Any], done: np.ndarray) -> list[float]:
+def _completed_success_vector(
+    infos: Mapping[str, Any],
+    done: np.ndarray,
+) -> np.ndarray:
+    """Return terminal success by environment without losing episode identity."""
+
+    results = np.zeros_like(done, dtype=bool)
     final_info = infos.get("final_info")
     final_mask = np.asarray(infos.get("_final_info", done), dtype=bool)
-    results: list[float] = []
     if isinstance(final_info, Mapping):
         success = np.asarray(
             final_info.get("is_success", np.zeros_like(done, dtype=bool))
@@ -1139,7 +1147,7 @@ def _completed_successes(infos: Mapping[str, Any], done: np.ndarray) -> list[flo
         )
         for index, ended in enumerate(done):
             if ended and final_mask[index] and success_mask[index]:
-                results.append(float(success[index]))
+                results[index] = bool(success[index])
         return results
     if final_info is None:
         return results
@@ -1148,8 +1156,47 @@ def _completed_successes(infos: Mapping[str, Any], done: np.ndarray) -> list[flo
             continue
         item = final_info[index]
         if item is not None:
-            results.append(float(item.get("is_success", False)))
+            results[index] = bool(item.get("is_success", False))
     return results
+
+
+def successful_episode_step_mask(
+    episode_starts: np.ndarray,
+    dones: np.ndarray,
+    terminal_successes: np.ndarray,
+) -> np.ndarray:
+    """Mark complete successful episodes contained inside one rollout.
+
+    Episodes already in progress at the rollout boundary are deliberately
+    excluded: their earlier recurrent context and decisions are unavailable,
+    so treating the visible suffix as a demonstration would bias the auxiliary
+    objective toward incomplete behavior.
+    """
+
+    starts = np.asarray(episode_starts, dtype=bool)
+    ended = np.asarray(dones, dtype=bool)
+    successes = np.asarray(terminal_successes, dtype=bool)
+    if starts.shape != ended.shape or starts.shape != successes.shape:
+        raise ValueError(
+            "episode starts, dones, and terminal successes must share [time, env]"
+        )
+    if starts.ndim != 2:
+        raise ValueError("successful episode masks require [time, env] arrays")
+    if np.any(successes & ~ended):
+        raise ValueError("terminal success may only be set on a terminal step")
+
+    selected = np.zeros_like(ended, dtype=bool)
+    for environment in range(starts.shape[1]):
+        episode_start: int | None = None
+        for step in range(starts.shape[0]):
+            if starts[step, environment]:
+                episode_start = step
+            if not ended[step, environment]:
+                continue
+            if successes[step, environment] and episode_start is not None:
+                selected[episode_start : step + 1, environment] = True
+            episode_start = None
+    return selected
 
 
 @torch.no_grad()
@@ -1176,6 +1223,7 @@ def collect_rollout(
     rewards: list[np.ndarray] = []
     dones: list[np.ndarray] = []
     starts: list[np.ndarray] = []
+    terminal_successes: list[np.ndarray] = []
     successes: list[float] = []
 
     hidden = _zero_hidden_at_starts(hidden, episode_starts)
@@ -1198,6 +1246,7 @@ def collect_rollout(
             action.cpu().numpy()
         )
         done = np.logical_or(terminated, truncated)
+        success_by_environment = _completed_success_vector(infos, done)
 
         for key in OBSERVATION_KEYS_V2:
             observation_buffer[key].append(np.asarray(current_observation[key]).copy())
@@ -1207,7 +1256,12 @@ def collect_rollout(
         rewards.append(np.asarray(reward, dtype=np.float32))
         dones.append(done)
         starts.append(current_starts.copy())
-        successes.extend(_completed_successes(infos, done))
+        terminal_successes.append(success_by_environment)
+        successes.extend(
+            float(success_by_environment[index])
+            for index, ended in enumerate(done)
+            if ended
+        )
 
         current_observation = {
             key: np.asarray(next_observation[key]) for key in OBSERVATION_KEYS_V2
@@ -1229,6 +1283,8 @@ def collect_rollout(
         gamma=gamma,
         gae_lambda=gae_lambda,
     )
+    starts_array = np.stack(starts).astype(bool)
+    dones_array = np.stack(dones).astype(bool)
     return RunnerRollout(
         observations={
             key: np.stack(buffer) for key, buffer in observation_buffer.items()
@@ -1238,7 +1294,7 @@ def collect_rollout(
         old_values=values_array,
         rewards=rewards_array,
         dones=dones_array,
-        episode_starts=np.stack(starts).astype(bool),
+        episode_starts=starts_array,
         initial_hidden=initial_hidden,
         advantages=advantages,
         returns=returns,
@@ -1246,6 +1302,11 @@ def collect_rollout(
         next_hidden=hidden.detach(),
         next_episode_starts=current_starts,
         completed_successes=successes,
+        successful_episode_steps=successful_episode_step_mask(
+            starts_array,
+            dones_array,
+            np.stack(terminal_successes).astype(bool),
+        ),
     )
 
 
@@ -1257,6 +1318,8 @@ class PPODiagnostics:
     objective_aux_loss: float
     danger_aux_loss: float
     weighted_auxiliary_loss: float
+    self_imitation_loss: float
+    self_imitation_fraction: float
     approximate_kl: float
     clip_fraction: float
     gradient_norm: float
@@ -1279,6 +1342,36 @@ def _normalise_advantages(advantages: np.ndarray) -> np.ndarray:
     mean = float(values.mean())
     standard_deviation = float(values.std())
     return (values - mean) / max(standard_deviation, 1e-8)
+
+
+def self_imitation_policy_loss(
+    log_probability: torch.Tensor,
+    advantage: torch.Tensor,
+    successful_episode_steps: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Imitate only above-expectation decisions from complete successes.
+
+    This is an on-policy, recurrent analogue of positive-advantage
+    self-imitation. Advantage weights are detached, normalized, and capped so
+    the auxiliary objective cannot overwhelm PPO after an unusually large
+    terminal return.
+    """
+
+    if (
+        log_probability.shape != advantage.shape
+        or log_probability.shape != successful_episode_steps.shape
+    ):
+        raise ValueError("self-imitation tensors must share [time, env]")
+    positive_advantage = advantage.detach().clamp_min(0.0)
+    eligible = successful_episode_steps.bool() & (positive_advantage > 0.0)
+    fraction = eligible.float().mean()
+    if not bool(eligible.any()):
+        return log_probability.sum() * 0.0, fraction
+    weights = positive_advantage[eligible]
+    weights = (weights / weights.mean().clamp_min(1e-8)).clamp_max(4.0)
+    weights = weights / weights.mean().clamp_min(1e-8)
+    loss = -(log_probability[eligible] * weights).mean()
+    return loss, fraction
 
 
 def evaluate_rollout_log_probabilities(
@@ -1330,6 +1423,8 @@ def ppo_update(
         "objective_aux_loss": 0.0,
         "danger_aux_loss": 0.0,
         "weighted_auxiliary_loss": 0.0,
+        "self_imitation_loss": 0.0,
+        "self_imitation_fraction": 0.0,
         "approximate_kl": 0.0,
         "clip_fraction": 0.0,
         "gradient_norm": 0.0,
@@ -1377,6 +1472,14 @@ def ppo_update(
                 rollout.returns[:, selected],
                 device=device,
             )
+            raw_advantage = torch.as_tensor(
+                rollout.advantages[:, selected],
+                device=device,
+            )
+            successful_steps = torch.as_tensor(
+                rollout.successful_episode_steps[:, selected],
+                device=device,
+            )
             log_probability = distribution.log_prob(action)
             log_ratio = log_probability - old_log_probability
             ratio = torch.exp(log_ratio)
@@ -1409,6 +1512,13 @@ def ppo_update(
                 config.objective_aux_coefficient * objective_aux_loss
                 + config.danger_aux_coefficient * danger_aux_loss
             )
+            self_imitation_loss, self_imitation_fraction = (
+                self_imitation_policy_loss(
+                    log_probability,
+                    raw_advantage,
+                    successful_steps,
+                )
+            )
             approximate_kl = ((ratio - 1.0) - log_ratio).mean()
             clip_fraction = ((ratio - 1.0).abs() > config.clip_ratio).float().mean()
             loss = (
@@ -1416,6 +1526,7 @@ def ppo_update(
                 + config.value_coefficient * value_loss
                 - config.entropy_coefficient * entropy
                 + weighted_auxiliary_loss
+                + config.self_imitation_coefficient * self_imitation_loss
             )
             for name, value in (
                 ("policy loss", policy_loss),
@@ -1424,6 +1535,7 @@ def ppo_update(
                 ("objective auxiliary loss", objective_aux_loss),
                 ("danger auxiliary loss", danger_aux_loss),
                 ("weighted auxiliary loss", weighted_auxiliary_loss),
+                ("self-imitation loss", self_imitation_loss),
                 ("approximate KL", approximate_kl),
                 ("combined loss", loss),
             ):
@@ -1449,6 +1561,8 @@ def ppo_update(
                 "objective_aux_loss": objective_aux_loss,
                 "danger_aux_loss": danger_aux_loss,
                 "weighted_auxiliary_loss": weighted_auxiliary_loss,
+                "self_imitation_loss": self_imitation_loss,
+                "self_imitation_fraction": self_imitation_fraction,
                 "approximate_kl": approximate_kl,
                 "clip_fraction": clip_fraction,
                 "gradient_norm": torch.as_tensor(gradient_norm),
@@ -1492,6 +1606,8 @@ def ppo_update(
             diagnostics.objective_aux_loss,
             diagnostics.danger_aux_loss,
             diagnostics.weighted_auxiliary_loss,
+            diagnostics.self_imitation_loss,
+            diagnostics.self_imitation_fraction,
             diagnostics.approximate_kl,
             diagnostics.clip_fraction,
             diagnostics.gradient_norm,
@@ -2124,6 +2240,9 @@ def train(
         danger_aux_coefficient=float(
             getattr(args, "danger_aux_coefficient", 0.10)
         ),
+        self_imitation_coefficient=float(
+            getattr(args, "self_imitation_coefficient", 0.0)
+        ),
         max_grad_norm=args.max_grad_norm,
         target_kl=args.target_kl,
         training_seed_start=args.training_seed_start,
@@ -2550,6 +2669,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--entropy-coefficient", type=float, default=0.01)
     parser.add_argument("--objective-aux-coefficient", type=float, default=0.15)
     parser.add_argument("--danger-aux-coefficient", type=float, default=0.10)
+    parser.add_argument(
+        "--self-imitation-coefficient",
+        type=float,
+        default=0.0,
+        help=(
+            "positive-advantage imitation weight for complete self-generated "
+            "successful episodes"
+        ),
+    )
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--target-kl", type=float, default=0.03)
     parser.add_argument("--training-seed-start", type=int, default=TRAINING_SEED_START)
