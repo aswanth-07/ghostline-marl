@@ -115,6 +115,10 @@ COLOR_SAFE_SAFE = (82, 184, 255)
 # no persistent readout can ever cover the runner, an operative, or a prop. The
 # camera centres the runner inside the viewport rather than the whole canvas.
 HUD_BAND_HEIGHT = 34
+# Vision-cone fans are memoised by quantised observer pose. The bound keeps a
+# long contract from accumulating one entry per distinct pose; clearing wholesale
+# is cheaper than tracking recency for something this easy to recompute.
+CONE_RAY_CACHE_LIMIT = 4096
 # Corner cards float inside the viewport, so they dim automatically whenever
 # something worth watching passes beneath them.
 CHROME_CLEAR_ALPHA = 232
@@ -379,6 +383,20 @@ class GhostlineRenderer:
         self.tutorial_hints = True
         self._role_cache: np.ndarray | None = None
         self._level_cache_identity: tuple[int, int, int] | None = None
+        # Terrain is a pure function of the level grid, its room roles and the
+        # seed; the simulation never writes to the grid. Painting it once per
+        # level and blitting the result keeps hundreds of per-tile draw calls
+        # out of every frame, which is what a WebAssembly interpreter cannot
+        # afford. Floor and walls are separate surfaces because vision cones
+        # composite between them.
+        self._floor_cache: pygame.Surface | None = None
+        self._wall_cache: pygame.Surface | None = None
+        self._terrain_identity: tuple[int, int, int] | None = None
+        self._band_metrics_cache: dict[int, tuple[int, int, int]] = {}
+        self._world_center_cache: dict[tuple[bool, int], tuple[float, float]] = {}
+        self._cone_ray_cache: dict[
+            tuple[int, int, int, int, int, int], tuple[list[tuple[float, float]], list[float]]
+        ] = {}
         self._sprite_cache: dict[tuple[str, int, int, str], pygame.Surface] = {}
         self._atlas_scale_cache: dict[tuple[str, int], pygame.Surface] = {}
         self._character_scale_cache: dict[tuple[str, int, bool], pygame.Surface] = {}
@@ -889,13 +907,22 @@ class GhostlineRenderer:
         self.shake = max(0.0, self.shake - dt * 12.0)
 
     def _world(self, position: np.ndarray | tuple[float, float]) -> tuple[int, int]:
-        shake = np.zeros(2)
-        if self.screen_shake_enabled and not self.reduced_motion and self.shake > 0.0:
-            shake = np.asarray((math.sin(self._time * 71), math.cos(self._time * 59))) * self.shake
+        # Called several hundred times per frame, so this stays scalar: building
+        # three NumPy arrays per call dominated the frame under a WebAssembly
+        # interpreter. The term order below is the same as the original
+        # element-wise expression, so results are bit-identical.
+        #
         # The runner sits at the centre of the world viewport, not the centre of
         # the canvas, so the reserved status band never has the runner behind it.
-        point = np.asarray(position) - self.camera + np.asarray(self._world_center()) + shake
-        return int(round(point[0])), int(round(point[1]))
+        center_x, center_y = self._world_center()
+        shake_x = 0.0
+        shake_y = 0.0
+        if self.screen_shake_enabled and not self.reduced_motion and self.shake > 0.0:
+            shake_x = math.sin(self._time * 71) * self.shake
+            shake_y = math.cos(self._time * 59) * self.shake
+        x = (float(position[0]) - float(self.camera[0])) + center_x + shake_x
+        y = (float(position[1]) - float(self.camera[1])) + center_y + shake_y
+        return int(round(x)), int(round(y))
 
     def _visible_tile_bounds(self) -> tuple[int, int, int, int]:
         viewport = self.world_viewport()
@@ -907,13 +934,21 @@ class GhostlineRenderer:
         return left, right, top, bottom
 
     def _band_metrics(self) -> tuple[int, int, int]:
-        """Return ``(label_y, value_y, band_height)`` for the current HUD scale."""
+        """Return ``(label_y, value_y, band_height)`` for the current HUD scale.
 
+        Derived from font metrics, so it only changes when the HUD scale does.
+        """
+
+        cached = self._band_metrics_cache.get(self.hud_scale)
+        if cached is not None:
+            return cached
         hud_small, hud_font = self._hud_fonts[self.hud_scale]
         label_y = 4
         value_y = label_y + hud_small.get_height() - 1
         height = max(HUD_BAND_HEIGHT, value_y + max(hud_font.get_height(), 11) + 4)
-        return label_y, value_y, height
+        metrics = (label_y, value_y, height)
+        self._band_metrics_cache[self.hud_scale] = metrics
+        return metrics
 
     def world_viewport(self) -> pygame.Rect:
         """The world's exclusive region.  Chrome never renders inside it.
@@ -929,8 +964,15 @@ class GhostlineRenderer:
         return pygame.Rect(0, top, LOGICAL_SIZE[0], LOGICAL_SIZE[1] - top)
 
     def _world_center(self) -> tuple[float, float]:
-        viewport = self.world_viewport()
-        return viewport.centerx, viewport.centery
+        # Cached separately from ``world_viewport`` so the hot ``_world`` path
+        # never allocates a Rect. Only the HUD scale and layout can move it.
+        key = (self._touch_layout, self.hud_scale)
+        cached = self._world_center_cache.get(key)
+        if cached is None:
+            viewport = self.world_viewport()
+            cached = (float(viewport.centerx), float(viewport.centery))
+            self._world_center_cache[key] = cached
+        return cached
 
     def _chrome_alpha(self, rect: pygame.Rect) -> int:
         """Dim a floating card whenever something worth watching is beneath it.
@@ -976,95 +1018,129 @@ class GhostlineRenderer:
     def _tile_hash(x: int, y: int, seed: int) -> int:
         return (x * 73_856_093 ^ y * 19_349_663 ^ seed * 83_492_791) & 0xFFFFFFFF
 
-    def _draw_floor(self) -> None:
-        left, right, top, bottom = self._visible_tile_bounds()
-        for y in range(top, bottom):
-            for x in range(left, right):
-                if self.sim.level.grid[y, x] == Tile.WALL:
-                    continue
-                role = self._room_role_at(x, y)
-                base = ROLE_COLORS.get(role, ROLE_COLORS["corridor"])
-                shade = 4 if (x + y) % 2 else 0
-                color = tuple(max(0, value - shade) for value in base)
-                sx, sy = self._world(((x + 0.5) * TILE_SIZE, (y + 0.5) * TILE_SIZE))
-                rect = pygame.Rect(sx - 16, sy - 16, 32, 32)
-                pygame.draw.rect(self.logical, color, rect)
-                pygame.draw.line(self.logical, tuple(max(0, c - 8) for c in color), rect.topleft, rect.topright)
-                self._draw_floor_material(rect, role, self._tile_hash(x, y, self.sim.seed))
-                if self.sim.level.grid[y, x] == Tile.DOOR:
-                    pygame.draw.rect(self.logical, (8, 13, 17), rect)
-                    pygame.draw.rect(self.logical, (52, 104, 105), rect, 2)
-                    pygame.draw.line(self.logical, CYAN, (rect.x + 4, rect.centery), (rect.right - 4, rect.centery), 1)
-                    pygame.draw.rect(self.logical, AMBER, (rect.x + 3, rect.y + 3, 3, 3))
+    def _terrain_origin(self) -> tuple[int, int]:
+        """Screen position of world pixel ``(0, 0)``.
 
-    def _draw_floor_material(self, rect: pygame.Rect, role: str, value: int) -> None:
+        Tile world coordinates are exact multiples of ``TILE_SIZE``, and adding
+        an integer commutes with rounding, so blitting a pre-painted terrain
+        surface at this origin lands every tile on the same pixel the per-tile
+        path produced.
+        """
+
+        return self._world((0.0, 0.0))
+
+    def _ensure_terrain_cache(self) -> tuple[pygame.Surface, pygame.Surface]:
+        identity = (self.sim.seed, self.sim.tier, id(self.sim.level))
+        if (
+            self._terrain_identity == identity
+            and self._floor_cache is not None
+            and self._wall_cache is not None
+        ):
+            return self._floor_cache, self._wall_cache
+        grid = self.sim.level.grid
+        rows, columns = grid.shape
+        size = (columns * TILE_SIZE, rows * TILE_SIZE)
+        floor = pygame.Surface(size).convert()
+        floor.fill(BG)
+        # Walls need per-pixel alpha: they composite after the vision cones, so
+        # every non-wall pixel has to leave the cone underneath untouched.
+        walls = pygame.Surface(size, pygame.SRCALPHA)
+        for y in range(rows):
+            for x in range(columns):
+                if grid[y, x] == Tile.WALL:
+                    self._paint_wall_tile(walls, x, y)
+                else:
+                    self._paint_floor_tile(floor, x, y)
+        self._floor_cache = floor
+        self._wall_cache = walls
+        self._terrain_identity = identity
+        return floor, walls
+
+    def _draw_floor(self) -> None:
+        floor, _ = self._ensure_terrain_cache()
+        self.logical.blit(floor, self._terrain_origin())
+
+    def _paint_floor_tile(self, surface: pygame.Surface, x: int, y: int) -> None:
+        role = self._room_role_at(x, y)
+        base = ROLE_COLORS.get(role, ROLE_COLORS["corridor"])
+        shade = 4 if (x + y) % 2 else 0
+        color = tuple(max(0, value - shade) for value in base)
+        rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+        pygame.draw.rect(surface, color, rect)
+        pygame.draw.line(surface, tuple(max(0, c - 8) for c in color), rect.topleft, rect.topright)
+        self._draw_floor_material(surface, rect, role, self._tile_hash(x, y, self.sim.seed))
+        if self.sim.level.grid[y, x] == Tile.DOOR:
+            pygame.draw.rect(surface, (8, 13, 17), rect)
+            pygame.draw.rect(surface, (52, 104, 105), rect, 2)
+            pygame.draw.line(surface, CYAN, (rect.x + 4, rect.centery), (rect.right - 4, rect.centery), 1)
+            pygame.draw.rect(surface, AMBER, (rect.x + 3, rect.y + 3, 3, 3))
+
+    def _draw_floor_material(self, surface: pygame.Surface, rect: pygame.Rect, role: str, value: int) -> None:
         """Deterministic room-specific material language, independent of simulation."""
 
         dark = (12, 19, 24)
         if role == "office":
-            pygame.draw.line(self.logical, (44, 59, 68), (rect.x, rect.centery), (rect.right, rect.centery))
+            pygame.draw.line(surface, (44, 59, 68), (rect.x, rect.centery), (rect.right, rect.centery))
             if value % 7 == 0:
-                pygame.draw.rect(self.logical, (55, 71, 78), (rect.x + 4, rect.y + 4, 5, 2))
+                pygame.draw.rect(surface, (55, 71, 78), (rect.x + 4, rect.y + 4, 5, 2))
         elif role == "lounge":
             inset = rect.inflate(-5, -5)
-            pygame.draw.rect(self.logical, (61, 43, 64), inset, 1, border_radius=2)
+            pygame.draw.rect(surface, (61, 43, 64), inset, 1, border_radius=2)
             if value % 3 == 0:
-                pygame.draw.line(self.logical, (78, 53, 77), inset.topleft, inset.bottomright)
+                pygame.draw.line(surface, (78, 53, 77), inset.topleft, inset.bottomright)
         elif role == "lab":
-            pygame.draw.rect(self.logical, (54, 73, 75), rect.inflate(-4, -4), 1)
-            pygame.draw.circle(self.logical, (76, 103, 103), (rect.x + 6, rect.y + 6), 1)
+            pygame.draw.rect(surface, (54, 73, 75), rect.inflate(-4, -4), 1)
+            pygame.draw.circle(surface, (76, 103, 103), (rect.x + 6, rect.y + 6), 1)
         elif role == "server":
             for offset in (7, 15, 23):
-                pygame.draw.line(self.logical, (22, 30, 44), (rect.x + offset, rect.y + 3), (rect.x + offset, rect.bottom - 3))
+                pygame.draw.line(surface, (22, 30, 44), (rect.x + offset, rect.y + 3), (rect.x + offset, rect.bottom - 3))
             if value % 5 == 0:
-                pygame.draw.rect(self.logical, VIOLET, (rect.x + 4, rect.bottom - 5, 5, 1))
+                pygame.draw.rect(surface, VIOLET, (rect.x + 4, rect.bottom - 5, 5, 1))
         elif role == "security":
             for offset in range(-16, 48, 10):
-                pygame.draw.line(self.logical, (78, 48, 43), (rect.x + offset, rect.bottom), (rect.x + offset + 10, rect.y), 2)
+                pygame.draw.line(surface, (78, 48, 43), (rect.x + offset, rect.bottom), (rect.x + offset + 10, rect.y), 2)
         elif role == "vault":
-            pygame.draw.rect(self.logical, (75, 66, 39), rect.inflate(-6, -6), 1)
-            pygame.draw.circle(self.logical, (113, 91, 43), rect.center, 2, 1)
+            pygame.draw.rect(surface, (75, 66, 39), rect.inflate(-6, -6), 1)
+            pygame.draw.circle(surface, (113, 91, 43), rect.center, 2, 1)
         elif role == "utility":
-            pygame.draw.line(self.logical, (60, 65, 62), (rect.x + 4, rect.y + 4), (rect.right - 4, rect.bottom - 4))
-            pygame.draw.circle(self.logical, dark, (rect.right - 6, rect.y + 6), 2)
+            pygame.draw.line(surface, (60, 65, 62), (rect.x + 4, rect.y + 4), (rect.right - 4, rect.bottom - 4))
+            pygame.draw.circle(surface, dark, (rect.right - 6, rect.y + 6), 2)
         elif role == "extraction":
-            pygame.draw.circle(self.logical, (39, 77, 65), rect.center, 10, 1)
+            pygame.draw.circle(surface, (39, 77, 65), rect.center, 10, 1)
         else:
-            pygame.draw.line(self.logical, (49, 57, 64), (rect.centerx, rect.y), (rect.centerx, rect.bottom))
+            pygame.draw.line(surface, (49, 57, 64), (rect.centerx, rect.y), (rect.centerx, rect.bottom))
             if value % 4 == 0:
-                pygame.draw.polygon(self.logical, (57, 69, 74), ((rect.x + 4, rect.centery), (rect.x + 10, rect.y + 10), (rect.x + 10, rect.bottom - 10)))
+                pygame.draw.polygon(surface, (57, 69, 74), ((rect.x + 4, rect.centery), (rect.x + 10, rect.y + 10), (rect.x + 10, rect.bottom - 10)))
         if value % 17 == 0:
-            pygame.draw.rect(self.logical, (88, 95, 89), (rect.x + 5, rect.y + 8, 2, 1))
+            pygame.draw.rect(surface, (88, 95, 89), (rect.x + 5, rect.y + 8, 2, 1))
 
     def _draw_walls(self) -> None:
-        left, right, top, bottom = self._visible_tile_bounds()
-        for y in range(top, bottom):
-            for x in range(left, right):
-                if self.sim.level.grid[y, x] != Tile.WALL:
-                    continue
-                sx, sy = self._world(((x + 0.5) * TILE_SIZE, (y + 0.5) * TILE_SIZE))
-                rect = pygame.Rect(sx - 16, sy - 16, 32, 32)
-                pygame.draw.rect(self.logical, (12, 19, 25), rect)
-                pygame.draw.rect(self.logical, (25, 39, 47), (rect.x, rect.y, 32, 9))
-                pygame.draw.line(self.logical, (56, 92, 101), rect.topleft, rect.topright)
-                pygame.draw.line(self.logical, (5, 9, 13), rect.bottomleft, rect.bottomright, 2)
-                role = self._room_role_at(x, y)
-                detail = self._tile_hash(x, y, self.sim.seed)
-                accent = {
-                    "lab": CYAN,
-                    "server": VIOLET,
-                    "security": RED,
-                    "vault": AMBER,
-                    "extraction": GREEN,
-                }.get(role, (51, 77, 83))
-                pygame.draw.rect(self.logical, accent, (rect.x + 4, rect.y + 9, 24, 1))
-                if detail % 5 == 0:
-                    pygame.draw.rect(self.logical, (7, 12, 16), (rect.x + 7, rect.y + 14, 18, 9), border_radius=1)
-                    for offset in (10, 15, 20):
-                        pygame.draw.line(self.logical, (48, 67, 72), (rect.x + offset, rect.y + 16), (rect.x + offset, rect.y + 21))
-                elif detail % 7 == 0:
-                    pygame.draw.rect(self.logical, (42, 53, 57), (rect.x + 6, rect.y + 14, 20, 7), 1)
-                    pygame.draw.rect(self.logical, accent, (rect.x + 9, rect.y + 16, 5, 2))
+        _, walls = self._ensure_terrain_cache()
+        self.logical.blit(walls, self._terrain_origin())
+
+    def _paint_wall_tile(self, surface: pygame.Surface, x: int, y: int) -> None:
+        rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+        pygame.draw.rect(surface, (12, 19, 25), rect)
+        pygame.draw.rect(surface, (25, 39, 47), (rect.x, rect.y, 32, 9))
+        pygame.draw.line(surface, (56, 92, 101), rect.topleft, rect.topright)
+        pygame.draw.line(surface, (5, 9, 13), rect.bottomleft, rect.bottomright, 2)
+        role = self._room_role_at(x, y)
+        detail = self._tile_hash(x, y, self.sim.seed)
+        accent = {
+            "lab": CYAN,
+            "server": VIOLET,
+            "security": RED,
+            "vault": AMBER,
+            "extraction": GREEN,
+        }.get(role, (51, 77, 83))
+        pygame.draw.rect(surface, accent, (rect.x + 4, rect.y + 9, 24, 1))
+        if detail % 5 == 0:
+            pygame.draw.rect(surface, (7, 12, 16), (rect.x + 7, rect.y + 14, 18, 9), border_radius=1)
+            for offset in (10, 15, 20):
+                pygame.draw.line(surface, (48, 67, 72), (rect.x + offset, rect.y + 16), (rect.x + offset, rect.y + 21))
+        elif detail % 7 == 0:
+            pygame.draw.rect(surface, (42, 53, 57), (rect.x + 6, rect.y + 14, 20, 7), 1)
+            pygame.draw.rect(surface, accent, (rect.x + 9, rect.y + 16, 5, 2))
 
     def _draw_props(self) -> None:
         for prop in sorted(self.sim.level.props, key=lambda item: (item.tile_y + item.height, item.tile_x)):
@@ -1538,15 +1614,42 @@ class GhostlineRenderer:
         *,
         ray_count: int = 65,
     ) -> tuple[list[tuple[int, int]], list[float]]:
-        angles = np.linspace(angle - half_angle, angle + half_angle, max(3, ray_count))
-        distances: list[float] = []
+        # The fan is cast against static geometry, so its world-space shape is a
+        # function of the observer's pose alone. Screen projection still happens
+        # every frame, but a guard that holds, aims, waits or scans slowly
+        # re-uses its rays instead of re-running the tile walk. Casting was 80%
+        # of the frame, which a WebAssembly interpreter cannot carry.
+        origin_x = float(origin[0])
+        origin_y = float(origin[1])
+        key = (
+            round(origin_x * 2.0),
+            round(origin_y * 2.0),
+            round(angle * 256.0),
+            round(distance * 2.0),
+            round(half_angle * 256.0),
+            int(ray_count),
+        )
+        cached = self._cone_ray_cache.get(key)
+        if cached is None:
+            angles = np.linspace(angle - half_angle, angle + half_angle, max(3, ray_count))
+            offsets: list[tuple[float, float]] = []
+            distances: list[float] = []
+            for ray_angle in angles:
+                direction = angle_vector(float(ray_angle))
+                ray_distance = self._cone_raycast_distance(origin, direction, distance)
+                distances.append(ray_distance)
+                offsets.append(
+                    (float(direction[0]) * ray_distance, float(direction[1]) * ray_distance)
+                )
+            if len(self._cone_ray_cache) >= CONE_RAY_CACHE_LIMIT:
+                self._cone_ray_cache.clear()
+            cached = (offsets, distances)
+            self._cone_ray_cache[key] = cached
+        offsets, distances = cached
         points = [self._world(origin)]
-        for ray_angle in angles:
-            direction = angle_vector(float(ray_angle))
-            ray_distance = self._cone_raycast_distance(origin, direction, distance)
-            distances.append(ray_distance)
-            points.append(self._world(origin + direction * ray_distance))
-        return points, distances
+        for offset_x, offset_y in offsets:
+            points.append(self._world((origin_x + offset_x, origin_y + offset_y)))
+        return points, list(distances)
 
     def _cone(
         self,

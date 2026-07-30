@@ -246,6 +246,30 @@ Darkness is composited after world props but before objectives, prompts,
 sensors, and actors so the mechanical state remains readable. Rendered cone
 lengths call the same darkness scaling used by simulation visibility.
 
+### Frame budget
+
+The browser build interprets Python, so the frame cost is dominated by the
+number of Python-level draw calls rather than by pixels. Two caches keep that
+count low:
+
+- **Terrain** is painted once per level into a floor surface and a wall surface
+  and then blitted. The simulation never writes to the level grid, so terrain is
+  a pure function of the grid, room roles and seed. Tile coordinates are exact
+  multiples of the tile size and adding an integer commutes with rounding, so
+  the blit lands on the same pixels the per-tile path produced. Floor and walls
+  stay separate surfaces because vision cones composite between them, and the
+  wall layer carries per-pixel alpha so it cannot erase a cone.
+- **Vision-cone fans** are memoised by quantised observer pose. The cast depends
+  only on static geometry, so a guard that holds, aims or waits re-uses its rays
+  while screen projection still runs every frame. The cache is bounded and
+  cleared wholesale rather than tracking recency.
+
+Both caches invalidate on `(seed, tier, level identity)`. A cached frame is
+pixel-identical to one drawn with a cold cache; cone-pose quantisation is the
+only approximation and is bounded by regression at well under 0.5% of pixels.
+Isolated gameplay draw cost on the reference desktop is 2.14 ms per frame
+against a 16.67 ms budget, measured across tiers 1, 3, 4 and 6.
+
 Desktop v2 controls add `Q` decoy, `Left Ctrl` crouch, and `E` interact.
 Touch adds dedicated sneak, decoy, and use buttons. The web shell labels the
 released game as v1 and the multi-agent game as v2, and refuses to hand the

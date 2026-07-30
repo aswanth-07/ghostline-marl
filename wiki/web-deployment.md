@@ -51,6 +51,30 @@ remain in a dismissible `RUN SETUP` drawer that behaves as a modal while open,
 makes the background inert, and restores focus to the initiating control or
 game canvas when it closes.
 
+### Cold-load cost
+
+The human-only first run transfers 24.2 MB, and 21.1 MB of that is the Pygbag
+CPython runtime: a 13.4 MB WebAssembly interpreter and a 6.7 MB standard-library
+image, compressing to roughly 4.4 MB each in transit. The application archive is
+2.7 MB, of which 2.5 MB is the three authored atlases; those are already near
+their lossless floor, so re-encoding them recovers under 4% and is not worth
+altering authored art for.
+
+Two consequences worth stating plainly rather than rediscovering:
+
+- **Cold-load time is dominated by a dependency, not by this project.** The
+  runtime is fetched before any game code and cannot be trimmed without leaving
+  Pygbag. Repeat visits are fast because `/runtime/`, `/vendor/` and `/models/`
+  are served immutable; only the first visit pays.
+- **NumPy is not part of the shipped runtime.** The bundled interpreter carries
+  Pygame but not NumPy, while the simulation depends on it, so a cold boot
+  resolves it through Pygbag's own package index rather than from this origin.
+  That is an external dependency on every cold load and the first thing to
+  examine if the loader stalls before the game canvas is sized.
+
+The ONNX Runtime and the 5.8 MB policy stay lazy: they load only when a visitor
+asks for agent takeover, so a human-play visit never pays for them.
+
 ## Portfolio embed contract
 
 Use `?embed=1&autoplay=0` for the portfolio presentation. Embed mode removes only

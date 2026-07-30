@@ -72,6 +72,15 @@ The 2026-07-27 chrome redesign is under `artifacts/qa/ui-redesign/`. Its 20-scen
 
 The 2026-07-26 interface-defect pass is under `artifacts/qa/ui-fixes/`. Its 20-scene matrix passes the native-text gate at both release sizes and measures 54.47 FPS at 1280x720 and 49.53 FPS at 1920x1080 in the conservative hidden-window compositor benchmark. That is a machine baseline, not a regression: the same benchmark on the immediately preceding revision of this workstation measured 56.89 and 49.57 FPS, so the gap against the 2026-07-16 figures below belongs to the measurement machine. The harness scenes were also resynchronized with the live menus; they had drifted into stale duplicated copy, which is why the tracked screenshots never exposed the Field Manual clipping the release build actually had.
 
+The 2026-07-29 render-cache pass is under `artifacts/qa/render-cache/`. Its
+20-scene matrix passes the native-text gate at both release sizes and measures
+62.5 FPS at 1280x720 and 1920x1080. The isolated gameplay draw cost fell from
+7.98 ms to 2.14 ms per frame, worst tier from 11.31 ms to 2.51 ms, by painting
+terrain once per level and memoising vision-cone fans by observer pose. Frames
+are pixel-identical to the previous renderer on static scenes; the only
+difference under motion is cone-pose quantisation, measured at 0.013% of pixels
+on the worst frame of a 270-frame sweep.
+
 The 2026-07-26 review follow-up is under `artifacts/qa/review-final/` and
 `artifacts/qa/review-final-adaptive/`. It fixes precise desktop pacing,
 reuses native glyph surfaces, and scales directly into native 16:9 display
