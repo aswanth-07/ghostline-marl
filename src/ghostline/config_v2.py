@@ -75,6 +75,14 @@ EXPOSURE_COST_PER_DECISION = 0.010
 DETECTION_COST = 0.06
 QUIET_DATA_BONUS = 0.35
 QUIET_TRACE_CEILING = 45.0
+# Ghost is a recoverable stealth contract, not a perfect-run achievement. A
+# runner may briefly trigger lockdown pressure, but must break contact, cool the
+# live trace below this threshold, and extract without taking damage. Using the
+# live extraction trace instead of lifetime maximum trace keeps the rule
+# visible, actionable, and consistent with the base game's recoverable trace
+# mechanic.
+GHOST_EXTRACTION_TRACE_LIMIT = 95.0
+GHOST_MAX_DAMAGE = 0
 # Ghost contracts need an actionable signal before a full detection turns into
 # a chase. Both terms are player-readable and one-way costs: dash consumes the
 # finite noise/trace budget, while rising awareness is shown by the security

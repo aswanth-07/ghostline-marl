@@ -446,7 +446,7 @@ class GameApp:
         directives = list(ContractDirective)
         items = [
             "STANDARD // COMPLETE THE CONTRACT",
-            "GHOST // LOW TRACE, NO DAMAGE",
+            "GHOST // EXTRACT COLD, NO DAMAGE",
             "SPEED // BEAT THE ROUTE PAR",
             "GREED // TAKE EVERY TERMINAL",
         ]
@@ -458,7 +458,9 @@ class GameApp:
             self.state = "briefing"
         descriptions = {
             ContractDirective.STANDARD: "Quota and extraction decide the result.",
-            ContractDirective.GHOST: "Trace discipline matters; taking damage breaks the directive.",
+            ContractDirective.GHOST: (
+                "Break contact, cool trace below 95%, then extract without damage."
+            ),
             ContractDirective.SPEED: "A deterministic route-and-link par rewards decisive movement.",
             ContractDirective.GREED: "Optional data becomes the objective, not a side score.",
         }
@@ -1046,6 +1048,11 @@ class GameApp:
         body = [
             f"DATA        {self.sim.data}/{self.sim.level.quota}  (+{self.sim.optional_data} OPTIONAL)",
             f"TIME        {self.sim.elapsed_seconds:6.1f}s",
+            *(
+                [f"EXIT TRACE  {self.sim.trace:6.1f}%"]
+                if self.adaptive_mode
+                else []
+            ),
             f"MAX TRACE   {self.sim.max_trace:6.1f}%",
             f"DETECTIONS  {self.sim.detections}",
             f"INTEGRITY   {self.sim.integrity}/3",

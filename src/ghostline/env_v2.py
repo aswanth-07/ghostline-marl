@@ -24,6 +24,7 @@ from ghostline.config_v2 import (
     FIELD_TARGET_FEATURES,
     GHOST_AWARENESS_GAIN_COST,
     GHOST_DASH_COST_PER_DECISION,
+    GHOST_EXTRACTION_TRACE_LIMIT,
     MAX_FIELD_TARGETS,
     QUIET_DATA_BONUS,
     QUIET_TRACE_CEILING,
@@ -48,7 +49,6 @@ _RAY_DIRECTIONS = np.stack(
     axis=1,
 ).astype(np.float32)
 _RAY_SAMPLE_DISTANCES = np.arange(1, 41, dtype=np.float32) * 8.0
-GHOST_TRACE_LIMIT = 75.0
 GHOST_MAX_INTEGRITY = 3
 GHOST_STEALTH_POTENTIAL_SCALE = 10.0
 
@@ -181,13 +181,14 @@ class GhostlineEnvV2(GhostlineEnv):
             - min(1.0, path_distance / max(1.0, diagonal))
         )
         if self.directive == ContractDirective.GHOST:
-            # The ghost contract depends on irreversible episode outcomes:
-            # maximum trace and damage. Encoding their remaining budgets in
-            # the same discount-matched potential makes the consequence
-            # immediate without adding a repeatable crouch/cover bonus.
+            # Ghost requires a cold extraction and no damage. Current trace is
+            # deliberately recoverable: breaking contact restores the same
+            # budget shown to the player. Discount-matched potential shaping
+            # supplies dense credit without making hide/re-enter cycles
+            # profitable.
             trace_budget = max(
                 0.0,
-                1.0 - self.sim.max_trace / GHOST_TRACE_LIMIT,
+                1.0 - self.sim.trace / GHOST_EXTRACTION_TRACE_LIMIT,
             )
             integrity_budget = self.sim.integrity / max(
                 1,
@@ -563,7 +564,10 @@ class GhostlineEnvV2(GhostlineEnv):
         par_margin = np.clip((self._directive_par_seconds - self.sim.elapsed_seconds) / max(1.0, self._directive_par_seconds), -1.0, 1.0)
         all_data = sum(terminal.value for terminal in self.sim.level.terminals)
         greed_progress = min(1.0, self.sim.data / max(1, all_data)) * 2.0 - 1.0
-        stealth_quality = 1.0 - 2.0 * max(self.sim.max_trace / 100.0, self.sim.damage_taken / 3.0)
+        stealth_quality = 1.0 - 2.0 * max(
+            self.sim.trace / GHOST_EXTRACTION_TRACE_LIMIT,
+            self.sim.damage_taken / 3.0,
+        )
         return np.clip(
             np.asarray([*directive_flags, par_margin, greed_progress, stealth_quality], dtype=np.float32),
             -1.0,

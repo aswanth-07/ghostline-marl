@@ -173,8 +173,8 @@ def test_v2_success_and_dominant_reward_require_directive_completion() -> None:
     env.sim.level.cameras = []
     env.sim.drones = []
     env.sim.data = env.sim.level.quota
-    env.sim.max_trace = 80.0
-    env.sim.trace = 80.0
+    env.sim.max_trace = 100.0
+    env.sim.trace = 96.0
     env.sim.player = env.sim.level.extraction.copy()
 
     _, reward, terminated, truncated, info = env.step(0)
@@ -189,6 +189,28 @@ def test_v2_success_and_dominant_reward_require_directive_completion() -> None:
     )
     assert reward == pytest.approx(info["reward_total"])
     env.close()
+
+
+def test_ghost_directive_allows_recovery_but_not_damage() -> None:
+    from ghostline.config_v2 import GHOST_EXTRACTION_TRACE_LIMIT
+
+    sim = GhostlineSimulationV2(
+        seed=34,
+        tier=1,
+        directive=ContractDirective.GHOST,
+    )
+    sim.extracted = True
+    sim.max_trace = 100.0
+    sim.trace = GHOST_EXTRACTION_TRACE_LIMIT - 1.0
+    sim.damage_taken = 0
+    assert sim.directive_completed
+
+    sim.trace = GHOST_EXTRACTION_TRACE_LIMIT
+    assert not sim.directive_completed
+
+    sim.trace = GHOST_EXTRACTION_TRACE_LIMIT - 1.0
+    sim.damage_taken = 1
+    assert not sim.directive_completed
 
 
 def test_v2_replay_is_deterministic_for_seed_tier_directive_and_actions() -> None:
@@ -1003,19 +1025,25 @@ def test_exposure_scales_with_trace_and_quiet_data_earns_a_bonus() -> None:
     env.close()
 
 
-def test_ghost_potential_exposes_irreversible_trace_and_damage_budgets() -> None:
-    """Stealth shaping is immediate, bounded, and unavailable to other directives."""
+def test_ghost_potential_exposes_recoverable_trace_and_damage_budgets() -> None:
+    """Stealth shaping follows live trace, is bounded, and is Ghost-only."""
+
+    from ghostline.config_v2 import GHOST_EXTRACTION_TRACE_LIMIT
 
     ghost = GhostlineEnvV2(seed=3_000_023, tier=3, directive="ghost")
     ghost.reset(seed=3_000_023)
     quiet = ghost._mission_potential()
-    ghost.sim.max_trace = 75.0
+    ghost.sim.trace = GHOST_EXTRACTION_TRACE_LIMIT
+    ghost.sim.max_trace = 100.0
     exhausted_trace = ghost._mission_potential()
+    ghost.sim.trace = 0.0
+    recovered_trace = ghost._mission_potential()
     ghost.sim.integrity = 2
     damaged = ghost._mission_potential()
 
     assert quiet - exhausted_trace == pytest.approx(8.0)
-    assert exhausted_trace - damaged == pytest.approx(2.0 / 3.0)
+    assert recovered_trace == pytest.approx(quiet)
+    assert recovered_trace - damaged == pytest.approx(2.0 / 3.0)
 
     standard = GhostlineEnvV2(
         seed=3_000_023,
@@ -1024,7 +1052,8 @@ def test_ghost_potential_exposes_irreversible_trace_and_damage_budgets() -> None
     )
     standard.reset(seed=3_000_023)
     before = standard._mission_potential()
-    standard.sim.max_trace = 75.0
+    standard.sim.trace = GHOST_EXTRACTION_TRACE_LIMIT
+    standard.sim.max_trace = 100.0
     standard.sim.integrity = 2
     assert standard._mission_potential() == pytest.approx(before)
     ghost.close()

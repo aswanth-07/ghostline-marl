@@ -109,7 +109,9 @@ ghostline play --adaptive --tier 6 --directive ghost
 The v2 game adds Standard, Ghost, Speed, and Greed directives; a limited
 acoustic decoy; coordinated operative roles; discrete jam-aware radio; fair
 temporary locks on graph-redundant doors; and telegraphed nonlethal suppressor
-rounds on tiers 5-6. A shared security policy is used only when a compatible,
+rounds on tiers 5-6. Ghost requires a zero-damage extraction after cooling live
+trace below 95%; triggering lockdown is recoverable if the runner breaks
+contact before extracting. A shared security policy is used only when a compatible,
 fingerprint-matched v2 checkpoint is supplied. Otherwise the game uses a
 deterministic tactical fallback built from the same local observations and
 action masks. The retired security checkpoint remains in the source archive as

@@ -71,15 +71,22 @@ are archived together.
 ## V2 runner learner
 
 The current runner environment fingerprint is
-`01d1b7835d17172edc8dda1158d93e5c24e9362cc3472722b4aee77452c75e8f`.
-Ghost-specialist experiments `r1` through `r3` belong to earlier reward
-fingerprints and are retained only as diagnostics; none may be resumed,
-selected, or reported under the current contract. Their repeated tier-3
-failure showed that discount-matched stealth potential supplied credit timing
-but could not alter the policy optimum. The current Ghost objective therefore
-also charges loud dash decisions and positive security-awareness increments.
-Both signals are visible to the player, are costs only, and cannot be farmed
-by repeatedly leaving and re-entering a vision cone.
+`b0b42206bef47cae86ff8a20d4967519e310d2d78d4e865dca3bb06785382a63`.
+Every runner checkpoint under the preceding
+`01d1b7835d17172edc8dda1158d93e5c24e9362cc3472722b4aee77452c75e8f`
+fingerprint—including all `runner-v2-ghost-specialist-*`,
+`runner-v2-ghost-curriculum-*`, and `runner-v2-ghost-sil-*` artifacts—is
+diagnostic-only. None can be resumed, selected, migrated, or reported under
+the current contract. The clean campaign initializes only through the
+fingerprint-verified published-v1 overlap transplant.
+
+The Ghost contract now evaluates a recoverable, player-readable outcome:
+extract with zero damage while live trace is below `95%`. Lifetime maximum
+trace remains telemetry, but no longer makes a recovered run fail forever.
+This matches lockdown's design as escalating pressure rather than instant
+failure. Dense reward still charges exposure, detections, loud dashes, rising
+awareness, and damage; the mission potential now follows live trace so breaking
+contact receives discount-correct credit.
 
 The runner uses `RunnerPolicyV2`, a player-equivalent recurrent actor-critic
 with:
@@ -165,11 +172,9 @@ and the report/checkpoint records
 over their declared tier, fixing the former sentinel behavior without allowing
 partial evidence to satisfy the six-tier acceptance gate.
 
-The trainer contract is now `ghostline-runner-recurrent-ppo-v2.4`. Optimizer
-snapshots written under v2.3 or earlier cannot be resumed under this contract.
-Their current-environment policy weights remain valid as explicit
-`--init-checkpoint` inputs; in particular, the selected Stage-1 checkpoint is
-a policy-only warm start rather than an optimizer resume.
+The trainer contract is `ghostline-runner-recurrent-ppo-v2.4`. The environment
+fingerprint change makes every earlier v2 optimizer and policy snapshot stale,
+regardless of trainer version.
 
 Stage-1 diagnostics showed a hard-exploration plateau rather than numerical
 instability: the selected policy extracted on 97% of 100 fresh contracts, but
@@ -178,31 +183,37 @@ security removed, the same policy reached 92% Ghost success. The missing skill
 is therefore moving-guard avoidance, not navigation, hacking, or basic noise
 budgeting.
 
-V2.4 adds an optional recurrent self-imitation term to PPO. It selects only
+V2.4 provides an optional recurrent self-imitation term to PPO. It selects only
 complete self-generated successful episodes contained inside a rollout, then
 imitates only their positive-advantage decisions. Advantage weights are
 detached, normalized, and capped; partial episodes and every failed trajectory
 are excluded. The default coefficient remains zero for ordinary baselines.
-The current Ghost recovery continuation uses
-`--self-imitation-coefficient 0.2`, selected on two matched diagnostic windows:
-`34%` versus `28%` and `36%` versus `34%`. The weaker `0.02` probe exactly
-matched or trailed its frozen baseline and was stopped after 200 updates.
+Under the retired maximum-trace contract, coefficient `0.2` briefly improved
+two matched windows from `28/34%` to `34/36%` but then plateaued. That result
+does not select a coefficient for the new environment.
 
-The current v2.4 recovery run starts from the held-out-selected v2.3 Stage-1
-checkpoint as a policy-only initialization:
+Calibration on 100 disjoint Stage-1 validation contracts rejected a simple
+maximum-trace threshold change: cutoffs from `75` through `95` moved success
+only from `18%` to `30%`, while accepting saturated `100` trace made the rule
+nearly unconditional. The recoverable rule produced `47%` for the retired
+Stage-1 policy and `57%` for a clean published-v1 transplant. This supplies a
+credible PPO starting distribution without making Ghost equivalent to ordinary
+extraction.
+
+The clean Stage-1 campaign is:
 
 ```powershell
 ghostline train-runner-v2 `
-  --output artifacts/runner-v2-ghost-sil-strong-probe-r1 `
-  --init-checkpoint artifacts/runner-v2-ghost-curriculum-s1-longgae-r1/best.pt `
+  --output artifacts/runner-v2-recoverable-ghost-stage1-r1 `
+  --published-v1-init models/ghostline-policy.pt `
   --tiers 3 --directives ghost --ghost-directive-fraction 1 `
   --ghost-training-stage 1 --no-curriculum `
-  --training-seed-start 720000 --initial-validation-cursor 6200 `
+  --training-seed-start 740000 --initial-validation-cursor 6700 `
   --envs 6 --rollout 512 --epochs 4 --minibatch-envs 3 `
-  --learning-rate 1e-5 --entropy-coefficient 0.001 --gae-lambda 0.995 `
-  --self-imitation-coefficient 0.2 `
-  --validation-interval 50 --validation-episodes 50 `
-  --validation-batch-size 10 --max-updates 100
+  --learning-rate 5e-5 --entropy-coefficient 0.003 --gae-lambda 0.98 `
+  --self-imitation-coefficient 0.05 `
+  --validation-interval 100 --validation-episodes 100 `
+  --validation-batch-size 10 --max-updates 1200
 ```
 
 Stages 2, 3, and finally 0 initialize from the preceding stage's selected
@@ -222,9 +233,11 @@ checkpoint selection from optimizing different tasks.
 ## V2 security learner
 
 The shared dependency change binds the security environment to fingerprint
-`97dfb60808aef79add8b9b67992daa03694d8a173c70d2fb1e20687e1d66c7c9`.
-All earlier developmental security checkpoints remain initialization or
-diagnostic evidence only and cannot be selected for this contract.
+`1cc51952a7311dba146fe486b0a16babb48f77563fa93a06f5591d2e29a76b9d`.
+Every earlier developmental security checkpoint, including those bound to
+`97dfb60808aef79add8b9b67992daa03694d8a173c70d2fb1e20687e1d66c7c9`,
+is diagnostic evidence only and cannot initialize, oppose, or be selected for
+this contract.
 
 The security benchmark uses parameter-shared recurrent MAPPO. One actor serves
 all operative roles, but deployment remains decentralized: each agent receives

@@ -74,6 +74,27 @@ guards plus one camera, and `0%` on the full tier-3 roster over the same 20
 unused training seeds. That creates a learnable bridge without privileged
 state, weakened release evaluation, or a new public environment.
 
+## 2026-07-30 recoverable Ghost contract
+
+The maximum-trace rule is retired for v2. It contradicted the game's core
+promise that maximum trace creates lockdown pressure rather than immediate,
+irreversible failure. Empirical calibration also showed a pathological cliff:
+maximum-trace limits between `75` and `95` barely changed outcome rate because
+most loud policies saturated exactly at `100`, while accepting `100` removed
+nearly all stealth selectivity.
+
+Ghost now requires zero damage and live trace below `95%` at extraction. This
+preserves the requirement to disengage and cool the network, permits recovery
+after a mistake, and is readable from the existing HUD. The trace portion of
+the discount-matched potential follows the same live budget. Exposure,
+detection, dash, awareness, and damage remain genuine costs, so the relaxed
+terminal rule does not reward a permanently loud route.
+
+This environment change invalidates every earlier v2 runner and security
+checkpoint. The new campaign starts from the immutable published-v1 overlap
+transplant rather than bypassing fingerprint checks or relabeling stale v2
+weights.
+
 This decision follows DAgger's requirement for an expert queried on the
 learner's state distribution, the demonstration result for hard exploration
 under partial observability, and constrained-RL's separation of task reward

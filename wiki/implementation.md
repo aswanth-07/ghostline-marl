@@ -99,6 +99,10 @@ bearing/range rather than a hidden-state lookup.
 
 ## V2 field and stealth systems
 
+- Ghost succeeds after a zero-damage extraction with live trace below `95%`.
+  A prior lockdown is recoverable; lifetime maximum trace remains debrief and
+  evaluation telemetry. The HUD exposes current trace, and the debrief reports
+  both exit and maximum trace so the rule never depends on hidden state.
 - Crouch moves at 52% speed, reduces footstep radius, scales awareness gain,
   and improves trace cooling. It does not make the runner invisible and cannot
   silence a dash.

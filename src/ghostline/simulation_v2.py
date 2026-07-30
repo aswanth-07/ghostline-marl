@@ -42,6 +42,8 @@ from ghostline.config_v2 import (
     FIELD_SENSOR_CHARGES,
     FIELD_SENSOR_LIFETIME_SECONDS,
     FIELD_SENSOR_RADIUS,
+    GHOST_EXTRACTION_TRACE_LIMIT,
+    GHOST_MAX_DAMAGE,
     HACK_CAMERA_DISABLE_SECONDS,
     HACK_CHARGES_PER_TIER,
     HACK_COOLDOWN_SECONDS,
@@ -237,7 +239,10 @@ class GhostlineSimulationV2(GhostlineSimulation):
         if not self.extracted:
             return False
         if self.directive == ContractDirective.GHOST:
-            return self.damage_taken == 0 and self.max_trace < 75.0
+            return (
+                self.damage_taken <= GHOST_MAX_DAMAGE
+                and self.trace < GHOST_EXTRACTION_TRACE_LIMIT
+            )
         if self.directive == ContractDirective.SPEED:
             return self.elapsed_seconds <= self.directive_par_seconds
         if self.directive == ContractDirective.GREED:
